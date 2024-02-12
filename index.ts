@@ -1,10 +1,15 @@
-const fs = require('node:fs');
+import type { NodeMap } from './types';
+import * as lib from './lib';
 
-const load = () => {
-	const lines = fs.readFileSync('../basemap/trails.geojsonl', 'utf-8').split('\n').filter(x => x).map(x => JSON.parse(x));
-	//console.log(lines);
-	console.log(lines.length);
-	return lines;
+const features = lib.load('../basemap/ztrails.geojsonl');
+const map: NodeMap = lib.buildIndex(features);
+
+for (const [ll, v] of Object.entries(map)) {
+	const parking = v.nodes.filter(lib.isParkingLot);
+	const paths = v.nodes.filter(lib.isFootPath);
+	if (parking.length && paths.length) {
+		console.log(ll);
+		console.log(parking);
+		console.log(paths);
+	}
 }
-
-const lines = load();
