@@ -14,6 +14,7 @@
   },
   "type": "module",
   "dependencies": {
-    "@turf/boolean-point-in-polygon": "^6.5.0"
+    "@turf/boolean-point-in-polygon": "^6.5.0",
+    "@turf/envelope": "^6.5.0"
   }
 }

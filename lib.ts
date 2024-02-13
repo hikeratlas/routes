@@ -1,4 +1,5 @@
 import type { Feature, NodeMap } from './types';
+import { BboxBitmap } from './bbox-bitmap';
 
 // TODO: why can't we import this? get some weird type error.
 const pointInPolygon = require('@turf/boolean-point-in-polygon').default;
@@ -41,7 +42,17 @@ export const buildIndex = (features: Feature[]): NodeMap => {
 			v.inParkingLot = true;
 	};
 
+	const parkingLotBitmap = BboxBitmap();
+	const parkingLots: Feature[] = [];
+
 	for (const feature of features) {
+		if (isParkingLot(feature.properties)) {
+			parkingLots.push(feature);
+
+			if (feature.geometry.type === 'MultiPolygon')
+				parkingLotBitmap.add(feature);
+		}
+
 		if (feature.geometry.type === 'Point') {
 			index(feature.properties, feature.geometry.coordinates);
 		} else if (feature.geometry.type === 'LineString') {
@@ -60,14 +71,16 @@ export const buildIndex = (features: Feature[]): NodeMap => {
 		}
 	}
 
-	for (const feature of features) {
-		if (!isParkingLot(feature.properties) || feature.geometry.type !== 'MultiPolygon')
+	for (const v of Object.values(map)) {
+		if (!parkingLotBitmap.test(v.ll))
 			continue;
 
-		for (const v of Object.values(map)) {
-			if (pointInPolygon(v.ll, feature)) {
+		for (const feature of parkingLots) {
+			if (feature.geometry.type !== 'MultiPolygon')
+				continue;
+
+			if (pointInPolygon(v.ll, feature))
 				v.inParkingLot = true;
-			}
 		}
 	}
 
