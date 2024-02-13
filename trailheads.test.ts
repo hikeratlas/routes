@@ -33,4 +33,8 @@ test('trailheads seem reasonable', async () => {
 	// with the boundary of the area
 	// https://www.openstreetmap.org/way/338160813
 	expect(names.find(x => x === 'Western Uplands Backpacking Trail')).toBe('Western Uplands Backpacking Trail');
+
+	// parking lot with no name
+	// https://www.openstreetmap.org/way/41285694#map=19/45.57910/-78.40638
+	expect(names.find(x => x === 'Lookout Trail')).toBe('Lookout Trail');
 });
