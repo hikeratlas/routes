@@ -14,7 +14,7 @@ Challenges:
 Clone [hikeratlas/basemap](https://github.com/hikeratlas/basemap) and run:
 
 ```bash
-./export/export ztrails path-to-some-pbf.pbf
+./export/export path-to-some-pbf.pbf ztrails
 ```
 
 This will create a GeoJSONL file of paths, parking lots, lakes and peaks.
