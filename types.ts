@@ -29,9 +29,13 @@ export interface Feature {
 
 export type NodeMap = {
 	[ll: string]: {
+		// The lon/lat of this node
+		ll: [number, number];
 		// What's here -- parking lot, hiking trail, etc.
 		nodes: Feature['properties'][];
 		// The places that are reachable from here.
 		edges: [number, number][];
+
+		inParkingLot: boolean;
 	}
 };

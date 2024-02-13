@@ -1,4 +1,7 @@
 import type { Feature, NodeMap } from './types';
+
+// TODO: why can't we import this? get some weird type error.
+const pointInPolygon = require('@turf/boolean-point-in-polygon').default;
 const fs = require('node:fs');
 
 export const load = (filename: string): Feature[] => {
@@ -21,14 +24,21 @@ export const buildIndex = (features: Feature[]): NodeMap => {
 
 		if (!map[key])
 			map[key] = {
+				ll: coordinates,
 				nodes: [],
-				edges: []
+				edges: [],
+				inParkingLot: false
 			};
 
-		map[key].nodes.push(properties);
+		const v = map[key];
+
+		v.nodes.push(properties);
 
 		if (neighbour)
-			map[key].edges.push(neighbour);
+			v.edges.push(neighbour);
+
+		if (isParkingLot(properties))
+			v.inParkingLot = true;
 	};
 
 	for (const feature of features) {
@@ -50,6 +60,17 @@ export const buildIndex = (features: Feature[]): NodeMap => {
 		}
 	}
 
+	for (const feature of features) {
+		if (!isParkingLot(feature.properties) || feature.geometry.type !== 'MultiPolygon')
+			continue;
+
+		for (const v of Object.values(map)) {
+			if (pointInPolygon(v.ll, feature)) {
+				v.inParkingLot = true;
+			}
+		}
+	}
+
 	return map;
 }
 
@@ -58,5 +79,18 @@ export const isParkingLot = (node: Feature['properties']): boolean => {
 }
 
 export const isFootPath = (node: Feature['properties']): boolean => {
-	return node['highway'] === 'footway';
+	return node['highway'] === 'footway' || // Mizzy Lake Trail
+		node['highway'] === 'path' // Bat Lake Trail;
 }
+
+export const getTrailheads = (map: NodeMap): string[] => {
+	const rv: string[] = [];
+
+	for (const [ll, v] of Object.entries(map)) {
+		const paths = v.nodes.filter(isFootPath);
+		if (v.inParkingLot && paths.length) {
+			rv.push(ll);
+		}
+	}
+	return rv;
+};

@@ -1,11 +1,6 @@
 {
   "name": "routes",
   "module": "index.ts",
-  "type": "module",
-  "scripts": {
-    "tsc:check": "bun node_modules/typescript/lib/tsc.js --noEmit",
-    "watch:check": "bun node_modules/typescript/lib/tsc.js --noEmit --watch"
-  },
   "devDependencies": {
     "@types/bun": "latest",
     "@types/jest": "^29.5.12"
@@ -13,7 +8,12 @@
   "peerDependencies": {
     "typescript": "^5.0.0"
   },
+  "scripts": {
+    "tsc:check": "bun node_modules/typescript/lib/tsc.js --noEmit",
+    "watch:check": "bun node_modules/typescript/lib/tsc.js --noEmit --watch"
+  },
+  "type": "module",
   "dependencies": {
-    "@turf/turf": "^6.5.0"
+    "@turf/boolean-point-in-polygon": "^6.5.0"
   }
 }
