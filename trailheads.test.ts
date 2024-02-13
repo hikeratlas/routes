@@ -37,4 +37,17 @@ test('trailheads seem reasonable', async () => {
 	// parking lot with no name
 	// https://www.openstreetmap.org/way/41285694#map=19/45.57910/-78.40638
 	expect(names.find(x => x === 'Lookout Trail')).toBe('Lookout Trail');
+
+	// accessed directly from a road
+	// https://www.openstreetmap.org/node/1445913060#map=19/45.57947/-78.51268
+	expect(names.find(x => x === 'Two Rivers Trail')).toBe('Two Rivers Trail');
+
+	// TODO:
+	// Parking lots that are "close" to a trail,
+	// - Centennial Ridges Trail (note: there are 2 trailheads, the other one is fine)
+	//   https://www.openstreetmap.org/way/298155743
+	//
+	// - Logging Museum Trail - there's a short (< 20m), unnamed  segment before
+	//   this trail starts, on a highway=service
+	//   https://www.openstreetmap.org/way/237602381#map=19/45.54394/-78.26273
 });

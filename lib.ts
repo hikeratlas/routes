@@ -96,12 +96,26 @@ export const isFootPath = (node: Feature['properties']): boolean => {
 		node['highway'] === 'path' // Bat Lake Trail;
 }
 
+export const isRoad = (node: Feature['properties']): boolean => {
+	return node['highway'] === 'motorway' ||
+		node['highway'] === 'trunk' ||
+		node['highway'] === 'primary' ||
+		node['highway'] === 'secondary' ||
+		node['highway'] === 'tertiary' ||
+		node['highway'] === 'unclassified' ||
+		node['highway'] === 'residential' ||
+		node['highway'] === 'service';
+
+	// Consider: service, track, road
+}
+
 export const getTrailheads = (map: NodeMap): string[] => {
 	const rv: string[] = [];
 
 	for (const [ll, v] of Object.entries(map)) {
 		const paths = v.nodes.filter(isFootPath);
-		if (v.inParkingLot && paths.length) {
+		const roads = v.nodes.filter(isRoad);
+		if ((v.inParkingLot || roads.length >= 1) && paths.length) {
 			rv.push(ll);
 		}
 	}
