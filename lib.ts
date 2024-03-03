@@ -71,6 +71,8 @@ export const buildIndex = (features: Feature[]): NodeMap => {
 		}
 	}
 
+	// CONSIDER: This could be parallelized, it's ~80% of the
+	// runtime.
 	for (const v of Object.values(map)) {
 		if (!parkingLotBitmap.test(v.ll))
 			continue;
@@ -79,7 +81,7 @@ export const buildIndex = (features: Feature[]): NodeMap => {
 			if (feature.geometry.type !== 'MultiPolygon')
 				continue;
 
-			if (pointInPolygon(v.ll, feature))
+			if (isParkingLot(feature.properties) || pointInPolygon(v.ll, feature))
 				v.inParkingLot = true;
 		}
 	}
