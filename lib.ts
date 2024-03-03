@@ -115,9 +115,12 @@ export const getTrailheads = (map: NodeMap): string[] => {
 	const rv: string[] = [];
 
 	for (const [ll, v] of Object.entries(map)) {
-		const paths = v.nodes.filter(isFootPath);
-		const roads = v.nodes.filter(isRoad);
-		if ((v.inParkingLot || roads.length >= 1) && paths.length) {
+		const paths = v.nodes.find(isFootPath);
+		if (!paths)
+			continue;
+
+		const roads = v.nodes.find(isRoad);
+		if ((v.inParkingLot || roads)) {
 			rv.push(ll);
 		}
 	}
