@@ -81,7 +81,7 @@ export const buildIndex = (features: Feature[]): NodeMap => {
 			if (feature.geometry.type !== 'MultiPolygon')
 				continue;
 
-			if (isParkingLot(feature.properties) || pointInPolygon(v.ll, feature))
+			if (pointInPolygon(v.ll, feature))
 				v.inParkingLot = true;
 		}
 	}
@@ -120,7 +120,7 @@ export const getTrailheads = (map: NodeMap): string[] => {
 			continue;
 
 		const roads = v.nodes.find(isRoad);
-		if ((v.inParkingLot || roads)) {
+		if (v.inParkingLot || roads) {
 			rv.push(ll);
 		}
 	}
