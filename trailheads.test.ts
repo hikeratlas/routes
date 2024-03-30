@@ -11,11 +11,9 @@ console.log(`load took ${Date.now() - loadTs} ms`);
 test('trailheads seem reasonable', async () => {
 	const ths = lib.getTrailheads(map);
 
-//	console.log(ths);
-
 	const names = ths.flatMap(th => map[th].nodes.filter(x => x.name && lib.isFootPath(x)).map(x => x.name));
 	names.sort();
-//	console.log(names);
+	console.log(names);
 
 	// way highway=footway connecting to node amenity=parking
 	// https://www.openstreetmap.org/node/302292993

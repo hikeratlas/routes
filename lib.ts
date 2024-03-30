@@ -38,13 +38,24 @@ export const buildIndex = (features: Feature[]): NodeMap => {
 
 		const v = map[key];
 
-		v.nodes.push(properties);
+		// It's often the case that a trail is a loop, so the same node is
+		// present twice. Don't add it twice.
+		let found = false;
+		for (const node of v.nodes)
+			if (node === properties) {
+				found = true;
+				break;
+			}
 
-		if (neighbour)
-			v.edges.push(neighbour);
+		if (!found) {
+				v.nodes.push(properties);
 
-		if (isParkingLot(properties))
-			v.inParkingLot = true;
+			if (neighbour)
+				v.edges.push(neighbour);
+
+			if (isParkingLot(properties))
+				v.inParkingLot = true;
+		}
 	};
 
 	const parkingLotBitmap = BboxBitmap();
