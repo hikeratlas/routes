@@ -1,5 +1,6 @@
-import type { Feature, NodeMap } from './types';
+import type { Feature, NodeMap, Tile } from './types';
 import { BboxBitmap } from './bbox-bitmap';
+import { highestCommonTile, highestCommonTileForGeometry } from './coords';
 
 // TODO: why can't we import this? get some weird type error.
 const pointInPolygon = require('@turf/boolean-point-in-polygon').default;
@@ -17,8 +18,12 @@ export const load = (filename: string): Feature[] => {
 
 export const ll = (coord: [number, number]): string => coord.join(',');
 
+export const tile2str = (tile: Tile): string => `z${tile.z}/${tile.x}/${tile.y}`;
+
 export const buildIndex = (features: Feature[]): NodeMap => {
 	const map: NodeMap = {};
+
+	const parkingLotTiles: { [key: string]: Feature[] } = {};
 
 	const index = (properties: Feature['properties'], coordinates: [number, number], neighbour?: [number, number]) => {
 		const key = ll(coordinates);
@@ -47,6 +52,10 @@ export const buildIndex = (features: Feature[]): NodeMap => {
 
 	for (const feature of features) {
 		if (isParkingLot(feature.properties)) {
+			feature.tile = highestCommonTileForGeometry(feature.geometry);
+			const tileKey = tile2str(feature.tile);
+			parkingLotTiles[tileKey] = parkingLotTiles[tileKey] || [];
+			parkingLotTiles[tileKey].push(feature);
 			parkingLots.push(feature);
 
 			if (feature.geometry.type === 'MultiPolygon')
@@ -74,14 +83,22 @@ export const buildIndex = (features: Feature[]): NodeMap => {
 	// CONSIDER: This could be parallelized, it's ~80% of the
 	// runtime.
 	for (const v of Object.values(map)) {
+		let needle = highestCommonTile([v.ll]);
+
 		if (!parkingLotBitmap.test(v.ll))
 			continue;
 
-		// How could we speed this up?
-		// One possibility: determine the minimum-spanning-tile of all the parking lots.
-		//
-		// Then, before doing the pointInPolygon test, 
-		for (const feature of parkingLots) {
+		const overlappingParkingLots = [];
+		while(needle.z > 0) {
+			const key = tile2str(needle);
+			overlappingParkingLots.push(...(parkingLotTiles[key] || []));
+
+			needle.z--;
+			needle.x = Math.floor(needle.x / 2);
+			needle.y = Math.floor(needle.y / 2);
+		}
+
+		for (const feature of overlappingParkingLots) {
 			if (feature.geometry.type !== 'MultiPolygon')
 				continue;
 

@@ -1,3 +1,9 @@
+export interface Tile {
+	z: number;
+	x: number;
+	y: number;
+}
+
 export interface Point {
 	type: 'Point';
 	coordinates: [number, number];
@@ -25,6 +31,9 @@ export interface Feature {
 	geometry: Geometry;
 	// We could consider fleshing these out...
 	properties: { [k: string]: string };
+
+	// For some features, we compute the highest zoom tile that wholly encloses it.
+	tile?: Tile;
 }
 
 export type NodeMap = {
