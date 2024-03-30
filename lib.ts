@@ -77,6 +77,10 @@ export const buildIndex = (features: Feature[]): NodeMap => {
 		if (!parkingLotBitmap.test(v.ll))
 			continue;
 
+		// How could we speed this up?
+		// One possibility: determine the minimum-spanning-tile of all the parking lots.
+		//
+		// Then, before doing the pointInPolygon test, 
 		for (const feature of parkingLots) {
 			if (feature.geometry.type !== 'MultiPolygon')
 				continue;

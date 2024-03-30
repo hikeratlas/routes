@@ -7,3 +7,56 @@ export const y2lat = (y: number, z: number) => {
 	const n = Math.PI - 2 * Math.PI * y / Math.pow(2, z);
 	return 180 / Math.PI * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
 }
+
+export interface Tile {
+	z: number;
+	x: number;
+	y: number;
+}
+
+export const commonParent = (a: Tile, b: Tile): Tile => {
+	if (a.z === b.z && a.x === b.x && a.y === b.y)
+		return a;
+
+	if (a.z === b.z) {
+		return commonParent(
+			{ z: a.z - 1, x: Math.floor(a.x / 2), y: Math.floor(a.y / 2) },
+			{ z: b.z - 1, x: Math.floor(b.x / 2), y: Math.floor(b.y / 2) },
+		);
+	};
+
+	if (a.z > b.z) {
+		return commonParent(
+			{ z: a.z - 1, x: Math.floor(a.x / 2), y: Math.floor(a.y / 2) },
+			b
+		);
+	}
+
+	if (a.z < b.z) {
+		return commonParent(
+			a,
+			{ z: b.z - 1, x: Math.floor(b.x / 2), y: Math.floor(b.y / 2) }
+		);
+	}
+
+	throw new Error('unhandled');
+};
+
+export const highestCommonTile = (lls: [number, number][]): Tile => {
+	if (lls.length === 0)
+		throw new Error(`lls must not be empty`);
+
+	let minLon = 999, minLat = 999, maxLon = -999, maxLat = -999;
+
+	for (const [lon, lat] of lls) {
+		if (lon > maxLon) maxLon = lon;
+		if (lon < minLon) minLon = lon;
+		if (lat > maxLat) maxLat = lat;
+		if (lat < minLat) minLat = lat;
+	}
+
+	const z = 18;
+	const a = { z, x: lon2x(minLon, z), y: lat2y(minLat, z) };
+	const b = { z, x: lon2x(maxLon, z), y: lat2y(maxLat, z) };
+	return commonParent(a, b);
+}
