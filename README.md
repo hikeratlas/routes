@@ -1,15 +1,13 @@
 # routes
 
-Hiking trails on OpenStreetMap are tagged haphazardly. This repo tries to
-transform a collection of OSM objects into a canonicalized list of trails.
-
-or a lasso.
-
-Challenges:
+Hiking trails on OpenStreetMap are tagged haphazardly:
 
 - most trails are not `route=hiking` relation
 - many trails consist of multiple ways that need to be joined together
 - the start/end points of trails are often not clear
+
+This repo converts OSM's way/node data into a graph structure, and then tries
+to generate a canonicalized list of trails.
 
 ## Input
 
