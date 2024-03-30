@@ -5,7 +5,7 @@ import * as lib from './lib';
 const map: NodeMap = testUtils.buildIndexCached();
 
 test('trailheads seem reasonable', async () => {
-	const ths = lib.getTrailheads(map);
+	const ths = testUtils.getTrailheadsCached();
 
 	const names = ths.flatMap(th => map[th].nodes.filter(x => x.name && lib.isFootPath(x)).map(x => x.name));
 	names.sort();

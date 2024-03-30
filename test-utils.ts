@@ -2,6 +2,7 @@ import type { NodeMap } from './types';
 import * as lib from './lib';
 
 let cachedIndex: NodeMap;
+let cachedTrailheads: string[];
 
 export const buildIndexCached = (): NodeMap => {
 	if (cachedIndex)
@@ -15,4 +16,13 @@ export const buildIndexCached = (): NodeMap => {
 	console.log(`load took ${Date.now() - loadTs} ms`);
 	cachedIndex = map;
 	return cachedIndex;
+}
+
+export const getTrailheadsCached = (): string[] => {
+	if (cachedTrailheads)
+		return cachedTrailheads;
+
+	const map: NodeMap = buildIndexCached();
+	cachedTrailheads = lib.getTrailheads(map);
+	return cachedTrailheads;
 }
