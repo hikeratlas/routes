@@ -12,7 +12,7 @@ export const load = (filename: string): Feature[] => {
 		.filter((x: string) => x)
 		.map((x: string) => JSON.parse(x));
 	//console.log(lines);
-	console.log(lines.length);
+//	console.log(lines.length);
 	return lines;
 }
 
@@ -28,18 +28,17 @@ export const buildIndex = (features: Feature[]): NodeMap => {
 	const index = (properties: Feature['properties'], coordinates: [number, number], neighbour?: [number, number]) => {
 		const key = ll(coordinates);
 
-		if (!map[key])
-			map[key] = {
+		let v = map[key];
+		if (!v) {
+			v = map[key] = {
 				ll: coordinates,
 				nodes: [],
 				edges: [],
 				inParkingLot: false
 			};
+		}
 
-		const v = map[key];
-
-		// It's often the case that a trail is a loop, so the same node is
-		// present twice. Don't add it twice.
+		// Ways often contain the same node twice; don't add it twice.
 		let found = false;
 		for (const node of v.nodes)
 			if (node === properties) {
@@ -61,6 +60,7 @@ export const buildIndex = (features: Feature[]): NodeMap => {
 	const parkingLotBitmap = BboxBitmap();
 	const parkingLots: Feature[] = [];
 
+	let start = Date.now();
 	for (const feature of features) {
 		if (isParkingLot(feature.properties)) {
 			const tile = highestCommonTileForGeometry(feature.geometry);
@@ -90,19 +90,24 @@ export const buildIndex = (features: Feature[]): NodeMap => {
 			}
 		}
 	}
+	//console.log(`pass 1 took ${Date.now() - start} ms`);
+	start = Date.now();
 
 	// CONSIDER: This could be parallelized, it's ~80% of the
 	// runtime.
 	for (const v of Object.values(map)) {
-		let needle = highestCommonTile([v.ll]);
-
 		if (!parkingLotBitmap.test(v.ll))
 			continue;
+
+		let needle = highestCommonTile([v.ll]);
 
 		const overlappingParkingLots = [];
 		while(needle.z > 0) {
 			const key = tile2str(needle);
-			overlappingParkingLots.push(...(parkingLotTiles[key] || []));
+
+			const toAdd = parkingLotTiles[key];
+			if (toAdd)
+				overlappingParkingLots.push(...toAdd);
 
 			needle.z--;
 			needle.x = Math.floor(needle.x / 2);
@@ -117,6 +122,7 @@ export const buildIndex = (features: Feature[]): NodeMap => {
 				v.inParkingLot = true;
 		}
 	}
+	//console.log(`pass 2 took ${Date.now() - start} ms`);
 
 	return map;
 }
