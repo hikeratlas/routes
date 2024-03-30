@@ -31,9 +31,6 @@ export interface Feature {
 	geometry: Geometry;
 	// We could consider fleshing these out...
 	properties: { [k: string]: string };
-
-	// For some features, we compute the highest zoom tile that wholly encloses it.
-	tile?: Tile;
 }
 
 export type NodeMap = {

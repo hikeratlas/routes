@@ -52,8 +52,8 @@ export const buildIndex = (features: Feature[]): NodeMap => {
 
 	for (const feature of features) {
 		if (isParkingLot(feature.properties)) {
-			feature.tile = highestCommonTileForGeometry(feature.geometry);
-			const tileKey = tile2str(feature.tile);
+			const tile = highestCommonTileForGeometry(feature.geometry);
+			const tileKey = tile2str(tile);
 			parkingLotTiles[tileKey] = parkingLotTiles[tileKey] || [];
 			parkingLotTiles[tileKey].push(feature);
 			parkingLots.push(feature);
