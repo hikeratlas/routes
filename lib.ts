@@ -16,7 +16,7 @@ export const load = (filename: string): Feature[] => {
 	return lines;
 }
 
-export const ll = (coord: [number, number]): string => coord.join(',');
+export const ll2str = (coord: [number, number]): string => coord.join(',');
 
 export const tile2str = (tile: Tile): string => `z${tile.z}/${tile.x}/${tile.y}`;
 
@@ -26,7 +26,7 @@ export const buildIndex = (features: Feature[]): NodeMap => {
 	const parkingLotTiles: { [key: string]: Feature[] } = {};
 
 	const index = (properties: Feature['properties'], coordinates: [number, number], neighbour?: [number, number]) => {
-		const key = ll(coordinates);
+		const key = ll2str(coordinates);
 
 		let v = map[key];
 		if (!v) {
@@ -164,3 +164,100 @@ export const getTrailheads = (map: NodeMap): string[] => {
 	}
 	return rv;
 };
+
+export interface Trail {
+	coords: [number, number][];
+}
+
+export const getTrails = (map: NodeMap, trailhead: string) => {
+	const node = map[trailhead];
+	if (!node)
+		throw new Error(`trailhead ${trailhead} is unknown`);
+	const completeTrails: Trail[] = [];
+
+	// To generate all of the paths:
+	// 1. Maintain a list of candidate paths.
+	// 2. The initial list is [trailhead].
+	// 3. While we have discovered new knowledge:
+	//   A. For each candidate path, find reachable next nodes.
+	//   B. Reject the next node in some cases:
+	//      i.  It's a node we have already visited 2 times
+	//      ii. There is a choice of nodes, and we have not visited the other node already
+	//   C. Check if any of the paths is a complete path.
+
+	let candidates: Trail[] = [];
+	candidates.push({
+		coords: [node.ll]
+	});
+	let didWork = true;
+	let nodes = 0;
+	while (didWork) {
+		nodes++;
+		didWork = false;
+
+		const oldCandidates = candidates;
+		candidates = [];
+
+		for (const candidate of oldCandidates) {
+			const ll = candidate.coords.at(-1)!;
+			const node = map[ll2str(ll)];
+			if (!node)
+				throw new Error(`panic: map lacked entry for ${ll2str(ll)}`);
+			/*
+			console.log(node);
+			if (nodes > 2)
+				return;
+				*/
+
+			const edges = node.edges;
+
+			const counts: { [ll: string]: number } = {};
+			for (const ll of candidate.coords) {
+				const key = ll2str(ll);
+				counts[key] = (counts[key] || 0) + 1;
+			}
+			const unvisitedEdges = edges.filter(edge => counts[ll2str(edge)] === undefined);
+
+			// If the choice is backtracking or visiting a new node, only permit
+			// visiting the new node.
+			let candidateEdges: [number, number][] = unvisitedEdges.length > 0 ? unvisitedEdges : edges;
+
+			// Remove any node we have visited twice -- in a lasso or out-and-back, we'll
+			// traverse the same node twice, but three times is just wasteful backtracking.
+			candidateEdges = candidateEdges.filter(edge => !(counts[ll2str(edge)] >= 2));
+
+			// For each candidate edge, construct a new path.
+			for (const nextCoord of candidateEdges) {
+				didWork = true;
+				const newTrail: Trail = {
+					...candidate,
+					coords: [
+						...candidate.coords,
+						nextCoord
+					],
+				};
+
+				// Is nextCoord:
+				// - the start?
+				// - otherwise a terminus?
+				//
+				// If yes, emit a complete trail.
+				// If no, put it back on the pile.
+				if (ll2str(nextCoord) == ll2str(candidate.coords[0])) {
+					// We have a loop or out-and-back.
+					completeTrails.push(newTrail);
+				} else {
+					// TODO: support one-way trails, e.g. Tonquin Valley Trail, where
+					//       the start and the end nodes are not the same.
+
+					// We're not done, keep lookin'.
+					candidates.push(newTrail);
+				}
+			}
+		}
+	}
+
+	// Q: why is this 1 trail and not 2?
+	console.log(completeTrails.length);
+	return completeTrails;
+}

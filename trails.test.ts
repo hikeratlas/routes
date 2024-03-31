@@ -1,5 +1,6 @@
 import type { NodeMap } from './types';
 import * as testUtils from './test-utils';
+import * as lib from './lib';
 
 test('trails', async () => {
 	const map: NodeMap = testUtils.buildIndexCached();
@@ -8,4 +9,6 @@ test('trails', async () => {
 	const batLakeTH = trailheads.find(th => map[th].nodes.find(x => x.name === 'Bat Lake Trail'));
 	expect(batLakeTH).toBeTruthy();
 	console.log(batLakeTH);
+
+	const trails = lib.getTrails(map, batLakeTH!);
 });
