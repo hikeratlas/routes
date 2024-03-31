@@ -39,22 +39,41 @@ export const buildIndex = (features: Feature[]): NodeMap => {
 		}
 
 		// Ways often contain the same node twice; don't add it twice.
-		let found = false;
-		for (const node of v.nodes)
-			if (node === properties) {
-				found = true;
-				break;
-			}
+		const found = !!v.nodes.find(n => n === properties);
 
 		if (!found) {
 				v.nodes.push(properties);
-
-			if (neighbour)
-				v.edges.push(neighbour);
-
-			if (isParkingLot(properties))
-				v.inParkingLot = true;
 		}
+
+		if (neighbour) {
+			v.edges.push(neighbour);
+
+			// Draw an implicit edge back from neighbour.
+			// I believe this is valid.
+			//
+			// Although ways in OSM are directed graphs, I don't think the order
+			// of the way implies onewayness. To do that, you must use the
+			// https://wiki.openstreetmap.org/wiki/Key:oneway key.
+			const neighbourKey = ll2str(neighbour);
+			let neighbourV = map[neighbourKey];
+			if (!neighbourV) {
+				neighbourV = map[neighbourKey] = {
+					ll: neighbour,
+					nodes: [],
+					edges: [],
+					inParkingLot: false
+				};
+			}
+
+			neighbourV.edges.push(coordinates);
+
+			const neighbourFound = !!neighbourV.nodes.find(n => n === properties);
+			if (!neighbourFound)
+				neighbourV.nodes.push(properties);
+		}
+
+		if (isParkingLot(properties))
+			v.inParkingLot = true;
 	};
 
 	const parkingLotBitmap = BboxBitmap();
