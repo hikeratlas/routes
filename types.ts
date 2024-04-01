@@ -4,6 +4,10 @@ export interface Tile {
 	y: number;
 }
 
+export interface Trail {
+	coords: [number, number][];
+}
+
 export interface Point {
 	type: 'Point';
 	coordinates: [number, number];

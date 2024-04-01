@@ -1,6 +1,7 @@
 import type { NodeMap } from './types';
 import * as testUtils from './test-utils';
 import * as lib from './lib';
+import * as trails from './trails';
 
 test('trails', async () => {
 	const map: NodeMap = testUtils.buildIndexCached();
@@ -10,5 +11,9 @@ test('trails', async () => {
 	expect(batLakeTH).toBeTruthy();
 	console.log(batLakeTH);
 
-	const trails = lib.getTrails(map, batLakeTH!);
+	const allTrails = trails.getTrails(map, batLakeTH!);
+
+	const dedupedTrails = trails.groupAndFilter(allTrails);
+	expect(dedupedTrails.length).toBe(1);
+	expect(dedupedTrails[0].coords.length).toBe(155);
 });
