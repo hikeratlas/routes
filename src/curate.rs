@@ -700,6 +700,8 @@ pub struct BaseCamp {
 pub struct Through {
     pub from: String,
     pub to: String,
+    /// "point-to-point", or "loop" back to `from`.
+    pub kind: &'static str,
     pub score: f64,
     pub ev: Eval,
     edges: HashSet<u64>,
@@ -812,7 +814,8 @@ pub fn curate(area: &Area, dem: &Dem, n_day: usize) -> Curated {
             if area.park_dist(a.pt, 2000.0).is_none() {
                 return out;
             }
-            let s = ctx.search(a.node, 60000.0, None);
+            // Up to 100 km: the West Coast Trail is ~75 km.
+            let s = ctx.search(a.node, 100000.0, None);
             // Along the search tree: campsites passed (roughly: entering a
             // campsite's surroundings) and metres in the park.
             let mut camps: HashMap<u32, (u32, u32, f64)> = HashMap::default(); // node -> (count, last camp, metres in park)
@@ -833,7 +836,7 @@ pub fn curate(area: &Area, dem: &Dem, n_day: usize) -> Curated {
             }
             for b in &starts {
                 let Some(m) = s.reached(b.node) else { continue };
-                if b.node == a.node || !(18000.0..=60000.0).contains(&m) {
+                if b.node == a.node || !(18000.0..=100000.0).contains(&m) {
                     continue;
                 }
                 let Some(&(n, _, inp)) = camps.get(&b.node) else {
@@ -852,9 +855,66 @@ pub fn curate(area: &Area, dem: &Dem, n_day: usize) -> Curated {
                 out.push(Through {
                     from: a.name.clone(),
                     to: b.name.clone(),
+                    kind: "point-to-point",
                     score: sc,
                     ev,
                     edges: edge_set(&path),
+                });
+            }
+            // Multi-day loops back to this trailhead (e.g. Killarney's La
+            // Cloche Silhouette), built as day-hike loops are (see candidates):
+            // out to a far backcountry campsite, back by a different way.
+            let g = &area.graph;
+            let mut far: Vec<(u32, f64)> = ctx
+                .camps
+                .iter()
+                .filter_map(|c| ctx.nearest(c.pt, 200.0))
+                .filter_map(|n| s.reached(n).map(|m| (n, m)))
+                .filter(|&(_, m)| (9000.0..=50000.0).contains(&m))
+                .collect();
+            far.sort_by(|x, y| y.1.partial_cmp(&x.1).unwrap());
+            far.dedup_by_key(|x| x.0);
+            for &(turn, m) in far.iter().take(6) {
+                let (path, ways) = s.path(turn);
+                let pen = edge_set(&path);
+                let b = ctx.search(turn, m * 1.7, Some(&pen));
+                let Some(bm) = b.reached(a.node) else { continue };
+                let (back, bways) = b.path(a.node);
+                let be = edge_set(&back);
+                let shared = be.intersection(&pen).count() as f64 / be.len().max(1) as f64;
+                let total = m + bm;
+                if shared >= 0.3 || bm > m * 1.6 || !(18000.0..=100000.0).contains(&total) {
+                    continue;
+                }
+                let full: Vec<u32> = path.iter().chain(back.iter().skip(1)).copied().collect();
+                let fw: Vec<u32> = ways.iter().chain(bways.iter()).copied().collect();
+                // Campsites passed, and metres in the park.
+                let mut passed: HashSet<u32> = HashSet::default();
+                let mut inp = 0.0;
+                for w in full.windows(2) {
+                    if let Some(cs) = ctx.camp_near.get(&w[1]) {
+                        passed.extend(cs.iter().copied());
+                    }
+                    if ctx.in_park[w[1] as usize] {
+                        inp += metres(g.pts[w[0] as usize], g.pts[w[1] as usize]);
+                    }
+                }
+                if passed.len() < 2 || inp / total < 0.6 {
+                    continue;
+                }
+                let ev = ctx.evaluate(&full, &fw, false);
+                let kinds: HashSet<Kind> = ev.passed.iter().map(|(k, _)| *k).collect();
+                let sc =
+                    1.0 * kinds.len() as f64 + 2.5 * ev.open_high + 0.7 * ev.lc_variety.min(4.0)
+                        - 2.5 * ev.road
+                        - 2.0 * ev.bike;
+                out.push(Through {
+                    from: a.name.clone(),
+                    to: a.name.clone(),
+                    kind: "loop",
+                    score: sc,
+                    ev,
+                    edges: edge_set(&full),
                 });
             }
             out
@@ -949,6 +1009,7 @@ impl Curated {
             "point_to_points": self.through.iter().map(|t| json!({
                 "from": t.from,
                 "to": t.to,
+                "kind": t.kind,
                 "score": (t.score * 100.0).round() / 100.0,
                 "route": eval_json(&t.ev),
             })).collect::<Vec<_>>(),

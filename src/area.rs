@@ -167,18 +167,33 @@ fn read_tile(
                     "path" | "road" if f.typ == 2 => {
                         let kind = l.str(f, "kind");
                         let class = if l.name == "path" {
-                            if kind == "cycleway" {
+                            // Ferries and cable cars on trails (e.g. the West
+                            // Coast Trail's Nitinat Narrows): walkable, at a
+                            // track's cost.
+                            if matches!(kind, "cycleway" | "ferry" | "cable_car") {
                                 Class::Track
                             } else {
                                 Class::Trail
                             }
                         } else {
-                            match kind {
+                            let class = match kind {
                                 "track" => Class::Track,
                                 "service" | "unclassified" | "residential" | "living_street"
                                 | "tertiary" | "tertiary_link" | "secondary" | "secondary_link"
                                 | "road" => Class::Road,
                                 _ => continue,
+                            };
+                            // Roads closed to private cars (e.g. the Lake O'Hara
+                            // Fire Road, bus only) are walked like tracks: a
+                            // campsite beside one isn't drive-in, and a trail
+                            // meeting one isn't a trailhead.
+                            let closed = l
+                                .get(f, "closed_to_cars")
+                                .is_some_and(|v| matches!(v, mvt::Value::Bool(true)));
+                            if closed && class == Class::Road {
+                                Class::Track
+                            } else {
+                                class
                             }
                         };
                         let foot = l.str(f, "foot");

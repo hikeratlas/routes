@@ -354,9 +354,13 @@ fn main() {
             emit(
                 format!("{}/multi/{i}", p.id),
                 "multi-day",
-                format!("{} to {}", s(t, "from"), s(t, "to")),
+                if s(t, "kind") == "loop" {
+                    format!("{} loop", s(t, "from"))
+                } else {
+                    format!("{} to {}", s(t, "from"), s(t, "to"))
+                },
                 &t["route"],
-                json!({"kind": "point-to-point", "stopovers": t["route"]["stopovers"].as_array().unwrap().len()}),
+                json!({"kind": s(t, "kind"), "stopovers": t["route"]["stopovers"].as_array().unwrap().len()}),
             );
         }
     }
