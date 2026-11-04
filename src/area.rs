@@ -19,6 +19,7 @@ pub struct Way {
     pub name: String,
     pub class: Class,
     pub bike: bool,
+    pub walk: bool, // foot=designated or yes
 }
 
 #[derive(Clone, Copy)]
@@ -197,6 +198,7 @@ fn read_tile(
                                     name: l.str(f, "name").to_string(),
                                     class,
                                     bike,
+                                    walk: foot == "designated" || foot == "yes",
                                 },
                                 pts,
                             ));
@@ -328,20 +330,35 @@ impl Graph {
         let mut g = Graph::default();
         let mut ids: HashMap<(i64, i64), u32> = HashMap::new();
         let mut edge_nodes = Vec::new();
+        // A bike trail is often tagged as one on only some of its ways (e.g.
+        // Whistler's Yummy Numby: one of four), so a named trail with any
+        // bike-only way is bike-only throughout, wherever walking isn't
+        // designated.
+        let bike_names: std::collections::HashSet<&str> = raws
+            .iter()
+            .flat_map(|r| &r.lines)
+            .filter(|(w, _)| w.bike && w.class == Class::Trail && !w.name.is_empty())
+            .map(|(w, _)| w.name.as_str())
+            .collect();
         for r in raws {
             let (x0, y0) = (r.tx as f64 * EXT, r.ty as f64 * EXT);
             for (way, pts) in &r.lines {
                 let wi = g.ways.len() as u32;
+                let bike = way.bike
+                    || (way.class == Class::Trail
+                        && !way.walk
+                        && bike_names.contains(way.name.as_str()));
                 g.ways.push(Way {
                     name: way.name.clone(),
                     class: way.class,
-                    bike: way.bike,
+                    bike,
+                    walk: way.walk,
                 });
                 let factor = match way.class {
                     Class::Trail => 1.0,
                     Class::Track => 1.3,
                     _ => 2.0,
-                } * if way.bike { 1.8 } else { 1.0 };
+                } * if bike { 1.8 } else { 1.0 };
                 let mut prev: Option<u32> = None;
                 for &p in pts {
                     let key = ((p.0 * 16.0).round() as i64, (p.1 * 16.0).round() as i64);
@@ -382,6 +399,7 @@ impl Graph {
             name: String::new(),
             class: Class::Join,
             bike: false,
+            walk: false,
         });
         let mut buckets: HashMap<(i64, i64), Vec<u32>> = HashMap::new();
         for &i in &edge_nodes {
