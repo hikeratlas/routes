@@ -27,6 +27,7 @@ const USAGE: &str = "usage: routes --tiles FILE|URL [--tiles ...] --out DIR
   [--park NAME]          only parks whose name contains NAME
   [--bbox W,S,E,N]       only parks in this box (default: the tiles' bounds)
   [--min-area KM2]       smallest park to curate (default 5)
+  [--max-tiles N]        skip parks needing more z14 tiles than this (default 50000)
   [--qrank qrank.db]     Wikidata popularity (hikeratlas/qrank)
   [--tile-cache DIR]     cache tiles fetched from a URL here
   [--dem-cache DIR]      cache DEM tiles here
@@ -38,6 +39,7 @@ struct Args {
     park: Option<String>,
     bbox: Option<[f64; 4]>,
     min_area: f64,
+    max_tiles: usize,
     qrank: Option<String>,
     tile_cache: Option<PathBuf>,
     dem_cache: Option<PathBuf>,
@@ -51,6 +53,7 @@ fn args() -> Args {
         park: None,
         bbox: None,
         min_area: 5.0,
+        max_tiles: 50000,
         qrank: None,
         tile_cache: None,
         dem_cache: None,
@@ -76,6 +79,7 @@ fn args() -> Args {
                 a.bbox = Some(b.try_into().unwrap_or_else(|_| die()));
             }
             "--min-area" => a.min_area = val.parse().unwrap_or_else(|_| die()),
+            "--max-tiles" => a.max_tiles = val.parse().unwrap_or_else(|_| die()),
             "--qrank" => a.qrank = Some(val),
             "--tile-cache" => a.tile_cache = Some(val.into()),
             "--dem-cache" => a.dem_cache = Some(val.into()),
@@ -207,6 +211,16 @@ fn main() {
             let r = 5000.0 / geo::mpu((p.min.1 + p.max.1) / 2.0);
             let (x0, y0) = geo::tile_of((p.min.0 - r, p.min.1 - r));
             let (x1, y1) = geo::tile_of((p.max.0 + r, p.max.1 + r));
+            let n_tiles = (x1 - x0 + 1) as usize * (y1 - y0 + 1) as usize;
+            // A giant park (e.g. Wrangell-St. Elias) would need all its tiles
+            // in memory at once; skip it, for now.
+            if n_tiles > a.max_tiles {
+                eprintln!(
+                    "{} ({}): skipped, {n_tiles} tiles is over --max-tiles {}",
+                    p.name, p.id, a.max_tiles
+                );
+                return None;
+            }
             let tiles: Vec<(u32, u32)> = (x0..=x1)
                 .flat_map(|x| (y0..=y1).map(move |y| (x, y)))
                 .collect();
