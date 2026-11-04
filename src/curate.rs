@@ -596,6 +596,50 @@ impl<'a> Ctx<'a> {
                 merged.push(s);
             }
         }
+        // Where a trail meets a drivable road near the park. The basemap only
+        // has parking lots inside parks, so a trailhead whose lot is just
+        // outside (Joffre Lakes), or isn't mapped at all, is found this way.
+        // Kept only 1 km or more from every other start, so a park crossed by
+        // many roads doesn't get a start at every crossing.
+        let g = &self.area.graph;
+        let is_trail = |e: &crate::area::Edge| {
+            let w = &g.ways[e.way as usize];
+            w.class == Class::Trail && !w.bike
+        };
+        let mut junctions: Vec<(f64, u32)> = (0..g.pts.len() as u32)
+            .into_par_iter()
+            .filter_map(|n| {
+                let adj = &g.adj[n as usize];
+                if !adj.iter().any(is_trail)
+                    || !adj
+                        .iter()
+                        .any(|e| g.ways[e.way as usize].class == Class::Road)
+                {
+                    return None;
+                }
+                self.area
+                    .park_dist(g.pts[n as usize], 2000.0)
+                    .map(|d| (d, n))
+            })
+            .collect();
+        junctions.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        for (_, n) in junctions {
+            let pt = g.pts[n as usize];
+            if merged.iter().any(|m| metres(m.pt, pt) < 1000.0) {
+                continue;
+            }
+            let name = match self.trail_name_near(n) {
+                Some(t) if !t.starts_with("Parking off ") => t,
+                Some(r) => r.replacen("Parking off ", "Trail access off ", 1),
+                None => "Trail access".into(),
+            };
+            merged.push(Start {
+                name,
+                node: n,
+                pt,
+                trailhead: false,
+            });
+        }
         merged
     }
 }

@@ -45,7 +45,11 @@ It works destination first, and prefers variety.
    in memory at once.
 2. **Trailheads.** Parking lots and `highway=trailhead` within 5 km of the
    park, snapped to the network and merged when within 400 m of each other.
-   An unnamed lot is named after the first named trail it leads to.
+   An unnamed lot is named after the first named trail it leads to. The
+   basemap only has parking lots inside parks, so places where a trail meets a
+   drivable road within 2 km of the park count too. That catches lots just
+   outside the boundary and unmapped trailheads. Each such place must be at
+   least 1 km from every other trailhead.
 3. **Destinations.** Peaks, viewpoints, waterfalls, huts, and named lakes over
    2 ha. A lake can be reached from anywhere within 75 m of its shore. Copies
    of one place are merged, such as "Panorama Ridge" and "Panorama Ridge
