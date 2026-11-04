@@ -39,7 +39,8 @@ The output:
 It works destination first, and prefers variety.
 
 1. **Parks.** Named protected areas, national parks and nature reserves over
-   5 km² (`--min-area`), from the z8 park layer. Each park is curated from its
+   5 km² (`--min-area`), from the z8 park layer. Parks closed to the public
+   (`access=private` or `no`, such as Vancouver's watersheds) are skipped. Each park is curated from its
    z14 tiles, plus 5 km around it. Parks that would need more than 50,000
    tiles (`--max-tiles`) are skipped for now, because their tiles would all be
    in memory at once.
@@ -58,7 +59,8 @@ It works destination first, and prefers variety.
    destination 1.5–15 km away. Each gets an out-and-back, plus a loop when
    there's a way back that shares less than 30% of the trail and is at most
    1.6× as long. Roads cost 2×, tracks 1.3× and bike-only trails 1.8× as much
-   as trails.
+   as trails. A trail is bike-only if it's designated for bikes or graded for
+   mountain bikes (`mtb:scale`), and walking isn't designated too.
 5. **Scoring** (see `score` in `src/curate.rs`).
    - Rewards: the destination's appeal and Wikidata popularity
      ([QRank](https://github.com/hikeratlas/qrank)), the kinds of features
