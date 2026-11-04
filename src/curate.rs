@@ -738,7 +738,7 @@ pub fn curate(area: &Area, dem: &Dem, n_day: usize) -> Curated {
             let (mut path, mut ways) = s.path(snode);
             path.reverse();
             ways.reverse();
-            let approach = ctx.evaluate(&path, &ways, true);
+            let approach = ctx.evaluate(&path, &ways, false); // one way: the walk in
             let hikes = ctx.candidates(cnode, &c.name, &targets, 1000.0, 8000.0);
             let picks = select(&hikes, 4, false);
             if picks.len() < 2 {
