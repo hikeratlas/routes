@@ -182,6 +182,13 @@ fn read_tile(
                             }
                         };
                         let foot = l.str(f, "foot");
+                        // Paths walkers may not use, e.g. bike-only trails
+                        // (foot=no), which the basemap keeps so the map can
+                        // show them. Curated hikes must never use them, not
+                        // just score them lower like other bike trails.
+                        if matches!(foot, "no" | "private" | "use_sidepath") {
+                            continue;
+                        }
                         // Bike trails: designated for bikes, or graded for
                         // mountain bikes (mtb), unless walking is designated too.
                         let mtb = l
