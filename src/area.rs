@@ -181,7 +181,12 @@ fn read_tile(
                             }
                         };
                         let foot = l.str(f, "foot");
-                        let bike = l.str(f, "bicycle") == "designated"
+                        // Bike trails: designated for bikes, or graded for
+                        // mountain bikes (mtb), unless walking is designated too.
+                        let mtb = l
+                            .get(f, "mtb")
+                            .is_some_and(|v| matches!(v, mvt::Value::Bool(true)));
+                        let bike = (l.str(f, "bicycle") == "designated" || mtb)
                             && foot != "designated"
                             && foot != "yes";
                         for line in f.geometry() {
