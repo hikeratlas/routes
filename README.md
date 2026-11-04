@@ -40,7 +40,9 @@ It works destination first, and prefers variety.
 
 1. **Parks.** Named protected areas, national parks and nature reserves over
    5 km² (`--min-area`), from the z8 park layer. Each park is curated from its
-   z14 tiles, plus 5 km around it.
+   z14 tiles, plus 5 km around it. Parks that would need more than 50,000
+   tiles (`--max-tiles`) are skipped for now, because their tiles would all be
+   in memory at once.
 2. **Trailheads.** Parking lots and `highway=trailhead` within 5 km of the
    park, snapped to the network and merged when within 400 m of each other.
    An unnamed lot is named after the first named trail it leads to.
