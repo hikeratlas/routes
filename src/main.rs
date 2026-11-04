@@ -135,6 +135,11 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> Vec<Park> {
                     {
                         continue;
                     }
+                    // Closed to the public, e.g. Vancouver's watersheds.
+                    let access = l.str(f, "access");
+                    if access == "private" || access == "no" {
+                        continue;
+                    }
                     let area = l.get(f, "area").map(|v| v.as_f64()).unwrap_or(0.0);
                     let name = l.str(f, "name");
                     if area < a.min_area * 1e6
