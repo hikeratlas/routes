@@ -873,6 +873,40 @@ pub struct Curated {
     pub timed_out: bool,
 }
 
+const MAX_DAY_STARTS: usize = 100;
+const MULTI_STARTS_PER_CAMP: usize = 6;
+
+/// At most `n` of the starts, spread out: mapped trailheads first, then the
+/// rest, each pick the one farthest from those already picked. In their
+/// original order, so a park with `n` or fewer is unchanged.
+fn spread(starts: &[Start], n: usize) -> Vec<&Start> {
+    if starts.len() <= n {
+        return starts.iter().collect();
+    }
+    let mut picked = vec![false; starts.len()];
+    let mut nearest = vec![f64::MAX; starts.len()]; // metres to the nearest pick
+    let mut count = 0;
+    for pass_trailheads in [true, false] {
+        while count < n {
+            let best = (0..starts.len())
+                .filter(|&i| !picked[i] && starts[i].trailhead == pass_trailheads)
+                .max_by(|&a, &b| nearest[a].partial_cmp(&nearest[b]).unwrap().then(b.cmp(&a)));
+            let Some(i) = best else { break };
+            picked[i] = true;
+            count += 1;
+            for (j, s) in starts.iter().enumerate() {
+                nearest[j] = nearest[j].min(metres(s.pt, starts[i].pt));
+            }
+        }
+    }
+    starts
+        .iter()
+        .zip(picked)
+        .filter(|(_, p)| *p)
+        .map(|(s, _)| s)
+        .collect()
+}
+
 /// Curate a park's routes. With a `deadline`, trailheads and campsites not
 /// started by then are skipped, so a pathological park can't hold up a whole
 /// run: it's reported (Curated::timed_out) instead.
@@ -932,8 +966,10 @@ pub fn curate(
         starts.len(),
         ctx.camps.len()
     );
-    // day hikes
-    let cands: Vec<Cand> = starts
+    // day hikes, from at most MAX_DAY_STARTS trailheads: a city corridor has
+    // hundreds (the Mississippi NRRA 642), giving much the same hikes
+    let day_starts = spread(&starts, MAX_DAY_STARTS);
+    let cands: Vec<Cand> = day_starts
         .par_iter()
         .flat_map(|s| {
             if late() {
@@ -993,7 +1029,32 @@ pub fn curate(
     // multi-day point-to-points: trailhead to trailhead via 2+ campsites. A
     // park with fewer than 2 backcountry campsites can't have one: skip the
     // (100 km) searches.
-    let multi_starts: &[Start] = if ctx.camps.len() >= 2 { &starts } else { &[] };
+    // A multi-day route starts at a trailhead near its first campsite, so
+    // search only from each campsite's MULTI_STARTS_PER_CAMP nearest
+    // trailheads: a park with many trailheads and a few campsites (the
+    // Mississippi NRRA: 642 and 2) otherwise searched 100 km from them all.
+    let multi_starts: Vec<&Start> = if ctx.camps.len() >= 2 {
+        let mut keep = vec![false; starts.len()];
+        for c in &ctx.camps {
+            let mut by_dist: Vec<(f64, usize)> = starts
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (metres(s.pt, c.pt), i))
+                .collect();
+            by_dist.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            for &(_, i) in by_dist.iter().take(MULTI_STARTS_PER_CAMP) {
+                keep[i] = true;
+            }
+        }
+        starts
+            .iter()
+            .zip(keep)
+            .filter(|(_, k)| *k)
+            .map(|(s, _)| s)
+            .collect()
+    } else {
+        vec![]
+    };
     let mut thru: Vec<Through> = multi_starts
         .par_iter()
         .flat_map(|a| {
