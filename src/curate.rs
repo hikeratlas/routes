@@ -194,6 +194,17 @@ pub struct Cand {
     pub ev: Eval,
 }
 
+/// An out-and-back day hike, with what its loop (Ctx::loop_of) needs.
+pub struct OutBack {
+    pub cand: Cand,
+    di: usize,
+    src: u32,
+    node: u32,
+    m: f64,
+    path: Vec<u32>,
+    ways: Vec<u32>,
+}
+
 /// Merge destinations that are the same place: same kind within 400 m with
 /// the same name once any "(...)" is dropped, or one name inside the other
 /// within 500 m ("Panorama Ridge" and "Panorama Ridge overlook"). Keeps the
@@ -616,6 +627,9 @@ impl<'a> Ctx<'a> {
         out
     }
 
+    /// Day hikes from `src`: an out-and-back to each destination reached
+    /// between min_m and max_m, and a loop back by a different way where
+    /// there's a good one.
     pub fn candidates(
         &self,
         src: u32,
@@ -624,6 +638,24 @@ impl<'a> Ctx<'a> {
         min_m: f64,
         max_m: f64,
     ) -> Vec<Cand> {
+        let mut out = vec![];
+        for ob in self.out_and_backs(src, src_name, targets, min_m, max_m) {
+            let lp = self.loop_of(&ob);
+            out.push(ob.cand);
+            out.extend(lp);
+        }
+        out
+    }
+
+    /// The out-and-backs of `candidates`, each with what its loop needs.
+    pub fn out_and_backs(
+        &self,
+        src: u32,
+        src_name: &str,
+        targets: &[(usize, Vec<u32>)],
+        min_m: f64,
+        max_m: f64,
+    ) -> Vec<OutBack> {
         let s = self.search(src, max_m, None);
         let mut best: HashMap<&str, (usize, f64, u32)> = HashMap::default();
         for (di, access) in targets {
@@ -648,36 +680,60 @@ impl<'a> Ctx<'a> {
             let (path, ways) = s.path(node);
             let ev = self.evaluate(&path, &ways, true);
             let (sc, parts) = score(&ev, d, false);
-            let pen = edge_set(&path);
-            let mk = |kind, sc, parts, edges, ev| Cand {
+            let cand = Cand {
                 from: src_name.to_string(),
                 start: g.pts[src as usize],
                 dest: d.name.clone(),
                 dest_kind: d.kind,
                 dest_pt: g.pts[node as usize],
-                kind,
+                kind: "out-and-back",
                 score: sc,
                 parts,
-                edges,
+                edges: edge_set(&path),
                 ev,
             };
-            out.push(mk("out-and-back", sc, parts, pen.clone(), ev));
-            // a loop: back by a different way, if there's a good one
-            let b = self.search_to(node, m * 1.7, Some(&pen), src);
-            if let Some(bm) = b.reached(src) {
-                let (back, bways) = b.path(src);
-                let be = edge_set(&back);
-                let shared = be.intersection(&pen).count() as f64 / be.len().max(1) as f64;
-                if shared < 0.3 && bm <= m * 1.6 {
-                    let full: Vec<u32> = path.iter().chain(back.iter().skip(1)).copied().collect();
-                    let fw: Vec<u32> = ways.iter().chain(bways.iter()).copied().collect();
-                    let ev2 = self.evaluate(&full, &fw, false);
-                    let (s2, p2) = score(&ev2, d, true);
-                    out.push(mk("loop", s2, p2, edge_set(&full), ev2));
-                }
-            }
+            out.push(OutBack {
+                cand,
+                di,
+                src,
+                node,
+                m,
+                path,
+                ways,
+            });
         }
         out
+    }
+
+    /// The loop for an out-and-back: back by a different way, if there's a
+    /// good one.
+    pub fn loop_of(&self, ob: &OutBack) -> Option<Cand> {
+        let (src, node, m, pen) = (ob.src, ob.node, ob.m, &ob.cand.edges);
+        let b = self.search_to(node, m * 1.7, Some(pen), src);
+        let bm = b.reached(src)?;
+        let (back, bways) = b.path(src);
+        let be = edge_set(&back);
+        let shared = be.intersection(pen).count() as f64 / be.len().max(1) as f64;
+        if shared >= 0.3 || bm > m * 1.6 {
+            return None;
+        }
+        let full: Vec<u32> = ob.path.iter().chain(back.iter().skip(1)).copied().collect();
+        let fw: Vec<u32> = ob.ways.iter().chain(bways.iter()).copied().collect();
+        let ev = self.evaluate(&full, &fw, false);
+        let (sc, parts) = score(&ev, &self.dests[ob.di], true);
+        let c = &ob.cand;
+        Some(Cand {
+            from: c.from.clone(),
+            start: c.start,
+            dest: c.dest.clone(),
+            dest_kind: c.dest_kind,
+            dest_pt: c.dest_pt,
+            kind: "loop",
+            score: sc,
+            parts,
+            edges: edge_set(&full),
+            ev,
+        })
     }
 
     /// The first named trail (else road) reached walking out from a node.
@@ -873,39 +929,8 @@ pub struct Curated {
     pub timed_out: bool,
 }
 
-const MAX_DAY_STARTS: usize = 100;
+const LOOPS_PER_DEST: usize = 8;
 const MULTI_STARTS_PER_CAMP: usize = 6;
-
-/// At most `n` of the starts, spread out: mapped trailheads first, then the
-/// rest, each pick the one farthest from those already picked. In their
-/// original order, so a park with `n` or fewer is unchanged.
-fn spread(starts: &[Start], n: usize) -> Vec<&Start> {
-    if starts.len() <= n {
-        return starts.iter().collect();
-    }
-    let mut picked = vec![false; starts.len()];
-    let mut nearest = vec![f64::MAX; starts.len()]; // metres to the nearest pick
-    let mut count = 0;
-    for pass_trailheads in [true, false] {
-        while count < n {
-            let best = (0..starts.len())
-                .filter(|&i| !picked[i] && starts[i].trailhead == pass_trailheads)
-                .max_by(|&a, &b| nearest[a].partial_cmp(&nearest[b]).unwrap().then(b.cmp(&a)));
-            let Some(i) = best else { break };
-            picked[i] = true;
-            count += 1;
-            for (j, s) in starts.iter().enumerate() {
-                nearest[j] = nearest[j].min(metres(s.pt, starts[i].pt));
-            }
-        }
-    }
-    starts
-        .iter()
-        .zip(picked)
-        .filter(|(_, p)| *p)
-        .map(|(s, _)| s)
-        .collect()
-}
 
 /// Curate a park's routes. With a `deadline`, trailheads and campsites not
 /// started by then are skipped, so a pathological park can't hold up a whole
@@ -966,18 +991,49 @@ pub fn curate(
         starts.len(),
         ctx.camps.len()
     );
-    // day hikes, from at most MAX_DAY_STARTS trailheads: a city corridor has
-    // hundreds (the Mississippi NRRA 642), giving much the same hikes
-    let day_starts = spread(&starts, MAX_DAY_STARTS);
-    let cands: Vec<Cand> = day_starts
+    // day hikes: an out-and-back from every trailhead to each destination,
+    // then loops (the expensive part: another search each) only for each
+    // destination's LOOPS_PER_DEST best out-and-backs. A city park has
+    // hundreds of trailheads (the Mississippi NRRA 642), and a loop from a
+    // trailhead with a poor way to a destination is rarely the best.
+    let obs: Vec<OutBack> = starts
         .par_iter()
         .flat_map(|s| {
             if late() {
                 return vec![];
             }
-            ctx.candidates(s.node, &s.name, &targets, 1500.0, 15000.0)
+            ctx.out_and_backs(s.node, &s.name, &targets, 1500.0, 15000.0)
         })
         .collect();
+    let mut by_dest: HashMap<&str, Vec<usize>> = HashMap::default();
+    for (i, ob) in obs.iter().enumerate() {
+        by_dest.entry(ob.cand.dest.as_str()).or_default().push(i);
+    }
+    let mut loop_from: Vec<usize> = vec![];
+    for v in by_dest.values_mut() {
+        v.sort_by(|&a, &b| {
+            obs[b]
+                .cand
+                .score
+                .partial_cmp(&obs[a].cand.score)
+                .unwrap()
+                .then(a.cmp(&b))
+        });
+        loop_from.extend(v.iter().take(LOOPS_PER_DEST));
+    }
+    loop_from.sort();
+    let loops: Vec<Option<Cand>> = loop_from
+        .par_iter()
+        .map(|&i| if late() { None } else { ctx.loop_of(&obs[i]) })
+        .collect();
+    let mut cands: Vec<Cand> = vec![];
+    let mut loops = loop_from.iter().zip(loops).peekable();
+    for (i, ob) in obs.into_iter().enumerate() {
+        cands.push(ob.cand);
+        if loops.peek().is_some_and(|(j, _)| **j == i) {
+            cands.extend(loops.next().unwrap().1);
+        }
+    }
     let day = select(&cands, n_day, true);
     stats += &format!("; day {:.1}s", t.elapsed().as_secs_f64());
 
