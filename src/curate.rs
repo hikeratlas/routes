@@ -8,6 +8,30 @@ use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use serde_json::{Value, json};
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+// Time spent searching and evaluating routes, summed over threads, for the
+// log: where curating's time goes.
+static T_SEARCH: AtomicU64 = AtomicU64::new(0);
+static T_EVAL: AtomicU64 = AtomicU64::new(0);
+static N_SEARCH: AtomicU64 = AtomicU64::new(0);
+static N_SETTLED: AtomicU64 = AtomicU64::new(0);
+struct Tm(&'static AtomicU64, std::time::Instant);
+impl Drop for Tm {
+    fn drop(&mut self) {
+        self.0
+            .fetch_add(self.1.elapsed().as_micros() as u64, Relaxed);
+    }
+}
+
+pub fn profile() -> String {
+    format!(
+        "searching {:.0}s ({} searches, {} nodes settled), evaluating {:.0}s (thread time)",
+        T_SEARCH.load(Relaxed) as f64 / 1e6,
+        N_SEARCH.load(Relaxed),
+        N_SETTLED.load(Relaxed),
+        T_EVAL.load(Relaxed) as f64 / 1e6
+    )
+}
 
 pub struct Ctx<'a> {
     pub area: &'a Area,
@@ -230,6 +254,32 @@ impl<'a> Ctx<'a> {
 
     /// Dijkstra by cost, out to `limit` metres. `penal` edges cost 8x.
     pub fn search(&self, src: u32, limit: f64, penal: Option<&HashSet<u64>>) -> Search {
+        self.search_until(src, limit, penal, None)
+    }
+
+    /// As search, but stops once `target` is settled, when only it is wanted:
+    /// a node's distance and path are final once it leaves the queue, and
+    /// every node given a distance leaves the queue, so `reached(target)` and
+    /// `path(target)` are the same as a full search's.
+    pub fn search_to(
+        &self,
+        src: u32,
+        limit: f64,
+        penal: Option<&HashSet<u64>>,
+        target: u32,
+    ) -> Search {
+        self.search_until(src, limit, penal, Some(target))
+    }
+
+    fn search_until(
+        &self,
+        src: u32,
+        limit: f64,
+        penal: Option<&HashSet<u64>>,
+        target: Option<u32>,
+    ) -> Search {
+        let _t = Tm(&T_SEARCH, std::time::Instant::now());
+        N_SEARCH.fetch_add(1, Relaxed);
         let g = &self.area.graph;
         let mut dist: HashMap<u32, f64> = HashMap::default();
         let mut s = Search {
@@ -243,7 +293,13 @@ impl<'a> Ctx<'a> {
         let mut pq = BinaryHeap::new();
         pq.push(Q(0.0, src));
         while let Some(Q(d, u)) = pq.pop() {
-            if d > dist[&u] || s.metres[&u] > limit {
+            if d > dist[&u] {
+                continue;
+            }
+            if target == Some(u) {
+                break;
+            }
+            if s.metres[&u] > limit {
                 continue;
             }
             let mu = s.metres[&u];
@@ -262,12 +318,14 @@ impl<'a> Ctx<'a> {
                 }
             }
         }
+        N_SETTLED.fetch_add(s.order.len() as u64, Relaxed);
         s
     }
 
     /// Measure a route. `path` is the outward route; for an out-and-back the
     /// walk is out and back along it; otherwise `full` is the whole walk.
     pub fn evaluate(&self, path: &[u32], ways: &[u32], out_and_back: bool) -> Eval {
+        let _t = Tm(&T_EVAL, std::time::Instant::now());
         let g = &self.area.graph;
         let coords: Vec<P> = path.iter().map(|&n| g.pts[n as usize]).collect();
         let one_way = geo::length(&coords);
@@ -528,7 +586,7 @@ impl<'a> Ctx<'a> {
             };
             out.push(mk("out-and-back", sc, parts, pen.clone(), ev));
             // a loop: back by a different way, if there's a good one
-            let b = self.search(node, m * 1.7, Some(&pen));
+            let b = self.search_to(node, m * 1.7, Some(&pen), src);
             if let Some(bm) = b.reached(src) {
                 let (back, bways) = b.path(src);
                 let be = edge_set(&back);
@@ -914,7 +972,7 @@ pub fn curate(area: &Area, dem: &Dem, n_day: usize, trail_area: bool) -> Curated
                 }
                 let (path, ways) = s.path(turn);
                 let pen = edge_set(&path);
-                let b = ctx.search(turn, back_max, Some(&pen));
+                let b = ctx.search_to(turn, back_max, Some(&pen), a.node);
                 let Some(bm) = b.reached(a.node) else {
                     continue;
                 };

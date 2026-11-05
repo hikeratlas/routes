@@ -6,6 +6,9 @@
 // poi layers; they may be spread over several archives) and writes
 //   DIR/routes.geojsonl       one line per route, for the map
 //   DIR/parks/<osm_id>.json   each park's routes in full, for its page
+//
+// A big area can be curated on several machines: each runs with --shard K/N,
+// and then one runs --merge over their output directories.
 mod area;
 mod curate;
 mod dem;
@@ -31,7 +34,13 @@ const USAGE: &str = "usage: routes --tiles FILE|URL [--tiles ...] --out DIR
   [--qrank qrank.db]     Wikidata popularity (hikeratlas/qrank)
   [--tile-cache DIR]     cache tiles fetched from a URL here
   [--dem-cache DIR]      cache DEM tiles here
-  [--dem-zoom Z]         DEM zoom (default 12)";
+  [--dem-zoom Z]         DEM zoom (default 12)
+  [--shard K/N]          curate only shard K (0-based) of N, balanced by tile
+                         count, and write each park's routes to DIR/raw/ for
+                         a later --merge, instead of the outputs below
+
+   or: routes --merge DIR [--merge DIR...] --out DIR
+  merge --shard runs' DIR/raw/ into the outputs below";
 
 struct Args {
     tiles: Vec<String>,
@@ -44,6 +53,8 @@ struct Args {
     tile_cache: Option<PathBuf>,
     dem_cache: Option<PathBuf>,
     dem_zoom: u8,
+    shard: Option<(usize, usize)>,
+    merge: Vec<PathBuf>,
 }
 
 fn args() -> Args {
@@ -58,6 +69,8 @@ fn args() -> Args {
         tile_cache: None,
         dem_cache: None,
         dem_zoom: 12,
+        shard: None,
+        merge: vec![],
     };
     let v: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
@@ -84,11 +97,26 @@ fn args() -> Args {
             "--tile-cache" => a.tile_cache = Some(val.into()),
             "--dem-cache" => a.dem_cache = Some(val.into()),
             "--dem-zoom" => a.dem_zoom = val.parse().unwrap_or_else(|_| die()),
+            "--shard" => {
+                let (k, n) = val.split_once('/').unwrap_or_else(|| die());
+                let (k, n): (usize, usize) = (
+                    k.parse().unwrap_or_else(|_| die()),
+                    n.parse().unwrap_or_else(|_| die()),
+                );
+                if n == 0 || k >= n {
+                    die();
+                }
+                a.shard = Some((k, n));
+            }
+            "--merge" => a.merge.push(val.into()),
             _ => die(),
         }
         i += 2;
     }
-    if a.tiles.is_empty() || a.out.as_os_str().is_empty() {
+    if a.out.as_os_str().is_empty()
+        || (a.merge.is_empty() == a.tiles.is_empty())
+        || (!a.merge.is_empty() && a.shard.is_some())
+    {
         die();
     }
     a
@@ -101,6 +129,18 @@ struct Park {
     trail_area: bool,
     min: geo::P,
     max: geo::P,
+}
+
+impl Park {
+    /// The park's z14 tiles, plus 5 km around it for trailheads outside.
+    fn tiles(&self) -> Vec<(u32, u32)> {
+        let r = 5000.0 / geo::mpu((self.min.1 + self.max.1) / 2.0);
+        let (x0, y0) = geo::tile_of((self.min.0 - r, self.min.1 - r));
+        let (x1, y1) = geo::tile_of((self.max.0 + r, self.max.1 + r));
+        (x0..=x1)
+            .flat_map(|x| (y0..=y1).map(move |y| (x, y)))
+            .collect()
+    }
 }
 
 /// Parks, from the z8 tiles' park layer (which has every park over ~0.5 km²).
@@ -188,20 +228,55 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> Vec<Park> {
 
 fn main() {
     let a = args();
+    let t0 = Instant::now();
+    if !a.merge.is_empty() {
+        // Parks from every shard, in the order one run would write them.
+        let mut docs: Vec<Curated> = vec![];
+        for dir in &a.merge {
+            for e in std::fs::read_dir(dir.join("raw"))
+                .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
+            {
+                let path = e.unwrap().path();
+                let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap())
+                    .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+                docs.push(Curated {
+                    area: v["area"].as_f64().unwrap(),
+                    doc: v["doc"].clone(),
+                });
+            }
+        }
+        docs.sort_by(|x, y| {
+            y.area
+                .partial_cmp(&x.area)
+                .unwrap()
+                .then_with(|| park_id(&x.doc).cmp(park_id(&y.doc)))
+        });
+        eprintln!("merging {} parks from {} shards", docs.len(), a.merge.len());
+        write_outputs(&a.out, docs);
+        eprintln!("done in {:.1}s", t0.elapsed().as_secs_f64());
+        return;
+    }
     let archives: Vec<PmTiles> = a
         .tiles
         .iter()
         .map(|t| PmTiles::open(t, a.tile_cache.clone()).unwrap_or_else(|e| panic!("{t}: {e}")))
         .collect();
     let bbox = a.bbox.unwrap_or(archives[0].bounds);
-    let t0 = Instant::now();
-    let parks = parks(&archives, bbox, &a);
+    let mut parks = parks(&archives, bbox, &a);
     eprintln!(
         "{} parks over {} km² ({:.1}s)",
         parks.len(),
         a.min_area,
         t0.elapsed().as_secs_f64()
     );
+    if let Some((k, n)) = a.shard {
+        parks = shard(parks, k, n);
+        eprintln!(
+            "shard {k}/{n}: {} parks, {} tiles",
+            parks.len(),
+            parks.iter().map(|p| p.tiles().len()).sum::<usize>()
+        );
+    }
     let dem = dem::Dem::new(a.dem_zoom, a.dem_cache.clone());
     let qrank = a.qrank.as_ref().map(|p| {
         Mutex::new(
@@ -209,33 +284,26 @@ fn main() {
                 .expect("qrank db"),
         )
     });
-    std::fs::create_dir_all(a.out.join("parks")).unwrap();
-    let mut lines =
-        std::io::BufWriter::new(std::fs::File::create(a.out.join("routes.geojsonl")).unwrap());
 
     // Curate parks in parallel (biggest first), then write them out in order,
     // dropping routes a bigger park that overlaps this one already has.
-    let docs: Vec<Option<serde_json::Value>> = parks
+    let docs: Vec<Curated> = parks
         .par_iter()
-        .map(|p| {
+        .filter_map(|p| {
             let t = Instant::now();
-            // the park's z14 tiles, plus 5 km around it for trailheads outside
-            let r = 5000.0 / geo::mpu((p.min.1 + p.max.1) / 2.0);
-            let (x0, y0) = geo::tile_of((p.min.0 - r, p.min.1 - r));
-            let (x1, y1) = geo::tile_of((p.max.0 + r, p.max.1 + r));
-            let n_tiles = (x1 - x0 + 1) as usize * (y1 - y0 + 1) as usize;
+            let tiles = p.tiles();
             // A giant park (e.g. Wrangell-St. Elias) would need all its tiles
             // in memory at once; skip it, for now.
-            if n_tiles > a.max_tiles {
+            if tiles.len() > a.max_tiles {
                 eprintln!(
-                    "{} ({}): skipped, {n_tiles} tiles is over --max-tiles {}",
-                    p.name, p.id, a.max_tiles
+                    "{} ({}): skipped, {} tiles is over --max-tiles {}",
+                    p.name,
+                    p.id,
+                    tiles.len(),
+                    a.max_tiles
                 );
                 return None;
             }
-            let tiles: Vec<(u32, u32)> = (x0..=x1)
-                .flat_map(|x| (y0..=y1).map(move |y| (x, y)))
-                .collect();
             let mut area = Area::load(&archives, &p.id, &tiles);
             if let Some(q) = &qrank {
                 let q = q.lock().unwrap();
@@ -268,15 +336,67 @@ fn main() {
             );
             let mut doc = c.to_json();
             doc["park"] = json!({"id": p.id, "name": p.name});
-            Some(doc)
+            Some(Curated { area: p.area, doc })
         })
         .collect();
 
+    if a.shard.is_some() {
+        let raw = a.out.join("raw");
+        std::fs::create_dir_all(&raw).unwrap();
+        for c in &docs {
+            std::fs::write(
+                raw.join(format!("{}.json", park_id(&c.doc))),
+                serde_json::to_vec(&json!({"area": c.area, "doc": c.doc})).unwrap(),
+            )
+            .unwrap();
+        }
+        eprintln!("{} parks curated into {}", docs.len(), raw.display());
+    } else {
+        write_outputs(&a.out, docs);
+    }
+    eprintln!("{}", curate::profile());
+    eprintln!("done in {:.1}s", t0.elapsed().as_secs_f64());
+}
+
+/// A park's curated routes, before routes other parks have are dropped.
+struct Curated {
+    area: f64,
+    doc: serde_json::Value,
+}
+
+fn park_id(doc: &serde_json::Value) -> &str {
+    doc["park"]["id"].as_str().unwrap()
+}
+
+/// Shard k of n: parks dealt out biggest (by tiles) first, each to the shard
+/// with the fewest tiles so far, so the shards take about as long. Every shard
+/// computes the same deal, from the same park list.
+fn shard(parks: Vec<Park>, k: usize, n: usize) -> Vec<Park> {
+    let mut order: Vec<(usize, &Park)> = parks.iter().map(|p| (p.tiles().len(), p)).collect();
+    order.sort_by(|x, y| y.0.cmp(&x.0).then_with(|| x.1.id.cmp(&y.1.id)));
+    let mut load = vec![0usize; n];
+    let mut mine: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (w, p) in order {
+        let s = (0..n).min_by_key(|&i| (load[i], i)).unwrap();
+        load[s] += w.max(1);
+        if s == k {
+            mine.insert(p.id.clone());
+        }
+    }
+    parks.into_iter().filter(|p| mine.contains(&p.id)).collect()
+}
+
+/// Write DIR/routes.geojsonl and DIR/parks/, biggest park first, dropping
+/// routes a bigger park that overlaps this one already has.
+fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
+    std::fs::create_dir_all(out.join("parks")).unwrap();
+    let mut lines =
+        std::io::BufWriter::new(std::fs::File::create(out.join("routes.geojsonl")).unwrap());
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let s = |v: &serde_json::Value, k: &str| v[k].as_str().unwrap_or("").to_string();
     let mut written = 0;
-    for (p, doc) in parks.iter().zip(docs) {
-        let Some(mut doc) = doc else { continue };
+    for Curated { mut doc, .. } in docs {
+        let (p_id, p_name) = (s(&doc["park"], "id"), s(&doc["park"], "name"));
         let mut keep = |list: &str, key: &dyn Fn(&serde_json::Value) -> String| {
             let v: Vec<serde_json::Value> = doc[list]
                 .as_array()
@@ -304,7 +424,7 @@ fn main() {
         }
         written += 1;
         std::fs::write(
-            a.out.join("parks").join(format!("{}.json", p.id)),
+            out.join("parks").join(format!("{p_id}.json")),
             serde_json::to_vec(&doc).unwrap(),
         )
         .unwrap();
@@ -315,7 +435,7 @@ fn main() {
                         route: &serde_json::Value,
                         extra: serde_json::Value| {
             let mut props = json!({
-                "id": id, "park": p.name, "park_id": p.id, "type": typ, "title": title,
+                "id": id, "park": p_name, "park_id": p_id, "type": typ, "title": title,
                 "km": route["km"], "gain": route["gain"],
             });
             for (k, v) in extra.as_object().unwrap() {
@@ -326,7 +446,7 @@ fn main() {
         };
         for (i, h) in doc["day_hikes"].as_array().unwrap().iter().enumerate() {
             emit(
-                format!("{}/day/{i}", p.id),
+                format!("{p_id}/day/{i}"),
                 "day",
                 format!("{} from {}", s(h, "dest"), s(h, "from")),
                 &h["route"],
@@ -336,7 +456,7 @@ fn main() {
         for (i, b) in doc["base_camps"].as_array().unwrap().iter().enumerate() {
             let camp = s(b, "camp");
             emit(
-                format!("{}/base/{i}", p.id),
+                format!("{p_id}/base/{i}"),
                 "approach",
                 format!("{camp} from {}", s(b, "from")),
                 &b["approach"],
@@ -344,7 +464,7 @@ fn main() {
             );
             for (j, h) in b["hikes"].as_array().unwrap().iter().enumerate() {
                 emit(
-                    format!("{}/base/{i}/{j}", p.id),
+                    format!("{p_id}/base/{i}/{j}"),
                     "from-camp",
                     format!("{} from {camp}", s(h, "dest")),
                     &h["route"],
@@ -359,7 +479,7 @@ fn main() {
             .enumerate()
         {
             emit(
-                format!("{}/multi/{i}", p.id),
+                format!("{p_id}/multi/{i}"),
                 "multi-day",
                 if s(t, "kind") == "loop" {
                     format!("{} loop", s(t, "from"))
@@ -373,5 +493,4 @@ fn main() {
     }
     eprintln!("{written} parks with routes");
     lines.flush().unwrap();
-    eprintln!("done in {:.1}s", t0.elapsed().as_secs_f64());
 }
