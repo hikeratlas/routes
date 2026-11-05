@@ -98,6 +98,7 @@ struct Park {
     id: String,
     name: String,
     area: f64,
+    trail_area: bool,
     min: geo::P,
     max: geo::P,
 }
@@ -162,6 +163,7 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> Vec<Park> {
                             id: l.str(f, "osm_id").to_string(),
                             name: name.to_string(),
                             area,
+                            trail_area,
                             min: (f64::MAX, f64::MAX),
                             max: (f64::MIN, f64::MIN),
                         });
@@ -252,7 +254,7 @@ fn main() {
                 }
             }
             let n_day = (((p.area / 1e6).sqrt() / 2.0) as usize).clamp(3, 15);
-            let c = curate::curate(&area, &dem, n_day);
+            let c = curate::curate(&area, &dem, n_day, p.trail_area);
             eprintln!(
                 "{} ({}): {} tiles, {}: {} day hikes, {} base camps, {} point-to-points ({:.1}s)",
                 p.name,
