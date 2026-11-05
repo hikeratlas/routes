@@ -570,9 +570,20 @@ impl<'a> Ctx<'a> {
     /// Trailheads: parking lots and trailhead nodes within 5 km of the park,
     /// snapped to the network and merged when within 400 m of each other.
     pub fn starts(&self, parkings: &[Place]) -> Vec<Start> {
+        let urban = urban_lots(parkings);
         let mut out: Vec<Start> = parkings
             .par_iter()
-            .filter(|p| self.area.park_dist(p.pt, 5000.0).is_some())
+            .enumerate()
+            .filter(|&(i, p)| {
+                // Outside the park, skip lots in cities (see urban_lots), unless
+                // they're mapped as trailheads: a city park otherwise gets a
+                // start at every lot in the neighbourhood.
+                match self.area.park_dist(p.pt, 5000.0) {
+                    None => false,
+                    Some(d) => d == 0.0 || p.trailhead || !urban[i],
+                }
+            })
+            .map(|(_, p)| p)
             .filter_map(|p| {
                 let node = self.nearest(p.pt, 250.0)?;
                 let name = if p.name.is_empty() {
@@ -806,8 +817,11 @@ pub fn curate(area: &Area, dem: &Dem, n_day: usize) -> Curated {
     bases.truncate((n_day / 3).max(1) + 1);
     stats += &format!(", base {:.1}s", t.elapsed().as_secs_f64());
 
-    // multi-day point-to-points: trailhead to trailhead via 2+ campsites
-    let mut thru: Vec<Through> = starts
+    // multi-day point-to-points: trailhead to trailhead via 2+ campsites. A
+    // park with fewer than 2 backcountry campsites can't have one: skip the
+    // (100 km) searches.
+    let multi_starts: &[Start] = if ctx.camps.len() >= 2 { &starts } else { &[] };
+    let mut thru: Vec<Through> = multi_starts
         .par_iter()
         .flat_map(|a| {
             let mut out = vec![];
@@ -964,6 +978,38 @@ pub fn curate(area: &Area, dem: &Dem, n_day: usize) -> Curated {
     }
 }
 
+/// Whether each lot is in a city: 12 or more other lots within 1 km. Remote
+/// trailheads have a handful nearby (Joffre Lakes: at most 6); city parks'
+/// neighbourhoods have dozens (Middlesex Fells: a median of 34).
+pub const URBAN_LOTS: usize = 12;
+pub fn urban_lots(lots: &[Place]) -> Vec<bool> {
+    // Bucket into cells at least 1 km wide (in world units; metres per unit
+    // vary with latitude), then count neighbours in the 3x3 cells around.
+    let size = lots.iter().map(|l| 1000.0 / mpu(l.pt.1)).fold(0.0, f64::max).max(1e-9);
+    let cell = |p: P| ((p.0 / size).floor() as i64, (p.1 / size).floor() as i64);
+    let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::default();
+    for (i, l) in lots.iter().enumerate() {
+        grid.entry(cell(l.pt)).or_default().push(i);
+    }
+    lots.par_iter()
+        .enumerate()
+        .map(|(i, l)| {
+            let (cx, cy) = cell(l.pt);
+            let mut n = 0;
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    for &j in grid.get(&(cx + dx, cy + dy)).map(|v| v.as_slice()).unwrap_or(&[]) {
+                        if j != i && metres(l.pt, lots[j].pt) <= 1000.0 {
+                            n += 1;
+                        }
+                    }
+                }
+            }
+            n >= URBAN_LOTS
+        })
+        .collect()
+}
+
 // ------------------------------------------------------------------ output
 
 fn line_json(line: &[P]) -> Value {
@@ -1027,5 +1073,31 @@ impl Curated {
                 "route": eval_json(&t.ev),
             })).collect::<Vec<_>>(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lot(m_east: f64, m_north: f64) -> Place {
+        // Around 45°N: place lots by metres, converted to world units there.
+        let y0 = 0.36 * geo::EXT * 16384.0; // a world y at roughly mid-latitudes
+        let u = 1.0 / mpu(y0);
+        Place { name: String::new(), pt: (1000.0 + m_east * u, y0 + m_north * u), trailhead: false }
+    }
+
+    #[test]
+    fn urban_lots_counts_neighbours_within_a_km() {
+        // A remote trailhead: 6 lots within a few hundred metres.
+        let remote: Vec<Place> = (0..7).map(|i| lot(i as f64 * 80.0, 0.0)).collect();
+        assert!(urban_lots(&remote).iter().all(|&u| !u));
+        // A city block grid: 30 lots within ~600 m of each other.
+        let city: Vec<Place> = (0..30).map(|i| lot((i % 6) as f64 * 120.0, (i / 6) as f64 * 120.0)).collect();
+        assert!(urban_lots(&city).iter().all(|&u| u));
+        // A lot 3 km from the city isn't counted as in it.
+        let mut both: Vec<Place> = (0..30).map(|i| lot((i % 6) as f64 * 120.0, (i / 6) as f64 * 120.0)).collect();
+        both.push(lot(3000.0, 0.0));
+        assert!(!urban_lots(&both)[30]);
     }
 }
