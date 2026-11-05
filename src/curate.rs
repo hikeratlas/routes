@@ -868,9 +868,29 @@ pub struct Curated {
     pub bases: Vec<BaseCamp>,
     pub through: Vec<Through>,
     pub stats: String,
+    /// Whether the deadline passed, so some trailheads or campsites were
+    /// skipped: the routes are what was found by then.
+    pub timed_out: bool,
 }
 
-pub fn curate(area: &Area, dem: &Dem, n_day: usize, trail_area: bool) -> Curated {
+/// Curate a park's routes. With a `deadline`, trailheads and campsites not
+/// started by then are skipped, so a pathological park can't hold up a whole
+/// run: it's reported (Curated::timed_out) instead.
+pub fn curate(
+    area: &Area,
+    dem: &Dem,
+    n_day: usize,
+    trail_area: bool,
+    deadline: Option<std::time::Instant>,
+) -> Curated {
+    let late_flag = std::sync::atomic::AtomicBool::new(false);
+    let late = || {
+        let l = deadline.is_some_and(|d| std::time::Instant::now() > d);
+        if l {
+            late_flag.store(true, Relaxed);
+        }
+        l
+    };
     let dests = merge_dests(
         area.dests
             .iter()
@@ -915,7 +935,12 @@ pub fn curate(area: &Area, dem: &Dem, n_day: usize, trail_area: bool) -> Curated
     // day hikes
     let cands: Vec<Cand> = starts
         .par_iter()
-        .flat_map(|s| ctx.candidates(s.node, &s.name, &targets, 1500.0, 15000.0))
+        .flat_map(|s| {
+            if late() {
+                return vec![];
+            }
+            ctx.candidates(s.node, &s.name, &targets, 1500.0, 15000.0)
+        })
         .collect();
     let day = select(&cands, n_day, true);
     stats += &format!("; day {:.1}s", t.elapsed().as_secs_f64());
@@ -928,6 +953,9 @@ pub fn curate(area: &Area, dem: &Dem, n_day: usize, trail_area: bool) -> Curated
         .par_iter()
         .filter(|c| area.park_dist(c.pt, 500.0).is_some())
         .filter_map(|c| {
+            if late() {
+                return None;
+            }
             let cnode = ctx.nearest(c.pt, 200.0)?;
             let s = ctx.search(cnode, 15000.0, None);
             let (snode, m) = start_nodes
@@ -970,7 +998,7 @@ pub fn curate(area: &Area, dem: &Dem, n_day: usize, trail_area: bool) -> Curated
         .par_iter()
         .flat_map(|a| {
             let mut out = vec![];
-            if area.park_dist(a.pt, 2000.0).is_none() {
+            if late() || area.park_dist(a.pt, 2000.0).is_none() {
                 return out;
             }
             // Up to 100 km: the West Coast Trail is ~75 km.
@@ -1117,11 +1145,16 @@ pub fn curate(area: &Area, dem: &Dem, n_day: usize, trail_area: bool) -> Curated
         }
     }
     stats += &format!(", multi {:.1}s", t.elapsed().as_secs_f64());
+    let timed_out = late_flag.load(Relaxed);
+    if timed_out {
+        stats += " (TIMEOUT: some trailheads skipped)";
+    }
     Curated {
         day,
         bases,
         through,
         stats,
+        timed_out,
     }
 }
 

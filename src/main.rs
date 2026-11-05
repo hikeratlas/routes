@@ -35,6 +35,8 @@ const USAGE: &str = "usage: routes --tiles FILE|URL [--tiles ...] --out DIR
   [--tile-cache DIR]     cache tiles fetched from a URL here
   [--dem-cache DIR]      cache DEM tiles here
   [--dem-zoom Z]         DEM zoom (default 12)
+  [--park-timeout SECS]  stop starting new searches in a park after this
+                         long, keeping what was found, and report it
   [--shard K/N]          curate only shard K (0-based) of N, balanced by tile
                          count, and write each park's routes to DIR/raw/ for
                          a later --merge, instead of the outputs below
@@ -55,6 +57,7 @@ struct Args {
     dem_zoom: u8,
     shard: Option<(usize, usize)>,
     merge: Vec<PathBuf>,
+    park_timeout: Option<f64>,
 }
 
 fn args() -> Args {
@@ -71,6 +74,7 @@ fn args() -> Args {
         dem_zoom: 12,
         shard: None,
         merge: vec![],
+        park_timeout: None,
     };
     let v: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
@@ -109,6 +113,7 @@ fn args() -> Args {
                 a.shard = Some((k, n));
             }
             "--merge" => a.merge.push(val.into()),
+            "--park-timeout" => a.park_timeout = Some(val.parse().unwrap_or_else(|_| die())),
             _ => die(),
         }
         i += 2;
@@ -285,6 +290,7 @@ fn main() {
         )
     });
 
+    let timed_out: Mutex<Vec<String>> = Mutex::new(vec![]);
     // Curate parks in parallel (biggest first), then write them out in order,
     // dropping routes a bigger park that overlaps this one already has.
     let docs: Vec<Curated> = parks
@@ -322,7 +328,16 @@ fn main() {
                 }
             }
             let n_day = (((p.area / 1e6).sqrt() / 2.0) as usize).clamp(3, 15);
-            let c = curate::curate(&area, &dem, n_day, p.trail_area);
+            let deadline = a
+                .park_timeout
+                .map(|secs| t + std::time::Duration::from_secs_f64(secs));
+            let c = curate::curate(&area, &dem, n_day, p.trail_area, deadline);
+            if c.timed_out {
+                timed_out
+                    .lock()
+                    .unwrap()
+                    .push(format!("{} ({})", p.name, p.id));
+            }
             eprintln!(
                 "{} ({}): {} tiles, {}: {} day hikes, {} base camps, {} point-to-points ({:.1}s)",
                 p.name,
@@ -355,6 +370,14 @@ fn main() {
         write_outputs(&a.out, docs);
     }
     eprintln!("{}", curate::profile());
+    let timed_out = timed_out.into_inner().unwrap();
+    if !timed_out.is_empty() {
+        eprintln!(
+            "TIMEOUT: {} parks went over --park-timeout and were cut short: {}",
+            timed_out.len(),
+            timed_out.join(", ")
+        );
+    }
     eprintln!("done in {:.1}s", t0.elapsed().as_secs_f64());
 }
 
