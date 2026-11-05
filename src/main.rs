@@ -123,13 +123,18 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> Vec<Park> {
                 continue;
             };
             for l in mvt::decode(&b) {
-                if l.name != "park" {
+                // Parks, and trail areas: trail networks outside parks that the
+                // basemap picked out (bin/trail-areas.py), e.g. the Skerwink
+                // Trail. Those are already filtered, so skip --min-area for them.
+                let trail_area = l.name == "trail_area";
+                if l.name != "park" && !trail_area {
                     continue;
                 }
                 for f in &l.features {
                     let boundary = l.str(f, "boundary");
                     if f.typ != 3
-                        || !(boundary == "national_park"
+                        || !(trail_area
+                            || boundary == "national_park"
                             || boundary == "protected_area"
                             || l.str(f, "leisure") == "nature_reserve")
                     {
@@ -142,7 +147,7 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> Vec<Park> {
                     }
                     let area = l.get(f, "area").map(|v| v.as_f64()).unwrap_or(0.0);
                     let name = l.str(f, "name");
-                    if area < a.min_area * 1e6
+                    if (!trail_area && area < a.min_area * 1e6)
                         || name.is_empty()
                         || a.park
                             .as_ref()
