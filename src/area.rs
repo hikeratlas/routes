@@ -277,7 +277,7 @@ fn read_tile(
                         }
                         raw.data.land.push((1, Poly::new(rings, tx, ty)));
                     }
-                    "park" if f.typ == 3 && l.str(f, "osm_id") == park_id => {
+                    "park" | "trail_area" if f.typ == 3 && l.str(f, "osm_id") == park_id => {
                         raw.data.park.push(Poly::new(
                             geo::rings(f.geometry(), tx, ty, l.extent),
                             tx,

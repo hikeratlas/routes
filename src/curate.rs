@@ -569,7 +569,17 @@ impl<'a> Ctx<'a> {
 
     /// Trailheads: parking lots and trailhead nodes within 5 km of the park,
     /// snapped to the network and merged when within 400 m of each other.
-    pub fn starts(&self, parkings: &[Place]) -> Vec<Start> {
+    ///
+    /// A trail area (a trail network outside parks) is already a 500 m buffer
+    /// around its trails, so its starts must be inside it: 5 km around the
+    /// Skerwink Trail reached a lot across Trinity East, and a 19 km road
+    /// walk from there outscored nothing.
+    pub fn starts(&self, parkings: &[Place], trail_area: bool) -> Vec<Start> {
+        let (lot_reach, junction_reach) = if trail_area {
+            (0.0, 0.0)
+        } else {
+            (5000.0, 2000.0)
+        };
         let urban = urban_lots(parkings);
         let mut out: Vec<Start> = parkings
             .par_iter()
@@ -578,7 +588,7 @@ impl<'a> Ctx<'a> {
                 // Outside the park, skip lots in cities (see urban_lots), unless
                 // they're mapped as trailheads: a city park otherwise gets a
                 // start at every lot in the neighbourhood.
-                match self.area.park_dist(p.pt, 5000.0) {
+                match self.area.park_dist(p.pt, lot_reach) {
                     None => false,
                     Some(d) => d == 0.0 || p.trailhead || !urban[i],
                 }
@@ -629,7 +639,7 @@ impl<'a> Ctx<'a> {
                     return None;
                 }
                 self.area
-                    .park_dist(g.pts[n as usize], 2000.0)
+                    .park_dist(g.pts[n as usize], junction_reach)
                     .map(|d| (d, n))
             })
             .collect();
@@ -725,7 +735,7 @@ pub struct Curated {
     pub stats: String,
 }
 
-pub fn curate(area: &Area, dem: &Dem, n_day: usize) -> Curated {
+pub fn curate(area: &Area, dem: &Dem, n_day: usize, trail_area: bool) -> Curated {
     let dests = merge_dests(
         area.dests
             .iter()
@@ -757,7 +767,7 @@ pub fn curate(area: &Area, dem: &Dem, n_day: usize) -> Curated {
     let mut ctx = Ctx::new(area, dem, dests, camps);
     ctx.lake_access = area.lake_access().into_iter().collect();
     let targets = ctx.targets(1000.0);
-    let starts = ctx.starts(&area.parkings);
+    let starts = ctx.starts(&area.parkings, trail_area);
     let t = std::time::Instant::now();
     let mut stats = format!(
         "{} nodes, {} destinations ({} reachable), {} trailheads, {} backcountry campsites",
@@ -905,7 +915,9 @@ pub fn curate(area: &Area, dem: &Dem, n_day: usize) -> Curated {
                 let (path, ways) = s.path(turn);
                 let pen = edge_set(&path);
                 let b = ctx.search(turn, back_max, Some(&pen));
-                let Some(bm) = b.reached(a.node) else { continue };
+                let Some(bm) = b.reached(a.node) else {
+                    continue;
+                };
                 let (back, bways) = b.path(a.node);
                 let be = edge_set(&back);
                 let shared = be.intersection(&pen).count() as f64 / be.len().max(1) as f64;
@@ -985,7 +997,11 @@ pub const URBAN_LOTS: usize = 12;
 pub fn urban_lots(lots: &[Place]) -> Vec<bool> {
     // Bucket into cells at least 1 km wide (in world units; metres per unit
     // vary with latitude), then count neighbours in the 3x3 cells around.
-    let size = lots.iter().map(|l| 1000.0 / mpu(l.pt.1)).fold(0.0, f64::max).max(1e-9);
+    let size = lots
+        .iter()
+        .map(|l| 1000.0 / mpu(l.pt.1))
+        .fold(0.0, f64::max)
+        .max(1e-9);
     let cell = |p: P| ((p.0 / size).floor() as i64, (p.1 / size).floor() as i64);
     let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::default();
     for (i, l) in lots.iter().enumerate() {
@@ -998,7 +1014,11 @@ pub fn urban_lots(lots: &[Place]) -> Vec<bool> {
             let mut n = 0;
             for dx in -1..=1 {
                 for dy in -1..=1 {
-                    for &j in grid.get(&(cx + dx, cy + dy)).map(|v| v.as_slice()).unwrap_or(&[]) {
+                    for &j in grid
+                        .get(&(cx + dx, cy + dy))
+                        .map(|v| v.as_slice())
+                        .unwrap_or(&[])
+                    {
                         if j != i && metres(l.pt, lots[j].pt) <= 1000.0 {
                             n += 1;
                         }
@@ -1084,7 +1104,11 @@ mod tests {
         // Around 45°N: place lots by metres, converted to world units there.
         let y0 = 0.36 * geo::EXT * 16384.0; // a world y at roughly mid-latitudes
         let u = 1.0 / mpu(y0);
-        Place { name: String::new(), pt: (1000.0 + m_east * u, y0 + m_north * u), trailhead: false }
+        Place {
+            name: String::new(),
+            pt: (1000.0 + m_east * u, y0 + m_north * u),
+            trailhead: false,
+        }
     }
 
     #[test]
@@ -1093,10 +1117,14 @@ mod tests {
         let remote: Vec<Place> = (0..7).map(|i| lot(i as f64 * 80.0, 0.0)).collect();
         assert!(urban_lots(&remote).iter().all(|&u| !u));
         // A city block grid: 30 lots within ~600 m of each other.
-        let city: Vec<Place> = (0..30).map(|i| lot((i % 6) as f64 * 120.0, (i / 6) as f64 * 120.0)).collect();
+        let city: Vec<Place> = (0..30)
+            .map(|i| lot((i % 6) as f64 * 120.0, (i / 6) as f64 * 120.0))
+            .collect();
         assert!(urban_lots(&city).iter().all(|&u| u));
         // A lot 3 km from the city isn't counted as in it.
-        let mut both: Vec<Place> = (0..30).map(|i| lot((i % 6) as f64 * 120.0, (i / 6) as f64 * 120.0)).collect();
+        let mut both: Vec<Place> = (0..30)
+            .map(|i| lot((i % 6) as f64 * 120.0, (i / 6) as f64 * 120.0))
+            .collect();
         both.push(lot(3000.0, 0.0));
         assert!(!urban_lots(&both)[30]);
     }
