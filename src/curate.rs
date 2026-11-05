@@ -834,17 +834,23 @@ pub fn curate(area: &Area, dem: &Dem, n_day: usize) -> Curated {
                 }
                 camps.insert(v, (n, last, inp));
             }
-            for b in &starts {
-                let Some(m) = s.reached(b.node) else { continue };
-                if b.node == a.node || !(18000.0..=100000.0).contains(&m) {
-                    continue;
-                }
-                let Some(&(n, _, inp)) = camps.get(&b.node) else {
-                    continue;
-                };
-                if n < 2 || inp / m < 0.6 {
-                    continue;
-                }
+            // Evaluating a route (elevation, land cover) is the expensive part,
+            // and the 100 km search reaches many trailheads: evaluate only the
+            // 8 most promising, by campsites passed and share in the park. Only
+            // 3 multi-day routes per park are kept.
+            let mut pairs: Vec<(&Start, u32, f64)> = starts
+                .iter()
+                .filter_map(|b| {
+                    let m = s.reached(b.node)?;
+                    if b.node == a.node || !(18000.0..=100000.0).contains(&m) {
+                        return None;
+                    }
+                    let &(n, _, inp) = camps.get(&b.node)?;
+                    (n >= 2 && inp / m >= 0.6).then_some((b, n, inp / m))
+                })
+                .collect();
+            pairs.sort_by(|x, y| (y.1, y.2).partial_cmp(&(x.1, x.2)).unwrap());
+            for &(b, _, _) in pairs.iter().take(8) {
                 let (path, ways) = s.path(b.node);
                 let ev = ctx.evaluate(&path, &ways, false);
                 let kinds: HashSet<Kind> = ev.passed.iter().map(|(k, _)| *k).collect();
@@ -874,10 +880,17 @@ pub fn curate(area: &Area, dem: &Dem, n_day: usize) -> Curated {
                 .collect();
             far.sort_by(|x, y| y.1.partial_cmp(&x.1).unwrap());
             far.dedup_by_key(|x| x.0);
-            for &(turn, m) in far.iter().take(6) {
+            // The return search is the expensive part: bound it by the distance
+            // a loop may still add (100 km in all, back at most 1.6x the way
+            // out), and try the 3 farthest campsites.
+            for &(turn, m) in far.iter().take(3) {
+                let back_max = (m * 1.6).min(100000.0 - m);
+                if back_max < 18000.0 - m {
+                    continue;
+                }
                 let (path, ways) = s.path(turn);
                 let pen = edge_set(&path);
-                let b = ctx.search(turn, m * 1.7, Some(&pen));
+                let b = ctx.search(turn, back_max, Some(&pen));
                 let Some(bm) = b.reached(a.node) else { continue };
                 let (back, bways) = b.path(a.node);
                 let be = edge_set(&back);
