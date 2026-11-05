@@ -873,6 +873,8 @@ pub struct Curated {
     pub timed_out: bool,
 }
 
+const MULTI_STARTS_PER_CAMP: usize = 6;
+
 /// Curate a park's routes. With a `deadline`, trailheads and campsites not
 /// started by then are skipped, so a pathological park can't hold up a whole
 /// run: it's reported (Curated::timed_out) instead.
@@ -993,7 +995,32 @@ pub fn curate(
     // multi-day point-to-points: trailhead to trailhead via 2+ campsites. A
     // park with fewer than 2 backcountry campsites can't have one: skip the
     // (100 km) searches.
-    let multi_starts: &[Start] = if ctx.camps.len() >= 2 { &starts } else { &[] };
+    // A multi-day route starts at a trailhead near its first campsite, so
+    // search only from each campsite's MULTI_STARTS_PER_CAMP nearest
+    // trailheads: a park with many trailheads and a few campsites (the
+    // Mississippi NRRA: 642 and 2) otherwise searched 100 km from them all.
+    let multi_starts: Vec<&Start> = if ctx.camps.len() >= 2 {
+        let mut keep = vec![false; starts.len()];
+        for c in &ctx.camps {
+            let mut by_dist: Vec<(f64, usize)> = starts
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (metres(s.pt, c.pt), i))
+                .collect();
+            by_dist.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            for &(_, i) in by_dist.iter().take(MULTI_STARTS_PER_CAMP) {
+                keep[i] = true;
+            }
+        }
+        starts
+            .iter()
+            .zip(keep)
+            .filter(|(_, k)| *k)
+            .map(|(s, _)| s)
+            .collect()
+    } else {
+        vec![]
+    };
     let mut thru: Vec<Through> = multi_starts
         .par_iter()
         .flat_map(|a| {
