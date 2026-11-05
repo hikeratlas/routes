@@ -1,0 +1,96 @@
+name: Fixtures
+
+# Curate a fixed set of parks (fixtures/parks.json: slow ones, and ones with
+# routes we've fixed before) with this change and with the branch it targets,
+# on the same tiles, and summarize how long each took and how the routes
+# differ. Minutes, instead of a basemap build's hours.
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  fixtures:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    env:
+      # Each fixture is stopped after this many seconds, so one slow park
+      # can't hold up the comparison.
+      LIMIT: 600
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: new
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.base_ref || 'main' }}
+          path: base
+
+      - name: Week
+        id: week
+        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore cargo builds
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            new/target
+            base/target
+          key: fixtures-cargo-${{ runner.arch }}-${{ hashFiles('new/Cargo.lock', 'base/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: fixtures-cargo-${{ runner.arch }}-
+
+      - name: Build both
+        run: |
+          (cd base && cargo build --release --locked)
+          (cd new && cargo build --release --locked)
+
+      # The tiles are re-extracted weekly, so both builds see the same, fairly
+      # fresh data. Extracting takes ~5 min.
+      - name: Restore fixture tiles
+        id: tiles
+        uses: actions/cache@v4
+        with:
+          path: tiles
+          key: fixtures-tiles-${{ hashFiles('new/fixtures/parks.json') }}-${{ steps.week.outputs.week }}
+
+      - name: Extract fixture tiles
+        if: steps.tiles.outputs.cache-hit != 'true'
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install -q pmtiles requests
+          "$RUNNER_TEMP/venv/bin/python" new/fixtures/extract.py https://public.hikeratlas.com/layers/north-america tiles
+
+      - name: Restore QRank
+        id: qrank
+        uses: actions/cache@v4
+        with:
+          path: qrank.db
+          key: fixtures-qrank-${{ steps.week.outputs.week }}
+
+      - name: Fetch QRank
+        if: steps.qrank.outputs.cache-hit != 'true'
+        run: wget -q --tries=4 -O qrank.db https://github.com/hikeratlas/qrank/releases/download/latest/qrank.db
+
+      - name: Restore DEM tiles
+        uses: actions/cache@v4
+        with:
+          path: dem
+          key: fixtures-dem-${{ hashFiles('new/fixtures/parks.json') }}-${{ github.sha }}
+          restore-keys: fixtures-dem-${{ hashFiles('new/fixtures/parks.json') }}-
+
+      - name: Curate with ${{ github.base_ref || 'main' }}
+        run: new/fixtures/run.sh base/target/release/routes tiles out/base qrank.db dem "$LIMIT"
+
+      - name: Curate with this change
+        run: new/fixtures/run.sh new/target/release/routes tiles out/new qrank.db dem "$LIMIT"
+
+      - name: Compare
+        run: python3 new/fixtures/compare.py out/base out/new | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the routes and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fixtures
+          path: out/

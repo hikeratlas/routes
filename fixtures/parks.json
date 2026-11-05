@@ -1,0 +1,90 @@
+[
+  {
+    "key": "mississippi",
+    "park": "Mississippi National River and Recreation Area",
+    "why": "speed: a city river corridor, 640+ trailheads (37 min before routes#20)",
+    "bbox": [
+      -93.585,
+      44.613,
+      -92.669,
+      45.294
+    ]
+  },
+  {
+    "key": "patapsco",
+    "park": "Patapsco Valley State Park",
+    "why": "speed: suburban, 250 trailheads (7 min before routes#20)",
+    "bbox": [
+      -77.074,
+      39.133,
+      -76.567,
+      39.421
+    ]
+  },
+  {
+    "key": "golden-gate",
+    "park": "Golden Gate National Recreation Area",
+    "why": "speed and quality: city edge, 335 trailheads",
+    "bbox": [
+      -122.859,
+      37.389,
+      -122.229,
+      38.121
+    ]
+  },
+  {
+    "key": "west-coast-trail",
+    "park": "West Coast Trail",
+    "why": "quality: the West Coast Trail, a ~75 km point-to-point (routes#9)",
+    "bbox": [
+      -125.297,
+      48.494,
+      -124.347,
+      48.852
+    ]
+  },
+  {
+    "key": "yoho",
+    "park": "Yoho National Park",
+    "why": "quality: Lake O'Hara as a base camp (routes#10)",
+    "bbox": [
+      -116.862,
+      51.059,
+      -116.186,
+      51.69
+    ]
+  },
+  {
+    "key": "killarney",
+    "park": "Killarney Provincial Park",
+    "why": "quality: the La Cloche Silhouette, a ~78 km loop (routes#13)",
+    "bbox": [
+      -81.696,
+      45.944,
+      -81.113,
+      46.246
+    ]
+  },
+  {
+    "key": "joffre",
+    "park": "Joffre Lakes",
+    "why": "quality: a trailhead lot just outside the park",
+    "bbox": [
+      -122.581,
+      50.278,
+      -122.372,
+      50.416
+    ]
+  },
+  {
+    "key": "skerwink",
+    "park": "Skerwink Trail",
+    "why": "quality: a trail area, not a park (routes#16)",
+    "bbox": [
+      -53.468,
+      48.295,
+      -53.232,
+      48.445
+    ]
+  }
+]
