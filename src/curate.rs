@@ -8,6 +8,30 @@ use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use serde_json::{Value, json};
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+// Time spent searching and evaluating routes, summed over threads, for the
+// log: where curating's time goes.
+static T_SEARCH: AtomicU64 = AtomicU64::new(0);
+static T_EVAL: AtomicU64 = AtomicU64::new(0);
+static N_SEARCH: AtomicU64 = AtomicU64::new(0);
+static N_SETTLED: AtomicU64 = AtomicU64::new(0);
+struct Tm(&'static AtomicU64, std::time::Instant);
+impl Drop for Tm {
+    fn drop(&mut self) {
+        self.0
+            .fetch_add(self.1.elapsed().as_micros() as u64, Relaxed);
+    }
+}
+
+pub fn profile() -> String {
+    format!(
+        "searching {:.0}s ({} searches, {} nodes settled), evaluating {:.0}s (thread time)",
+        T_SEARCH.load(Relaxed) as f64 / 1e6,
+        N_SEARCH.load(Relaxed),
+        N_SETTLED.load(Relaxed),
+        T_EVAL.load(Relaxed) as f64 / 1e6
+    )
+}
 
 pub struct Ctx<'a> {
     pub area: &'a Area,
@@ -35,22 +59,90 @@ impl PartialOrd for Q {
     }
 }
 
+/// A search's per-node state, in arrays indexed by node, reused from search
+/// to search (see POOL): an entry is current only if its stamp is the
+/// search's, so nothing needs clearing between searches. Hash maps of the
+/// nodes reached took most of curating's time in dense city networks.
+struct Scratch {
+    stamp: Vec<u32>,
+    epoch: u32,
+    dist: Vec<f64>,
+    metres: Vec<f64>,
+    prev: Vec<(u32, u32)>,
+}
+
+thread_local! {
+    static POOL: std::cell::RefCell<Vec<Scratch>> = const { std::cell::RefCell::new(vec![]) };
+}
+
+impl Scratch {
+    fn take(n: usize) -> Scratch {
+        let mut sc = POOL.with(|p| p.borrow_mut().pop()).unwrap_or(Scratch {
+            stamp: vec![],
+            epoch: 0,
+            dist: vec![],
+            metres: vec![],
+            prev: vec![],
+        });
+        if sc.stamp.len() < n {
+            sc.stamp.resize(n, 0);
+            sc.dist.resize(n, 0.0);
+            sc.metres.resize(n, 0.0);
+            sc.prev.resize(n, (0, 0));
+        }
+        sc.epoch = sc.epoch.wrapping_add(1);
+        if sc.epoch == 0 {
+            sc.stamp.iter_mut().for_each(|s| *s = 0);
+            sc.epoch = 1;
+        }
+        sc
+    }
+    fn has(&self, n: u32) -> bool {
+        self.stamp[n as usize] == self.epoch
+    }
+}
+
 pub struct Search {
-    pub metres: HashMap<u32, f64>,
-    prev: HashMap<u32, (u32, u32)>,
+    sc: Option<Scratch>,
+    touched: Vec<u32>, // nodes given a distance, in that order
     pub src: u32,
     order: Vec<u32>, // nodes in the order they were settled
 }
 
+impl Drop for Search {
+    fn drop(&mut self) {
+        if let Some(sc) = self.sc.take() {
+            POOL.with(|p| p.borrow_mut().push(sc));
+        }
+    }
+}
+
 impl Search {
+    fn sc(&self) -> &Scratch {
+        self.sc.as_ref().unwrap()
+    }
     pub fn reached(&self, n: u32) -> Option<f64> {
-        self.metres.get(&n).copied()
+        let sc = self.sc();
+        sc.has(n).then(|| sc.metres[n as usize])
+    }
+    /// Every node given a distance, with its metres from the source.
+    pub fn all_reached(&self) -> impl Iterator<Item = (u32, f64)> + '_ {
+        let sc = self.sc();
+        self.touched
+            .iter()
+            .map(move |&n| (n, sc.metres[n as usize]))
+    }
+    /// The node before n on the way from the source, and the way between.
+    fn prev(&self, n: u32) -> (u32, u32) {
+        let sc = self.sc();
+        assert!(sc.has(n) && n != self.src);
+        sc.prev[n as usize]
     }
     /// Nodes and ways from the source to n.
     pub fn path(&self, n: u32) -> (Vec<u32>, Vec<u32>) {
         let (mut path, mut ways) = (vec![n], vec![]);
         while *path.last().unwrap() != self.src {
-            let (u, w) = self.prev[path.last().unwrap()];
+            let (u, w) = self.prev(*path.last().unwrap());
             path.push(u);
             ways.push(w);
         }
@@ -230,44 +322,87 @@ impl<'a> Ctx<'a> {
 
     /// Dijkstra by cost, out to `limit` metres. `penal` edges cost 8x.
     pub fn search(&self, src: u32, limit: f64, penal: Option<&HashSet<u64>>) -> Search {
+        self.search_until(src, limit, penal, None)
+    }
+
+    /// As search, but stops once `target` is settled, when only it is wanted:
+    /// a node's distance and path are final once it leaves the queue, and
+    /// every node given a distance leaves the queue, so `reached(target)` and
+    /// `path(target)` are the same as a full search's.
+    pub fn search_to(
+        &self,
+        src: u32,
+        limit: f64,
+        penal: Option<&HashSet<u64>>,
+        target: u32,
+    ) -> Search {
+        self.search_until(src, limit, penal, Some(target))
+    }
+
+    fn search_until(
+        &self,
+        src: u32,
+        limit: f64,
+        penal: Option<&HashSet<u64>>,
+        target: Option<u32>,
+    ) -> Search {
+        let _t = Tm(&T_SEARCH, std::time::Instant::now());
+        N_SEARCH.fetch_add(1, Relaxed);
         let g = &self.area.graph;
-        let mut dist: HashMap<u32, f64> = HashMap::default();
-        let mut s = Search {
-            metres: HashMap::default(),
-            prev: HashMap::default(),
-            src,
-            order: vec![],
-        };
-        dist.insert(src, 0.0);
-        s.metres.insert(src, 0.0);
+        let mut sc = Scratch::take(g.pts.len());
+        let mut touched = vec![src];
+        let mut order = vec![];
+        sc.stamp[src as usize] = sc.epoch;
+        sc.dist[src as usize] = 0.0;
+        sc.metres[src as usize] = 0.0;
         let mut pq = BinaryHeap::new();
         pq.push(Q(0.0, src));
         while let Some(Q(d, u)) = pq.pop() {
-            if d > dist[&u] || s.metres[&u] > limit {
+            if d > sc.dist[u as usize] {
                 continue;
             }
-            let mu = s.metres[&u];
-            s.order.push(u);
+            if target == Some(u) {
+                break;
+            }
+            let mu = sc.metres[u as usize];
+            if mu > limit {
+                continue;
+            }
+            order.push(u);
             for e in &g.adj[u as usize] {
                 let mut c = e.cost as f64;
                 if penal.is_some_and(|p| p.contains(&ekey(u, e.to))) {
                     c *= 8.0;
                 }
                 let nd = d + c;
-                if nd < *dist.get(&e.to).unwrap_or(&f64::MAX) {
-                    dist.insert(e.to, nd);
-                    s.metres.insert(e.to, mu + e.m as f64);
-                    s.prev.insert(e.to, (u, e.way));
+                let v = e.to as usize;
+                let seen = sc.stamp[v] == sc.epoch;
+                if !seen || nd < sc.dist[v] {
+                    if !seen {
+                        sc.stamp[v] = sc.epoch;
+                        touched.push(e.to);
+                    }
+                    sc.dist[v] = nd;
+                    sc.metres[v] = mu + e.m as f64;
+                    sc.prev[v] = (u, e.way);
                     pq.push(Q(nd, e.to));
                 }
             }
         }
+        let s = Search {
+            sc: Some(sc),
+            touched,
+            src,
+            order,
+        };
+        N_SETTLED.fetch_add(s.order.len() as u64, Relaxed);
         s
     }
 
     /// Measure a route. `path` is the outward route; for an out-and-back the
     /// walk is out and back along it; otherwise `full` is the whole walk.
     pub fn evaluate(&self, path: &[u32], ways: &[u32], out_and_back: bool) -> Eval {
+        let _t = Tm(&T_EVAL, std::time::Instant::now());
         let g = &self.area.graph;
         let coords: Vec<P> = path.iter().map(|&n| g.pts[n as usize]).collect();
         let one_way = geo::length(&coords);
@@ -528,7 +663,7 @@ impl<'a> Ctx<'a> {
             };
             out.push(mk("out-and-back", sc, parts, pen.clone(), ev));
             // a loop: back by a different way, if there's a good one
-            let b = self.search(node, m * 1.7, Some(&pen));
+            let b = self.search_to(node, m * 1.7, Some(&pen), src);
             if let Some(bm) = b.reached(src) {
                 let (back, bways) = b.path(src);
                 let be = edge_set(&back);
@@ -549,7 +684,7 @@ impl<'a> Ctx<'a> {
     fn trail_name_near(&self, node: u32) -> Option<String> {
         let g = &self.area.graph;
         let s = self.search(node, 1500.0, None);
-        let mut order: Vec<(f64, u32)> = s.metres.iter().map(|(&n, &m)| (m, n)).collect();
+        let mut order: Vec<(f64, u32)> = s.all_reached().map(|(n, m)| (m, n)).collect();
         order.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let mut road = None;
         for (_, n) in order {
@@ -733,9 +868,29 @@ pub struct Curated {
     pub bases: Vec<BaseCamp>,
     pub through: Vec<Through>,
     pub stats: String,
+    /// Whether the deadline passed, so some trailheads or campsites were
+    /// skipped: the routes are what was found by then.
+    pub timed_out: bool,
 }
 
-pub fn curate(area: &Area, dem: &Dem, n_day: usize, trail_area: bool) -> Curated {
+/// Curate a park's routes. With a `deadline`, trailheads and campsites not
+/// started by then are skipped, so a pathological park can't hold up a whole
+/// run: it's reported (Curated::timed_out) instead.
+pub fn curate(
+    area: &Area,
+    dem: &Dem,
+    n_day: usize,
+    trail_area: bool,
+    deadline: Option<std::time::Instant>,
+) -> Curated {
+    let late_flag = std::sync::atomic::AtomicBool::new(false);
+    let late = || {
+        let l = deadline.is_some_and(|d| std::time::Instant::now() > d);
+        if l {
+            late_flag.store(true, Relaxed);
+        }
+        l
+    };
     let dests = merge_dests(
         area.dests
             .iter()
@@ -780,7 +935,12 @@ pub fn curate(area: &Area, dem: &Dem, n_day: usize, trail_area: bool) -> Curated
     // day hikes
     let cands: Vec<Cand> = starts
         .par_iter()
-        .flat_map(|s| ctx.candidates(s.node, &s.name, &targets, 1500.0, 15000.0))
+        .flat_map(|s| {
+            if late() {
+                return vec![];
+            }
+            ctx.candidates(s.node, &s.name, &targets, 1500.0, 15000.0)
+        })
         .collect();
     let day = select(&cands, n_day, true);
     stats += &format!("; day {:.1}s", t.elapsed().as_secs_f64());
@@ -793,6 +953,9 @@ pub fn curate(area: &Area, dem: &Dem, n_day: usize, trail_area: bool) -> Curated
         .par_iter()
         .filter(|c| area.park_dist(c.pt, 500.0).is_some())
         .filter_map(|c| {
+            if late() {
+                return None;
+            }
             let cnode = ctx.nearest(c.pt, 200.0)?;
             let s = ctx.search(cnode, 15000.0, None);
             let (snode, m) = start_nodes
@@ -835,7 +998,7 @@ pub fn curate(area: &Area, dem: &Dem, n_day: usize, trail_area: bool) -> Curated
         .par_iter()
         .flat_map(|a| {
             let mut out = vec![];
-            if area.park_dist(a.pt, 2000.0).is_none() {
+            if late() || area.park_dist(a.pt, 2000.0).is_none() {
                 return out;
             }
             // Up to 100 km: the West Coast Trail is ~75 km.
@@ -845,7 +1008,7 @@ pub fn curate(area: &Area, dem: &Dem, n_day: usize, trail_area: bool) -> Curated
             let mut camps: HashMap<u32, (u32, u32, f64)> = HashMap::default(); // node -> (count, last camp, metres in park)
             camps.insert(a.node, (0, u32::MAX, 0.0));
             for &v in &s.order[1..] {
-                let (u, _) = s.prev[&v];
+                let (u, _) = s.prev(v);
                 let (mut n, mut last, mut inp) = camps[&u];
                 if let Some(cs) = ctx.camp_near.get(&v) {
                     if !cs.contains(&last) {
@@ -854,7 +1017,7 @@ pub fn curate(area: &Area, dem: &Dem, n_day: usize, trail_area: bool) -> Curated
                     }
                 }
                 if ctx.in_park[v as usize] {
-                    inp += s.metres[&v] - s.metres[&u];
+                    inp += s.reached(v).unwrap() - s.reached(u).unwrap();
                 }
                 camps.insert(v, (n, last, inp));
             }
@@ -914,7 +1077,7 @@ pub fn curate(area: &Area, dem: &Dem, n_day: usize, trail_area: bool) -> Curated
                 }
                 let (path, ways) = s.path(turn);
                 let pen = edge_set(&path);
-                let b = ctx.search(turn, back_max, Some(&pen));
+                let b = ctx.search_to(turn, back_max, Some(&pen), a.node);
                 let Some(bm) = b.reached(a.node) else {
                     continue;
                 };
@@ -982,11 +1145,16 @@ pub fn curate(area: &Area, dem: &Dem, n_day: usize, trail_area: bool) -> Curated
         }
     }
     stats += &format!(", multi {:.1}s", t.elapsed().as_secs_f64());
+    let timed_out = late_flag.load(Relaxed);
+    if timed_out {
+        stats += " (TIMEOUT: some trailheads skipped)";
+    }
     Curated {
         day,
         bases,
         through,
         stats,
+        timed_out,
     }
 }
 
