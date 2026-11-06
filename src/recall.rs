@@ -282,11 +282,87 @@ pub fn name_routes(area: &Area, doc: &mut Value) {
     for t in doc["point_to_points"].as_array_mut().into_iter().flatten() {
         name(t);
     }
+    disambiguate(doc);
+}
+
+/// Two routes in a park named after the same relation (Joffre Lakes Trail,
+/// out to Upper Joffre Lake from the trailhead, and to Lower Joffre Lake
+/// from camp) each add where they go: "Joffre Lakes Trail to Upper Joffre
+/// Lake". A multi-day route adds its far end, or for a loop, where it starts.
+fn disambiguate(doc: &mut Value) {
+    let mut routes: Vec<&mut Value> = vec![];
+    let obj = doc.as_object_mut().unwrap();
+    let mut base = obj.remove("base_camps");
+    for (k, v) in obj.iter_mut() {
+        if k == "day_hikes" || k == "point_to_points" {
+            routes.extend(v.as_array_mut().into_iter().flatten());
+        }
+    }
+    for b in base
+        .as_mut()
+        .and_then(|b| b.as_array_mut())
+        .into_iter()
+        .flatten()
+    {
+        routes.extend(b["hikes"].as_array_mut().into_iter().flatten());
+    }
+    let mut count: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for r in routes.iter() {
+        if let Some(n) = r["name"].as_str() {
+            *count.entry(n.to_string()).or_default() += 1;
+        }
+    }
+    for r in routes.iter_mut() {
+        let Some(n) = r["name"].as_str().map(str::to_string) else {
+            continue;
+        };
+        if count[&n] < 2 {
+            continue;
+        }
+        let to = r["dest"]
+            .as_str()
+            .or_else(|| r["to"].as_str())
+            .unwrap_or("");
+        let from = r["from"].as_str().unwrap_or("");
+        if r["dest"].is_null() && to == from && !from.is_empty() {
+            // A multi-day loop: back where it started.
+            r["name"] = json!(format!("{n} from {from}"));
+        } else if !to.is_empty() && to != n {
+            r["name"] = json!(format!("{n} to {to}"));
+        }
+    }
+    if let Some(b) = base {
+        obj.insert("base_camps".to_string(), b);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repeated_names_add_where_each_goes() {
+        let mut doc = json!({
+            "day_hikes": [
+                {"dest": "Upper Joffre Lake", "name": "Joffre Lakes Trail"},
+                {"dest": "Nairn Falls", "name": "Nairn Falls Trail"},
+                {"dest": "Cerise Creek"},
+            ],
+            "base_camps": [{"hikes": [{"dest": "Lower Joffre Lake", "name": "Joffre Lakes Trail"}]}],
+            "point_to_points": [],
+        });
+        disambiguate(&mut doc);
+        assert_eq!(
+            doc["day_hikes"][0]["name"],
+            "Joffre Lakes Trail to Upper Joffre Lake"
+        );
+        assert_eq!(
+            doc["base_camps"][0]["hikes"][0]["name"],
+            "Joffre Lakes Trail to Lower Joffre Lake"
+        );
+        assert_eq!(doc["day_hikes"][1]["name"], "Nairn Falls Trail");
+        assert!(doc["day_hikes"][2].get("name").is_none());
+    }
 
     #[test]
     fn coverage_counts_points_near_the_line() {
