@@ -351,6 +351,47 @@ fn disambiguate(doc: &mut Value) {
     }
 }
 
+/// Day hikes whose trailhead is named for where they go read twice:
+/// "Coastal Trail from Coastal Trail trailhead", "Gros Morne from Gros Morne
+/// Mountain Trail trailhead" (#47). They're named for the destination alone,
+/// unless another route in the park goes there too or already has that
+/// name: then "from" tells them apart.
+pub fn drop_redundant_from(doc: &mut Value) {
+    let lower = |s: &str| s.trim().to_lowercase();
+    // What each day hike would be called, to check a shorter name is unique.
+    let hikes = doc["day_hikes"].as_array().cloned().unwrap_or_default();
+    let mut titles: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for h in &hikes {
+        if let Some(n) = h["name"].as_str() {
+            *titles.entry(lower(n)).or_default() += 1;
+        }
+        if let Some(d) = h["dest"].as_str() {
+            *titles.entry(lower(d)).or_default() += 1;
+        }
+    }
+    for h in doc["day_hikes"].as_array_mut().into_iter().flatten() {
+        if h["name"].is_string() {
+            continue;
+        }
+        let (Some(dest), Some(from)) = (h["dest"].as_str(), h["from"].as_str()) else {
+            continue;
+        };
+        let (d, f) = (lower(dest), lower(from));
+        let Some(core) = f.strip_suffix(" trailhead") else {
+            continue;
+        };
+        // The trailhead's name is the destination's, or starts with it.
+        let redundant = !d.is_empty()
+            && (core == d
+                || core
+                    .strip_prefix(&d)
+                    .is_some_and(|rest| rest.starts_with(' ')));
+        if redundant && titles.get(&d) == Some(&1) {
+            h["name"] = json!(dest);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -395,6 +436,38 @@ mod tests {
         assert!(is_bike(&k("Knotty Pine MTB Trail")));
         assert!(!is_bike(&k("Bikeway Ridge Hike"))); // a whole word only
         assert!(!is_bike(&k("Lake O'Hara Circuit")));
+    }
+
+    #[test]
+    fn trailhead_named_for_the_destination_is_dropped() {
+        let mut doc = json!({"day_hikes": [
+            {"dest": "Coastal Trail", "from": "Coastal Trail trailhead"},
+            {"dest": "Gros Morne", "from": "Gros Morne Mountain Trail trailhead"},
+            {"dest": "Baker Lake", "from": "Bakerview Trail trailhead"},
+            {"dest": "Western Brook Pond", "from": "Parking off Route 430"},
+            {"dest": "Green Gardens", "from": "Green Gardens Trail trailhead"},
+            {"dest": "Green Gardens", "from": "Long Pond Trail trailhead"},
+            {"dest": "Lookout Hills", "from": "Lookout Hills trailhead", "name": "Lookout Trail"},
+        ]});
+        drop_redundant_from(&mut doc);
+        let names: Vec<Option<&str>> = doc["day_hikes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["name"].as_str())
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                Some("Coastal Trail"),
+                Some("Gros Morne"),
+                None, // "Bakerview" isn't "Baker Lake"
+                None, // not a trailhead name
+                None, // two routes to Green Gardens: "from" tells them apart
+                None,
+                Some("Lookout Trail"), // already named
+            ]
+        );
     }
 
     #[test]

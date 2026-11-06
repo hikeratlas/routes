@@ -388,6 +388,7 @@ fn main() {
             // known.jsonl), so the website's files don't grow.
             doc["known"] = json!(recall::check(&area, &doc));
             recall::name_routes(&area, &mut doc);
+            recall::drop_redundant_from(&mut doc);
             Some(Curated { area: p.area, doc })
         })
         .collect();
