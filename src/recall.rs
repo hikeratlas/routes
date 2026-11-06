@@ -20,8 +20,14 @@ pub struct Known {
     pub segs: Vec<(P, P)>,
 }
 
-/// Within this of the park (or in it) counts as the park's.
+/// Within this of the park (or in it) counts as the park's, for sampling a
+/// relation's stretch that a park's routes could cover.
 const NEAR_PARK_M: f64 = 5000.0;
+/// A relation is checked only if at least this share of it is inside the
+/// park: routes stay mostly in the park, and in the oracle sample most
+/// relations within 5 km of a park were outside it (534 of 843 under 10%
+/// inside), so routes were being graded on trails they never aim to cover.
+const MIN_INSIDE: f64 = 0.5;
 /// A route point this close to the relation covers it.
 const COVER_M: f64 = 50.0;
 /// Sample the relation every this many metres.
@@ -86,7 +92,7 @@ pub fn check(area: &Area, doc: &Value) -> Vec<Value> {
     for k in &area.known {
         // The relation's stretch in or near the park, sampled every STEP_M.
         let mut pts: Vec<P> = vec![];
-        let (mut near_m, mut all_m) = (0.0, 0.0);
+        let (mut near_m, mut all_m, mut in_m) = (0.0, 0.0, 0.0);
         for &(a, b) in &k.segs {
             let m = metres(a, b);
             all_m += m;
@@ -95,6 +101,9 @@ pub fn check(area: &Area, doc: &Value) -> Vec<Value> {
                 continue;
             }
             near_m += m;
+            if area.in_park(mid) {
+                in_m += m;
+            }
             let n = (m / STEP_M).ceil().max(1.0) as usize;
             for i in 0..n {
                 let t = (i as f64 + 0.5) / n as f64;
@@ -107,7 +116,11 @@ pub fn check(area: &Area, doc: &Value) -> Vec<Value> {
         // the build has it: the loaded tiles only reach 5 km past the park,
         // so measured from them, a long trail looks mostly local.
         let whole_m = all_m.max(k.total_km * 1000.0);
-        if near_m < whole_m * 0.5 || whole_m > MAX_KM * 1000.0 || !(MIN_KM..=MAX_KM).contains(&km) {
+        if near_m < whole_m * 0.5
+            || in_m < whole_m * MIN_INSIDE
+            || whole_m > MAX_KM * 1000.0
+            || !(MIN_KM..=MAX_KM).contains(&km)
+        {
             continue;
         }
         let mut best: Option<(f64, &str)> = None;
