@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-# extract.py BASE_URL OUT_DIR [KEY...]
+# extract.py [--parks FILE] BASE_URL OUT_DIR [KEY...]
 #
-# For each fixture in parks.json (or just the KEYs given), copy the z8 and z14
+# For each fixture in parks.json (or FILE, e.g. oracle.json; or just the KEYs given), copy the z8 and z14
 # tiles covering its box from each layer archive at BASE_URL (e.g.
 # https://public.hikeratlas.com/layers/north-america) into
 # OUT_DIR/<key>/<layer>.pmtiles, for routes --tiles.
@@ -14,7 +14,7 @@
 # took most of an hour for one box.
 #
 # Needs: pip install pmtiles requests
-import bisect, gzip, json, math, os, sys, time
+import bisect, gzip, json, math, os, sys, threading, time
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
@@ -64,14 +64,26 @@ def tiles(box, z):
     return [(z, i, j) for i in range(x(box[0]), x(box[2]) + 1) for j in range(y(box[3]), y(box[1]) + 1)]
 
 
+# Each archive's header and directories, read once however many boxes come
+# from it: the oracle sample's 160 parks read the same 8 archives.
+headers, dirs, locks = {}, {}, {}
+locks_lock = threading.Lock()
+
+
 def extract(url, box, out):
-    hdr = deserialize_header(fetch(url, 0, 127))
-    dirs = {}
+    with locks_lock:
+        lock = locks.setdefault(url, threading.Lock())
+    with lock:
+        if url not in headers:
+            headers[url] = deserialize_header(fetch(url, 0, 127))
+            dirs[url] = {}
+    hdr, cache = headers[url], dirs[url]
 
     def directory(off, ln):
-        if (off, ln) not in dirs:
-            dirs[(off, ln)] = deserialize_directory(fetch(url, off, ln))
-        return dirs[(off, ln)]
+        with lock:
+            if (off, ln) not in cache:
+                cache[(off, ln)] = deserialize_directory(fetch(url, off, ln))
+            return cache[(off, ln)]
 
     def locate(tid):
         off, ln = hdr['root_offset'], hdr['root_length']
@@ -100,6 +112,8 @@ def extract(url, box, out):
     meta = fetch(url, hdr['metadata_offset'], hdr['metadata_length']) if hdr['metadata_length'] else b'{}'
     if hdr['internal_compression'] == Compression.GZIP:
         meta = gzip.decompress(meta)
+    if not loc:
+        return 0, 0, 0  # no tiles in this box (e.g. no trail areas): no archive
     with open(out, 'wb') as f:
         w = Writer(f)
         for tid in sorted(loc):
@@ -114,8 +128,12 @@ def extract(url, box, out):
 
 
 def main():
-    base, out_dir, keys = sys.argv[1].rstrip('/'), sys.argv[2], sys.argv[3:]
-    parks = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'parks.json')))
+    args = sys.argv[1:]
+    parks_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'parks.json')
+    if args[:1] == ['--parks']:
+        parks_file, args = args[1], args[2:]
+    base, out_dir, keys = args[0].rstrip('/'), args[1], args[2:]
+    parks = json.load(open(parks_file))
     jobs = [(p, layer) for p in parks if not keys or p['key'] in keys for layer in LAYERS]
     for p in parks:
         os.makedirs(os.path.join(out_dir, p['key']), exist_ok=True)
