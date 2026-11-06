@@ -145,20 +145,24 @@ pub fn check(area: &Area, doc: &Value) -> Vec<Value> {
 
 /// The share of `pts` within COVER_M of `line`.
 fn coverage(pts: &[P], line: &[P]) -> f64 {
-    if pts.is_empty() || line.len() < 2 {
+    let segs: Vec<(P, P)> = line.windows(2).map(|w| (w[0], w[1])).collect();
+    coverage_segs(pts, &segs)
+}
+
+/// The share of `pts` within COVER_M of any of `segs`.
+fn coverage_segs(pts: &[P], segs: &[(P, P)]) -> f64 {
+    if pts.is_empty() || segs.is_empty() {
         return 0.0;
     }
-    // The line's points every few metres, bucketed by a grid of COVER_M cells.
-    let cell = COVER_M / mpu(line[0].1);
+    // The segments' points every few metres, bucketed by a grid of COVER_M
+    // cells.
+    let cell = COVER_M / mpu(segs[0].0.1);
     let mut grid: HashMap<(i64, i64), Vec<P>> = HashMap::default();
-    for w in line.windows(2) {
-        let n = (metres(w[0], w[1]) / (COVER_M / 4.0)).ceil().max(1.0) as usize;
+    for &(a, b) in segs {
+        let n = (metres(a, b) / (COVER_M / 4.0)).ceil().max(1.0) as usize;
         for i in 0..=n {
             let t = i as f64 / n as f64;
-            let p = (
-                w[0].0 + (w[1].0 - w[0].0) * t,
-                w[0].1 + (w[1].1 - w[0].1) * t,
-            );
+            let p = (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t);
             grid.entry(((p.0 / cell).floor() as i64, (p.1 / cell).floor() as i64))
                 .or_default()
                 .push(p);
@@ -177,6 +181,107 @@ fn coverage(pts: &[P], line: &[P]) -> f64 {
         })
         .count();
     hit as f64 / pts.len() as f64
+}
+
+/// Points every STEP_M along a line.
+fn sample(line: &[P]) -> Vec<P> {
+    let mut pts = vec![];
+    for w in line.windows(2) {
+        let n = (metres(w[0], w[1]) / STEP_M).ceil().max(1.0) as usize;
+        for i in 0..n {
+            let t = (i as f64 + 0.5) / n as f64;
+            pts.push((
+                w[0].0 + (w[1].0 - w[0].0) * t,
+                w[0].1 + (w[1].1 - w[0].1) * t,
+            ));
+        }
+    }
+    pts
+}
+
+/// A route takes a relation's name when it covers this share of the
+/// relation (as "found") and this share of the route is on it: a hike that
+/// follows a named trail most of the way and then goes on (Colchuck Lake
+/// Trail, then up Dragontail Peak) is still the summit's hike.
+const NAME_RELATION: f64 = FOUND;
+const NAME_ROUTE: f64 = 0.85;
+
+/// Name the park's chosen routes after the OSM hiking route they follow
+/// ("Lake O'Hara Circuit Trail", not "Mount Lefroy from Lake O'Hara"): each
+/// day hike, hike from a base camp and multi-day route gets `name` when one
+/// relation qualifies (the best, if several). Only routes already chosen, so
+/// the relations don't change which routes are picked, and the known-hikes
+/// check stays a measure.
+pub fn name_routes(area: &Area, doc: &mut Value) {
+    if area.known.is_empty() {
+        return;
+    }
+    let rel_pts: Vec<Vec<P>> = area
+        .known
+        .iter()
+        .map(|k| k.segs.iter().flat_map(|&(a, b)| sample(&[a, b])).collect())
+        .collect();
+    let rel_box: Vec<(P, P)> = area
+        .known
+        .iter()
+        .map(|k| {
+            k.segs.iter().fold(
+                ((f64::MAX, f64::MAX), (f64::MIN, f64::MIN)),
+                |(lo, hi), &(a, b)| {
+                    (
+                        (lo.0.min(a.0).min(b.0), lo.1.min(a.1).min(b.1)),
+                        (hi.0.max(a.0).max(b.0), hi.1.max(a.1).max(b.1)),
+                    )
+                },
+            )
+        })
+        .collect();
+    let name = |r: &mut Value| {
+        let line: Vec<P> = r["route"]["line"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|c| Some(world(c[0].as_f64()?, c[1].as_f64()?)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if line.len() < 2 {
+            return;
+        }
+        let route_pts = sample(&line);
+        // Relations whose box can't touch the route's are skipped.
+        let pad = 100.0 / mpu(line[0].1);
+        let (mut lo, mut hi) = ((f64::MAX, f64::MAX), (f64::MIN, f64::MIN));
+        for &p in &line {
+            lo = (lo.0.min(p.0 - pad), lo.1.min(p.1 - pad));
+            hi = (hi.0.max(p.0 + pad), hi.1.max(p.1 + pad));
+        }
+        let best = area
+            .known
+            .iter()
+            .zip(&rel_pts)
+            .zip(&rel_box)
+            .filter(|(_, b)| b.0.0 <= hi.0 && b.1.0 >= lo.0 && b.0.1 <= hi.1 && b.1.1 >= lo.1)
+            .map(|(k, _)| k)
+            .filter(|(k, _)| !k.name.is_empty())
+            .map(|(k, rp)| (k, coverage(rp, &line), coverage_segs(&route_pts, &k.segs)))
+            .filter(|&(_, rel, route)| rel >= NAME_RELATION && route >= NAME_ROUTE)
+            .max_by(|a, b| (a.1 * a.2).partial_cmp(&(b.1 * b.2)).unwrap());
+        if let Some((k, _, _)) = best {
+            r["name"] = json!(k.name);
+        }
+    };
+    for h in doc["day_hikes"].as_array_mut().into_iter().flatten() {
+        name(h);
+    }
+    for b in doc["base_camps"].as_array_mut().into_iter().flatten() {
+        for h in b["hikes"].as_array_mut().into_iter().flatten() {
+            name(h);
+        }
+    }
+    for t in doc["point_to_points"].as_array_mut().into_iter().flatten() {
+        name(t);
+    }
 }
 
 #[cfg(test)]

@@ -368,6 +368,7 @@ fn main() {
             // Kept apart from the park's routes (write_outputs moves it to
             // known.jsonl), so the website's files don't grow.
             doc["known"] = json!(recall::check(&area, &doc));
+            recall::name_routes(&area, &mut doc);
             Some(Curated { area: p.area, doc })
         })
         .collect();
@@ -506,11 +507,17 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
             let f = json!({"type": "Feature", "properties": props, "geometry": {"type": "LineString", "coordinates": route["line"]}});
             writeln!(lines, "{}", f).unwrap();
         };
+        // A route that follows an OSM hiking route has its name (see
+        // recall::name_routes).
+        let named = |h: &serde_json::Value, otherwise: String| match h["name"].as_str() {
+            Some(n) if !n.is_empty() => n.to_string(),
+            _ => otherwise,
+        };
         for (i, h) in doc["day_hikes"].as_array().unwrap().iter().enumerate() {
             emit(
                 format!("{p_id}/day/{i}"),
                 "day",
-                format!("{} from {}", s(h, "dest"), s(h, "from")),
+                named(h, format!("{} from {}", s(h, "dest"), s(h, "from"))),
                 &h["route"],
                 json!({"kind": h["kind"]}),
             );
@@ -528,7 +535,7 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
                 emit(
                     format!("{p_id}/base/{i}/{j}"),
                     "from-camp",
-                    format!("{} from {camp}", s(h, "dest")),
+                    named(h, format!("{} from {camp}", s(h, "dest"))),
                     &h["route"],
                     json!({"kind": h["kind"]}),
                 );
@@ -543,11 +550,14 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
             emit(
                 format!("{p_id}/multi/{i}"),
                 "multi-day",
-                if s(t, "kind") == "loop" {
-                    format!("{} loop", s(t, "from"))
-                } else {
-                    format!("{} to {}", s(t, "from"), s(t, "to"))
-                },
+                named(
+                    t,
+                    if s(t, "kind") == "loop" {
+                        format!("{} loop", s(t, "from"))
+                    } else {
+                        format!("{} to {}", s(t, "from"), s(t, "to"))
+                    },
+                ),
                 &t["route"],
                 json!({"kind": s(t, "kind"), "stopovers": t["route"]["stopovers"].as_array().unwrap().len()}),
             );
