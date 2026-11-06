@@ -6,6 +6,12 @@
 // poi layers; they may be spread over several archives) and writes
 //   DIR/routes.geojsonl       one line per route, for the map
 //   DIR/parks/<osm_id>.json   each park's routes in full, for its page
+//   DIR/routes.bin, DIR/index.json
+//                             the same, as one file for the website: each
+//                             park's JSON gzipped, end to end, and where each
+//                             one is ({"bundle": "routes.bin", "parks":
+//                             {"<osm_id>": [offset, length]}}), so a build
+//                             uploads 2 files, not one per park
 //
 // A big area can be curated on several machines: each runs with --shard K/N,
 // and then one runs --merge over their output directories.
@@ -421,6 +427,10 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
         std::io::BufWriter::new(std::fs::File::create(out.join("routes.geojsonl")).unwrap());
     let mut known =
         std::io::BufWriter::new(std::fs::File::create(out.join("known.jsonl")).unwrap());
+    let mut bundle =
+        std::io::BufWriter::new(std::fs::File::create(out.join("routes.bin")).unwrap());
+    let mut index = serde_json::Map::new();
+    let mut offset: u64 = 0;
     // Each relation's best coverage over the parks it's checked in.
     let mut best: HashMap<String, f64> = HashMap::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -465,11 +475,14 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
             continue;
         }
         written += 1;
-        std::fs::write(
-            out.join("parks").join(format!("{p_id}.json")),
-            serde_json::to_vec(&doc).unwrap(),
-        )
-        .unwrap();
+        let body = serde_json::to_vec(&doc).unwrap();
+        std::fs::write(out.join("parks").join(format!("{p_id}.json")), &body).unwrap();
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+        gz.write_all(&body).unwrap();
+        let gz = gz.finish().unwrap();
+        bundle.write_all(&gz).unwrap();
+        index.insert(p_id.clone(), json!([offset, gz.len()]));
+        offset += gz.len() as u64;
         // one line per route
         let mut emit = |id: String,
                         typ: &str,
@@ -536,6 +549,12 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
     eprintln!("{written} parks with routes");
     lines.flush().unwrap();
     known.flush().unwrap();
+    bundle.flush().unwrap();
+    std::fs::write(
+        out.join("index.json"),
+        serde_json::to_vec(&json!({"bundle": "routes.bin", "parks": index})).unwrap(),
+    )
+    .unwrap();
     let n = best.len();
     let found = best.values().filter(|&&c| c >= recall::FOUND).count();
     let partial = best
