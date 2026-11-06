@@ -356,6 +356,15 @@ fn disambiguate(doc: &mut Value) {
 /// Mountain Trail trailhead" (#47). They're named for the destination alone,
 /// unless another route in the park goes there too or already has that
 /// name: then "from" tells them apart.
+/// What a start's name can end in after the trail or place it's named for.
+const START_SUFFIXES: [&str; 5] = [
+    " trailhead",
+    " trail head",
+    " parking lot",
+    " parking",
+    " car park",
+];
+
 pub fn drop_redundant_from(doc: &mut Value) {
     let lower = |s: &str| s.trim().to_lowercase();
     // What each day hike would be called, to check a shorter name is unique.
@@ -377,15 +386,19 @@ pub fn drop_redundant_from(doc: &mut Value) {
             continue;
         };
         let (d, f) = (lower(dest), lower(from));
-        let Some(core) = f.strip_suffix(" trailhead") else {
-            continue;
-        };
-        // The trailhead's name is the destination's, or starts with it.
+        // A start named for the destination: exactly ("Skyline Trail from
+        // Skyline Trail", a trailhead node named for its trail, #51), or with
+        // a trailhead or parking suffix and maybe more of a trail name
+        // ("Gros Morne from Gros Morne Mountain Trail trailhead").
+        let suffixed = START_SUFFIXES.iter().find_map(|s| f.strip_suffix(s));
         let redundant = !d.is_empty()
-            && (core == d
-                || core
-                    .strip_prefix(&d)
-                    .is_some_and(|rest| rest.starts_with(' ')));
+            && (f == d
+                || suffixed.is_some_and(|core| {
+                    core == d
+                        || core
+                            .strip_prefix(&d)
+                            .is_some_and(|rest| rest.starts_with(' '))
+                }));
         if redundant && titles.get(&d) == Some(&1) {
             h["name"] = json!(dest);
         }
@@ -448,6 +461,10 @@ mod tests {
             {"dest": "Green Gardens", "from": "Green Gardens Trail trailhead"},
             {"dest": "Green Gardens", "from": "Long Pond Trail trailhead"},
             {"dest": "Lookout Hills", "from": "Lookout Hills trailhead", "name": "Lookout Trail"},
+            {"dest": "Skyline Trail", "from": "Skyline Trail"},
+            {"dest": "Fundy Footpath", "from": "Fundy Footpath Parking"},
+            {"dest": "Cascade Falls", "from": "Cascade Falls Trail Head"},
+            {"dest": "Gros Ventre", "from": "Gros Ventre Campground"},
         ]});
         drop_redundant_from(&mut doc);
         let names: Vec<Option<&str>> = doc["day_hikes"]
@@ -465,7 +482,11 @@ mod tests {
                 None, // not a trailhead name
                 None, // two routes to Green Gardens: "from" tells them apart
                 None,
-                Some("Lookout Trail"), // already named
+                Some("Lookout Trail"),  // already named
+                Some("Skyline Trail"),  // a start named exactly for it (#51)
+                Some("Fundy Footpath"), // ... or with a parking suffix
+                Some("Cascade Falls"),  // ... or "trail head"
+                None,                   // a campground isn't a trailhead name
             ]
         );
     }
