@@ -70,6 +70,7 @@ pub enum Kind {
     Viewpoint,
     Lake,
     Waterfall,
+    Spring,
     Hut,
     /// A named trail walked for itself (see Ctx::named_trails): a loop, or
     /// out and back to its far end, with no destination on it needed.
@@ -83,6 +84,7 @@ impl Kind {
             Kind::Viewpoint => "viewpoint",
             Kind::Lake => "lake",
             Kind::Waterfall => "waterfall",
+            Kind::Spring => "spring",
             Kind::Hut => "hut",
             Kind::Trail => "trail",
         }
@@ -93,6 +95,9 @@ impl Kind {
             Kind::Viewpoint => 0.9,
             Kind::Lake => 0.8,
             Kind::Waterfall => 0.75,
+            // Named springs: desert oases (Joshua Tree's Lost Palms Oasis is
+            // natural=spring) and the like.
+            Kind::Spring => 0.6,
             Kind::Hut => 0.4,
             Kind::Trail => TRAIL_APPEAL,
         }
@@ -111,6 +116,10 @@ pub struct Dest {
     pub wikidata: String,
     pub qrank: f64,
     pub lake: Option<u32>, // for lakes: which lake (index into Area::lakes)
+    /// A peak with neither an elevation nor a Wikidata item: often a
+    /// climbing crag mapped as a peak (Joshua Tree's Cyclops Rock, Sports
+    /// Challenge Rock), less of a draw than a summit.
+    pub minor: bool,
 }
 
 pub struct Place {
@@ -290,6 +299,7 @@ fn read_tile(
                                     wikidata: l.str(f, "wikidata").to_string(),
                                     qrank: 1.0,
                                     lake: Some(id),
+                                    minor: false,
                                 });
                             }
                             raw.data.lakes.push((id, poly));
@@ -367,6 +377,8 @@ fn read_tile(
                             Some(Kind::Viewpoint)
                         } else if l.str(f, "waterway") == "waterfall" {
                             Some(Kind::Waterfall)
+                        } else if l.str(f, "natural") == "spring" {
+                            Some(Kind::Spring)
                         } else if tourism == "wilderness_hut"
                             || tourism == "alpine_hut"
                             || amenity == "shelter"
@@ -384,6 +396,9 @@ fn read_tile(
                                 wikidata: l.str(f, "wikidata").to_string(),
                                 qrank: 1.0,
                                 lake: None,
+                                minor: kind == Kind::Peak
+                                    && l.get(f, "ele").is_none()
+                                    && l.str(f, "wikidata").is_empty(),
                             });
                         }
                     }

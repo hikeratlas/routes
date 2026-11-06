@@ -524,6 +524,8 @@ impl<'a> Ctx<'a> {
 
 // The weights for scoring a hike.
 const W_APPEAL: f64 = 2.0;
+/// See Dest::minor.
+const MINOR_PEAK_APPEAL: f64 = 0.7;
 const W_POPULARITY: f64 = 1.5;
 const W_KINDS: f64 = 0.6;
 const W_LC_VARIETY: f64 = 0.7;
@@ -542,6 +544,9 @@ const W_TOO_MUCH_GAIN: f64 = -1.0;
 pub fn score(ev: &Eval, d: &Dest, is_loop: bool) -> (f64, Vec<(&'static str, f64)>) {
     let pop = d.qrank.max(1.0).log10();
     let mut appeal = d.kind.appeal();
+    if d.minor {
+        appeal = MINOR_PEAK_APPEAL;
+    }
     if d.kind == Kind::Lake {
         // bigger lakes are bigger draws: 0.1 km² -> 0.7, 10 km² -> 1.0
         appeal = (0.7 + 0.15 * (d.area.max(1e5) / 1e5).log10()).min(1.1);
@@ -830,6 +835,7 @@ impl<'a> Ctx<'a> {
                 wikidata: String::new(),
                 qrank: 1.0,
                 lake: None,
+                minor: false,
             };
             let (sc, parts) = score(&ev, &d, *is_loop);
             out.push(Cand {
@@ -1169,6 +1175,7 @@ pub fn curate(
                 wikidata: d.wikidata.clone(),
                 qrank: d.qrank,
                 lake: d.lake,
+                minor: d.minor,
             })
             .collect(),
     );
