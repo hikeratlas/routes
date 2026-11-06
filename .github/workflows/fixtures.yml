@@ -113,14 +113,28 @@ jobs:
 
       # Known-hike recall on the oracle sample: ~160 parks with OSM hiking
       # routes, in a tuning half and a held-out half (see fixtures/oracle.py).
+      # Without the bump for following an OSM hiking route (--no-known-bonus)
+      # it measures the route proposer alone; with it, what ships, which the
+      # bump partly earns by itself.
       - name: Oracle sample with ${{ github.base_ref || 'main' }}
+        env:
+          ROUTES_ARGS: --no-known-bonus
         run: new/fixtures/run.sh base/target/release/routes tiles/oracle out/oracle-base qrank.db dem 120 new/fixtures/oracle.json > /dev/null
 
-      - name: Oracle sample with this change
+      - name: Oracle sample with this change, no bump for known routes
+        env:
+          ROUTES_ARGS: --no-known-bonus
         run: new/fixtures/run.sh new/target/release/routes tiles/oracle out/oracle-new qrank.db dem 120 new/fixtures/oracle.json > /dev/null
 
+      - name: Oracle sample with this change, as it ships
+        run: new/fixtures/run.sh new/target/release/routes tiles/oracle out/oracle-new-bonus qrank.db dem 120 new/fixtures/oracle.json > /dev/null
+
       - name: Compare on the oracle sample
-        run: python3 new/fixtures/oracle.py out/oracle-base out/oracle-new new/fixtures/oracle.json | tee -a "$GITHUB_STEP_SUMMARY"
+        run: |
+          python3 new/fixtures/oracle.py --title "Known hikes on the oracle sample: the route proposer (no bump for known routes)" \
+            out/oracle-base out/oracle-new new/fixtures/oracle.json | tee -a "$GITHUB_STEP_SUMMARY"
+          python3 new/fixtures/oracle.py --title "Known hikes on the oracle sample: as it ships (with the bump)" \
+            out/oracle-base out/oracle-new-bonus new/fixtures/oracle.json | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the routes and logs
         if: always()
