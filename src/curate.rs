@@ -1551,7 +1551,7 @@ fn on_known_edges(area: &Area) -> HashSet<u64> {
     let cell = ON_KNOWN_M / mpu(g.pts.first().map(|p| p.1).unwrap_or(0.0));
     let key = |p: P| ((p.0 / cell).floor() as i64, (p.1 / cell).floor() as i64);
     let mut grid: HashMap<(i64, i64), Vec<P>> = HashMap::default();
-    for k in &area.known {
+    for k in area.known.iter().filter(|k| !crate::recall::is_bike(k)) {
         for &(a, b) in &k.segs {
             let n = (metres(a, b) / (ON_KNOWN_M / 3.0)).ceil().max(1.0) as usize;
             for i in 0..=n {
