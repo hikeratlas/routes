@@ -86,5 +86,27 @@
       -53.232,
       48.445
     ]
+  },
+  {
+    "key": "joshua-tree",
+    "park": "Joshua Tree National Park",
+    "why": "known hikes: the Lost Palms Oasis Trail (relation/13875860), missed: it ends at an oasis, not one of our destination kinds",
+    "bbox": [
+      -116.512,
+      33.625,
+      -115.208,
+      34.174
+    ]
+  },
+  {
+    "key": "north-shore",
+    "park": "Lynn Headwaters Regional Park",
+    "why": "known hikes: the Grouse Grind (relation/3177861), just west and outside any park, missed",
+    "bbox": [
+      -123.162,
+      49.312,
+      -122.931,
+      49.496
+    ]
   }
 ]

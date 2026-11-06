@@ -135,7 +135,7 @@ struct Raw {
     dests: Vec<Dest>,
     camps: Vec<Place>,
     parkings: Vec<Place>,
-    known: Vec<(String, String, String, Vec<(P, P)>)>, // id, name, network, segments
+    known: Vec<crate::recall::Known>, // pieces of relations in this tile
 }
 
 fn read_tile(
@@ -305,12 +305,15 @@ fn read_tile(
                             }
                         }
                         if !segs.is_empty() {
-                            raw.known.push((
-                                l.str(f, "osm_id").to_string(),
-                                l.str(f, "name").to_string(),
-                                l.str(f, "network").to_string(),
+                            raw.known.push(crate::recall::Known {
+                                id: l.str(f, "osm_id").to_string(),
+                                name: l.str(f, "name").to_string(),
+                                network: l.str(f, "network").to_string(),
+                                wikidata: l.str(f, "wikidata").to_string(),
+                                roundtrip: l.str(f, "roundtrip").to_string(),
+                                total_km: l.get(f, "km").map(|v| v.as_f64()).unwrap_or(0.0),
                                 segs,
-                            ));
+                            });
                         }
                     }
                     "park" | "trail_area" if f.typ == 3 && l.str(f, "osm_id") == park_id => {
@@ -532,17 +535,13 @@ impl Area {
             area.dests.extend(r.dests);
             area.camps.extend(r.camps);
             area.parkings.extend(r.parkings);
-            for (id, name, network, segs) in r.known {
-                known
-                    .entry(id.clone())
-                    .or_insert_with(|| crate::recall::Known {
-                        id,
-                        name,
-                        network,
-                        segs: vec![],
-                    })
-                    .segs
-                    .extend(segs);
+            for k in r.known {
+                match known.get_mut(&k.id) {
+                    Some(e) => e.segs.extend(k.segs),
+                    None => {
+                        known.insert(k.id.clone(), k);
+                    }
+                }
             }
             area.tiles.insert((r.tx, r.ty), r.data);
         }
