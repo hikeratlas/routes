@@ -304,12 +304,48 @@ impl<'a> Ctx<'a> {
                 })
             })
             .collect();
+        // Unnamed ones are named for the trail they're on, so routes can say
+        // where you stop; ones on no named trail are left out.
+        let unnamed: Vec<usize> = (0..ctx.camps.len())
+            .filter(|&i| ctx.camps[i].name.is_empty())
+            .collect();
+        for i in unnamed {
+            ctx.camps[i].name = ctx
+                .trail_on(ctx.camps[i].pt, 150.0)
+                .map(|t| format!("Campsite on {t}"))
+                .unwrap_or_default();
+        }
+        ctx.camps.retain(|c| !c.name.is_empty());
         for (ci, c) in ctx.camps.iter().enumerate() {
             for n in ctx.nodes_near(c.pt, 150.0) {
                 ctx.camp_near.entry(n).or_default().push(ci as u32);
             }
         }
         ctx
+    }
+
+    /// The name of the nearest named trail (or track) within r metres of p.
+    fn trail_on(&self, p: P, r: f64) -> Option<String> {
+        let g = &self.area.graph;
+        self.nodes_near(p, r)
+            .into_iter()
+            .map(|n| (metres(p, g.pts[n as usize]), n))
+            .filter(|&(m, _)| m <= r)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .fold(None::<(f64, String)>, |best, (m, n)| {
+                let name = g.adj[n as usize].iter().find_map(|e| {
+                    let w = &g.ways[e.way as usize];
+                    (matches!(w.class, Class::Trail | Class::Track) && !w.name.is_empty())
+                        .then(|| w.name.clone())
+                });
+                match (best, name) {
+                    (Some(b), Some(nm)) if m < b.0 => Some((m, nm)),
+                    (None, Some(nm)) => Some((m, nm)),
+                    (b, _) => b,
+                }
+            })
+            .map(|(_, n)| n)
     }
 
     pub fn nodes_near(&self, p: P, r: f64) -> Vec<u32> {
@@ -642,6 +678,166 @@ pub struct Start {
 }
 
 /// Shortest and longest named trail (in the park) to offer for itself.
+/// Long named trails end to end, as multi-day point-to-points (#39): the
+/// shortest path between a trail's two trailheads often isn't the trail
+/// (Sleeping Giant's Kabeyun Trail rounds the peninsula past Tee Harbour;
+/// the shortest way between its trailheads cuts inland, 23 km to its 36, and
+/// passes one campsite), so trailhead-to-trailhead searches miss it. A named
+/// line of 18-100 km in the park that passes 2+ places to sleep, walked from
+/// the trailhead nearest one end to the trailhead nearest the other.
+/// A line's nodes in order, and the ways between them.
+type Line = (Vec<u32>, Vec<u32>);
+
+fn named_throughs(ctx: &Ctx, starts: &[Start]) -> Vec<Through> {
+    let g = &ctx.area.graph;
+    // The trailhead nearest a node, within NAMED_ACCESS_M: the path from
+    // the node to it.
+    let nearest_start = |n: u32| -> Option<(&Start, Vec<u32>, Vec<u32>)> {
+        let sr = ctx.search(n, NAMED_ACCESS_M, None);
+        let s = starts
+            .iter()
+            .filter_map(|s| sr.reached(s.node).map(|m| (m, s)))
+            .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())?
+            .1;
+        let (p, w) = sr.path(s.node);
+        Some((s, p, w))
+    };
+    let mut out = vec![];
+    // A trail's line pieces, joined end to end where they're within
+    // JOIN_M of each other: the Kabeyun Trail is two pieces (25.8 and 9.3
+    // km), split where it leaves the trail network for a few metres.
+    const JOIN_M: f64 = 1000.0;
+    let mut by_name: HashMap<&str, Vec<Line>> = HashMap::default();
+    for (name, path, ways, is_loop) in ctx.named_pieces(NAMED_MIN_M, 100000.0) {
+        if !is_loop {
+            by_name.entry(name).or_default().push((path, ways));
+        }
+    }
+    let mut lines: Vec<Line> = vec![];
+    for (_, mut ps) in by_name {
+        // Join any two pieces with ends close together, until none are.
+        'join: loop {
+            for i in 0..ps.len() {
+                for end in [0usize, 1] {
+                    let e = if end == 0 {
+                        ps[i].0[0]
+                    } else {
+                        *ps[i].0.last().unwrap()
+                    };
+                    let sr = ctx.search(e, JOIN_M, None);
+                    for k in 0..ps.len() {
+                        if k == i {
+                            continue;
+                        }
+                        for kend in [0usize, 1] {
+                            let f = if kend == 0 {
+                                ps[k].0[0]
+                            } else {
+                                *ps[k].0.last().unwrap()
+                            };
+                            if sr.reached(f).is_none() {
+                                continue;
+                            }
+                            // i oriented to end at e, then e to f, then k from f.
+                            let (gap, gw) = sr.path(f);
+                            let (mut ip, mut iw) = ps[i].clone();
+                            if end == 0 {
+                                ip.reverse();
+                                iw.reverse();
+                            }
+                            let (mut kp, mut kw) = ps[k].clone();
+                            if kend == 1 {
+                                kp.reverse();
+                                kw.reverse();
+                            }
+                            ip.extend(gap.iter().skip(1));
+                            iw.extend(gw);
+                            ip.extend(kp.iter().skip(1));
+                            iw.extend(kw);
+                            let (a, b) = (i.max(k), i.min(k));
+                            ps.remove(a);
+                            ps.remove(b);
+                            ps.push((ip, iw));
+                            continue 'join;
+                        }
+                    }
+                }
+            }
+            break;
+        }
+        lines.extend(ps);
+    }
+    for (path, ways) in lines {
+        let len: f64 = path
+            .windows(2)
+            .map(|w| metres(g.pts[w[0] as usize], g.pts[w[1] as usize]))
+            .sum();
+        if !(18000.0..=100000.0).contains(&len) {
+            continue;
+        }
+        let mut passed: HashSet<u32> = HashSet::default();
+        for n in &path {
+            if let Some(cs) = ctx.camp_near.get(n) {
+                passed.extend(cs.iter().copied());
+            }
+        }
+        if passed.len() < 2 {
+            continue;
+        }
+        let (Some((a, ap, aw)), Some((b, bp, bw))) =
+            (nearest_start(path[0]), nearest_start(*path.last().unwrap()))
+        else {
+            continue;
+        };
+        if a.node == b.node {
+            continue;
+        }
+        // Trailhead a to the trail's start, along it, then to trailhead b.
+        let full: Vec<u32> = ap
+            .iter()
+            .rev()
+            .chain(path.iter().skip(1))
+            .chain(bp.iter().skip(1))
+            .copied()
+            .collect();
+        let fw: Vec<u32> = aw
+            .iter()
+            .rev()
+            .chain(ways.iter())
+            .chain(bw.iter())
+            .copied()
+            .collect();
+        let (mut m, mut inp) = (0.0, 0.0);
+        for w in full.windows(2) {
+            let d = metres(g.pts[w[0] as usize], g.pts[w[1] as usize]);
+            m += d;
+            if ctx.in_park[w[1] as usize] {
+                inp += d;
+            }
+        }
+        if !(18000.0..=100000.0).contains(&m) || inp / m < 0.6 {
+            continue;
+        }
+        let ev = ctx.evaluate(&full, &fw, false);
+        if ev.bike > MAX_BIKE {
+            continue;
+        }
+        let kinds: HashSet<Kind> = ev.passed.iter().map(|(k, _)| *k).collect();
+        let sc = 1.0 * kinds.len() as f64 + 2.5 * ev.open_high + 0.7 * ev.lc_variety.min(4.0)
+            - 2.5 * ev.road
+            - 2.0 * ev.bike;
+        out.push(Through {
+            from: a.name.clone(),
+            to: b.name.clone(),
+            kind: "point-to-point",
+            score: sc,
+            ev,
+            edges: edge_set(&full),
+        });
+    }
+    out
+}
+
 /// Road cost multiplier in multi-day searches (see Ctx::search_trails).
 const ROAD_X_MULTI: f64 = 8.0;
 
@@ -658,10 +854,14 @@ impl<'a> Ctx<'a> {
     /// candidates miss these when nothing on them is a destination
     /// (interpretive loops, ridge and creek trails), and they're much of the
     /// OSM hiking routes the oracle sample (fixtures/oracle.json) checks.
-    pub fn named_trails(&self, starts: &[Start]) -> Vec<Cand> {
+    /// Each trail name's connected pieces in the park that are a simple
+    /// loop or line (or a forked trail's longest line), between min_m and
+    /// max_m long, as (name, nodes in order, ways between them, is a loop).
+    #[allow(clippy::type_complexity)]
+    fn named_pieces(&self, min_m: f64, max_m: f64) -> Vec<(&'a str, Vec<u32>, Vec<u32>, bool)> {
         let g = &self.area.graph;
         // In-park, non-bike trail edges, by name.
-        let mut by_name: HashMap<&str, Vec<(u32, u32, u32)>> = HashMap::default();
+        let mut by_name: HashMap<&'a str, Vec<(u32, u32, u32)>> = HashMap::default();
         for (u, adj) in g.adj.iter().enumerate() {
             let u = u as u32;
             for e in adj {
@@ -682,7 +882,7 @@ impl<'a> Ctx<'a> {
         }
         // Each name's connected pieces that are a simple loop or line, as
         // (name, nodes in order, ways between them, is a loop).
-        let mut pieces: Vec<(&str, Vec<u32>, Vec<u32>, bool)> = vec![];
+        let mut pieces: Vec<(&'a str, Vec<u32>, Vec<u32>, bool)> = vec![];
         for (name, edges) in &by_name {
             let mut nbrs: HashMap<u32, Vec<(u32, u32)>> = HashMap::default();
             for &(u, v, w) in edges {
@@ -792,11 +992,17 @@ impl<'a> Ctx<'a> {
                     .windows(2)
                     .map(|p| metres(g.pts[p[0] as usize], g.pts[p[1] as usize]))
                     .sum();
-                if (NAMED_MIN_M..=NAMED_MAX_M).contains(&m) {
+                if (min_m..=max_m).contains(&m) {
                     pieces.push((name, path, ways, is_loop));
                 }
             }
         }
+        pieces
+    }
+
+    pub fn named_trails(&self, starts: &[Start]) -> Vec<Cand> {
+        let g = &self.area.graph;
+        let pieces = self.named_pieces(NAMED_MIN_M, NAMED_MAX_M);
         if pieces.is_empty() {
             return vec![];
         }
@@ -1495,6 +1701,9 @@ pub fn curate(
             out
         })
         .collect();
+    if ctx.camps.len() >= 2 && !late() {
+        thru.extend(named_throughs(&ctx, &starts));
+    }
     thru.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
     let mut through: Vec<Through> = vec![];
     let mut seen: HashSet<(String, String)> = HashSet::default();
