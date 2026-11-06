@@ -5,12 +5,19 @@
 # e.g. fixtures/oracle.json) extracted into TILES_DIR by extract.py, writing
 # OUT_DIR/<key>/, <key>.log and <key>.secs for compare.py. Each fixture is
 # stopped after LIMIT_SECS (default 600). An entry with "id" picks its park by
-# osm_id (names aren't unique); otherwise by "park", a name.
+# osm_id (names aren't unique); otherwise by "park", a name. ROUTES_ARGS, if
+# set, is passed on to routes (e.g. --no-known-bonus).
 set -uo pipefail
 bin=$1 tiles=$2 out=$3 qrank=$4 dem=$5 limit=${6:-600}
 here=$(dirname "$(readlink -f "$0")")
 list=${7:-$here/parks.json}
 mkdir -p "$out"
+# ROUTES_ARGS options this build doesn't know (an older main) are dropped.
+extra=()
+usage=$("$bin" 2>&1 || true)
+for a in ${ROUTES_ARGS:-}; do
+  if grep -q -- "$a" <<< "$usage"; then extra+=("$a"); else echo "run.sh: $bin has no $a, running without it" >&2; fi
+done
 for key in $(jq -r '.[].key' "$list"); do
   id=$(jq -r --arg k "$key" '.[] | select(.key == $k) | .id // ""' "$list")
   if [ -n "$id" ]; then
@@ -21,7 +28,7 @@ for key in $(jq -r '.[].key' "$list"); do
   args=()
   for f in "$tiles/$key"/*.pmtiles; do args+=(--tiles "$f"); done
   start=$(date +%s)
-  timeout "$limit" "$bin" "${args[@]}" "${pick[@]}" --qrank "$qrank" --dem-cache "$dem" \
+  timeout "$limit" "$bin" "${args[@]}" "${pick[@]}" "${extra[@]}" --qrank "$qrank" --dem-cache "$dem" \
     --out "$out/$key" 2> "$out/$key.log"
   status=$?
   echo "$(( $(date +%s) - start )) $status" > "$out/$key.secs"

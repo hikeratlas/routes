@@ -43,6 +43,8 @@ const USAGE: &str = "usage: routes --tiles FILE|URL [--tiles ...] --out DIR
   [--tile-cache DIR]     cache tiles fetched from a URL here
   [--dem-cache DIR]      cache DEM tiles here
   [--dem-zoom Z]         DEM zoom (default 12)
+  [--no-known-bonus]     don't score up routes that follow an OSM hiking
+                         route (to measure the proposer on its own)
   [--park-timeout SECS]  stop starting new searches in a park after this
                          long, keeping what was found, and report it
   [--shard K/N]          curate only shard K (0-based) of N, balanced by tile
@@ -93,6 +95,11 @@ fn args() -> Args {
         std::process::exit(2)
     };
     while i < v.len() {
+        if v[i] == "--no-known-bonus" {
+            curate::KNOWN_BONUS.store(false, std::sync::atomic::Ordering::Relaxed);
+            i += 1;
+            continue;
+        }
         let val = v.get(i + 1).cloned().unwrap_or_else(|| die());
         match v[i].as_str() {
             "--tiles" => a.tiles.push(val),
