@@ -10,8 +10,14 @@
 import json, os, sys
 
 FOUND = 0.7
-base_dir, new_dir = sys.argv[1], sys.argv[2]
-oracle = json.load(open(sys.argv[3] if len(sys.argv) > 3 else os.path.join(os.path.dirname(os.path.abspath(__file__)), 'oracle.json')))
+args = sys.argv[1:]
+title = 'Known hikes on the oracle sample'
+if '--title' in args:
+    i = args.index('--title')
+    title = args[i + 1]
+    del args[i:i + 2]
+base_dir, new_dir = args[0], args[1]
+oracle = json.load(open(args[2] if len(args) > 2 else os.path.join(os.path.dirname(os.path.abspath(__file__)), 'oracle.json')))
 
 
 def known(d, key):
@@ -70,7 +76,7 @@ for half in ('tune', 'holdout'):
                 h['lost'].append(line)
     halves[half] = h
 
-print('## Known hikes on the oracle sample\n')
+print(f'## {title}\n')
 print('OSM hiking routes in or near each park, found when one route covers 70% of it. Tune on the tuning half; the held-out half checks the gain carries over.\n')
 print('| half | parks | known hikes | found (main) | found (this change) | change | parks with different routes | time (main / this change) |')
 print('|---|---|---|---|---|---|---|---|')

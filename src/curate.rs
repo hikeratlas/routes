@@ -43,7 +43,17 @@ pub struct Ctx<'a> {
     pub lake_access: HashMap<u32, Vec<u32>>,
     dest_near: Vec<Vec<u32>>, // nodes within 100 m of each destination
     in_park: Vec<bool>,       // by node
+    /// Edges (ekey) along an OSM hiking route: the scoring bump for
+    /// following one (W_KNOWN), unless switched off (KNOWN_BONUS).
+    on_known: HashSet<u64>,
 }
+
+/// Whether routes get a bump for following an OSM hiking route (routes
+/// --no-known-bonus turns it off). With it, the known-hikes check partly
+/// measures the bump itself, so the fixture CI reports recall both ways.
+pub static KNOWN_BONUS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+/// An edge whose midpoint is this close to an OSM hiking route is on it.
+const ON_KNOWN_M: f64 = 30.0;
 
 #[derive(PartialEq)]
 struct Q(f64, u32);
@@ -176,6 +186,8 @@ pub struct Eval {
     pub camps: Vec<(String, f64, P)>,
     pub road: f64,
     pub bike: f64,
+    /// Share of the route along an OSM hiking route (see Ctx::on_known).
+    pub known: f64,
     pub via: Vec<String>,
     pub line: Vec<P>,
 }
@@ -263,7 +275,11 @@ impl<'a> Ctx<'a> {
             lake_access: HashMap::default(),
             dest_near: vec![],
             in_park: vec![],
+            on_known: HashSet::default(),
         };
+        if KNOWN_BONUS.load(Relaxed) && !area.known.is_empty() {
+            ctx.on_known = on_known_edges(area);
+        }
         ctx.dest_near = ctx
             .dests
             .par_iter()
@@ -507,6 +523,15 @@ impl<'a> Ctx<'a> {
         };
         let road = share(&|w| g.ways[w as usize].class == Class::Road);
         let bike = share(&|w| g.ways[w as usize].bike);
+        let known = if self.on_known.is_empty() {
+            0.0
+        } else {
+            path.windows(2)
+                .filter(|w| self.on_known.contains(&ekey(w[0], w[1])))
+                .map(|w| metres(g.pts[w[0] as usize], g.pts[w[1] as usize]))
+                .sum::<f64>()
+                / one_way.max(1.0)
+        };
         let mut via: Vec<String> = vec![];
         for &w in ways {
             let n = &g.ways[w as usize].name;
@@ -528,6 +553,7 @@ impl<'a> Ctx<'a> {
             camps,
             road,
             bike,
+            known,
             via,
             line: full,
         }
@@ -546,6 +572,11 @@ const W_RELIEF: f64 = 0.8;
 const W_LOOP: f64 = 0.5;
 const W_ROAD: f64 = -2.5;
 const W_BIKE: f64 = -2.0;
+/// For the share of a route along an OSM hiking route (Eval::known). On the
+/// oracle sample, 0.5 / 1.0 / 2.0 found +2 / -1 / +5 known hikes of 270 on
+/// the tuning half; 2.0 found +5 of 191 on the held-out half too. That partly
+/// measures the bonus itself: the fixture CI also reports recall without it.
+const W_KNOWN: f64 = 2.0;
 /// A route with more of its length on bike trails than this isn't offered:
 /// mountain-bike trails belong on the map, not in hikes, and in a bike park
 /// the best of a bad lot still scored as a hike.
@@ -582,6 +613,7 @@ pub fn score(ev: &Eval, d: &Dest, is_loop: bool) -> (f64, Vec<(&'static str, f64
         ("loop", if is_loop { W_LOOP } else { 0.0 }),
         ("road", W_ROAD * ev.road),
         ("bike_trails", W_BIKE * ev.bike),
+        ("known_route", W_KNOWN * ev.known),
         (
             "too_long",
             W_TOO_LONG * ((ev.total - 20000.0) / 10000.0).max(0.0),
@@ -1510,6 +1542,48 @@ pub fn curate(
         stats,
         timed_out,
     }
+}
+
+/// The graph's edges along an area's OSM hiking routes: those whose
+/// midpoint is within ON_KNOWN_M of one.
+fn on_known_edges(area: &Area) -> HashSet<u64> {
+    let g = &area.graph;
+    let cell = ON_KNOWN_M / mpu(g.pts.first().map(|p| p.1).unwrap_or(0.0));
+    let key = |p: P| ((p.0 / cell).floor() as i64, (p.1 / cell).floor() as i64);
+    let mut grid: HashMap<(i64, i64), Vec<P>> = HashMap::default();
+    for k in &area.known {
+        for &(a, b) in &k.segs {
+            let n = (metres(a, b) / (ON_KNOWN_M / 3.0)).ceil().max(1.0) as usize;
+            for i in 0..=n {
+                let t = i as f64 / n as f64;
+                let p = (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t);
+                grid.entry(key(p)).or_default().push(p);
+            }
+        }
+    }
+    let near = |p: P| {
+        let (cx, cy) = key(p);
+        (-1..=1).any(|dx| {
+            (-1..=1).any(|dy| {
+                grid.get(&(cx + dx, cy + dy))
+                    .is_some_and(|v| v.iter().any(|&q| metres(p, q) <= ON_KNOWN_M))
+            })
+        })
+    };
+    (0..g.adj.len() as u32)
+        .into_par_iter()
+        .flat_map_iter(|u| {
+            g.adj[u as usize]
+                .iter()
+                .filter(move |e| u < e.to)
+                .filter(|e| {
+                    let (a, b) = (g.pts[u as usize], g.pts[e.to as usize]);
+                    near(((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0))
+                })
+                .map(move |e| ekey(u, e.to))
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 /// Whether each lot is in a city: 12 or more other lots within 1 km. Remote
