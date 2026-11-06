@@ -532,6 +532,10 @@ const W_RELIEF: f64 = 0.8;
 const W_LOOP: f64 = 0.5;
 const W_ROAD: f64 = -2.5;
 const W_BIKE: f64 = -2.0;
+/// A route with more of its length on bike trails than this isn't offered:
+/// mountain-bike trails belong on the map, not in hikes, and in a bike park
+/// the best of a bad lot still scored as a hike.
+pub const MAX_BIKE: f64 = 0.5;
 const W_TOO_LONG: f64 = -1.5;
 const W_TOO_MUCH_GAIN: f64 = -1.0;
 
@@ -661,7 +665,9 @@ impl<'a> Ctx<'a> {
                 edges,
                 ev,
             };
-            out.push(mk("out-and-back", sc, parts, pen.clone(), ev));
+            if ev.bike <= MAX_BIKE {
+                out.push(mk("out-and-back", sc, parts, pen.clone(), ev));
+            }
             // a loop: back by a different way, if there's a good one
             let b = self.search_to(node, m * 1.7, Some(&pen), src);
             if let Some(bm) = b.reached(src) {
@@ -672,8 +678,10 @@ impl<'a> Ctx<'a> {
                     let full: Vec<u32> = path.iter().chain(back.iter().skip(1)).copied().collect();
                     let fw: Vec<u32> = ways.iter().chain(bways.iter()).copied().collect();
                     let ev2 = self.evaluate(&full, &fw, false);
-                    let (s2, p2) = score(&ev2, d, true);
-                    out.push(mk("loop", s2, p2, edge_set(&full), ev2));
+                    if ev2.bike <= MAX_BIKE {
+                        let (s2, p2) = score(&ev2, d, true);
+                        out.push(mk("loop", s2, p2, edge_set(&full), ev2));
+                    }
                 }
             }
         }
@@ -971,6 +979,9 @@ pub fn curate(
             path.reverse();
             ways.reverse();
             let approach = ctx.evaluate(&path, &ways, false); // one way: the walk in
+            if approach.bike > MAX_BIKE {
+                return None;
+            }
             let hikes = ctx.candidates(cnode, &c.name, &targets, 1000.0, 8000.0);
             let picks = select(&hikes, 4, false);
             if picks.len() < 2 {
@@ -1067,6 +1078,9 @@ pub fn curate(
             for &(b, _, _) in pairs.iter().take(8) {
                 let (path, ways) = s.path(b.node);
                 let ev = ctx.evaluate(&path, &ways, false);
+                if ev.bike > MAX_BIKE {
+                    continue;
+                }
                 let kinds: HashSet<Kind> = ev.passed.iter().map(|(k, _)| *k).collect();
                 let sc =
                     1.0 * kinds.len() as f64 + 2.5 * ev.open_high + 0.7 * ev.lc_variety.min(4.0)
@@ -1132,6 +1146,9 @@ pub fn curate(
                     continue;
                 }
                 let ev = ctx.evaluate(&full, &fw, false);
+                if ev.bike > MAX_BIKE {
+                    continue;
+                }
                 let kinds: HashSet<Kind> = ev.passed.iter().map(|(k, _)| *k).collect();
                 let sc =
                     1.0 * kinds.len() as f64 + 2.5 * ev.open_high + 0.7 * ev.lc_variety.min(4.0)
