@@ -123,6 +123,8 @@ pub struct Area {
     pub dests: Vec<Dest>,
     pub camps: Vec<Place>,
     pub parkings: Vec<Place>,
+    /// Hiking route relations (the hiking_route layer) passing through.
+    pub known: Vec<crate::recall::Known>,
 }
 
 struct Raw {
@@ -133,6 +135,7 @@ struct Raw {
     dests: Vec<Dest>,
     camps: Vec<Place>,
     parkings: Vec<Place>,
+    known: Vec<(String, String, String, Vec<(P, P)>)>, // id, name, network, segments
 }
 
 fn read_tile(
@@ -150,6 +153,7 @@ fn read_tile(
         dests: vec![],
         camps: vec![],
         parkings: vec![],
+        known: vec![],
     };
     let s = |x: i32, y: i32, ext: u32| -> P {
         (
@@ -276,6 +280,32 @@ fn read_tile(
                             raw.data.lakes.push((id, poly));
                         }
                         raw.data.land.push((1, Poly::new(rings, tx, ty)));
+                    }
+                    "hiking_route" if f.typ == 2 => {
+                        // Segments whose midpoint is in this tile: the tile's
+                        // buffer repeats its neighbours'.
+                        let e = l.extent as i32;
+                        let mut segs = vec![];
+                        for part in f.geometry() {
+                            for w in part.windows(2) {
+                                let (mx, my) = (w[0].0 + w[1].0, w[0].1 + w[1].1);
+                                if mx < 0 || my < 0 || mx >= 2 * e || my >= 2 * e {
+                                    continue;
+                                }
+                                segs.push((
+                                    s(w[0].0, w[0].1, l.extent),
+                                    s(w[1].0, w[1].1, l.extent),
+                                ));
+                            }
+                        }
+                        if !segs.is_empty() {
+                            raw.known.push((
+                                l.str(f, "osm_id").to_string(),
+                                l.str(f, "name").to_string(),
+                                l.str(f, "network").to_string(),
+                                segs,
+                            ));
+                        }
                     }
                     "park" | "trail_area" if f.typ == 3 && l.str(f, "osm_id") == park_id => {
                         raw.data.park.push(Poly::new(
@@ -478,7 +508,9 @@ impl Area {
             dests: vec![],
             camps: vec![],
             parkings: vec![],
+            known: vec![],
         };
+        let mut known: HashMap<String, crate::recall::Known> = HashMap::new();
         let mut lake_pts: HashMap<u32, (f64, f64, f64)> = HashMap::new();
         for r in raws {
             for (id, p) in &r.data.lakes {
@@ -494,8 +526,22 @@ impl Area {
             area.dests.extend(r.dests);
             area.camps.extend(r.camps);
             area.parkings.extend(r.parkings);
+            for (id, name, network, segs) in r.known {
+                known
+                    .entry(id.clone())
+                    .or_insert_with(|| crate::recall::Known {
+                        id,
+                        name,
+                        network,
+                        segs: vec![],
+                    })
+                    .segs
+                    .extend(segs);
+            }
             area.tiles.insert((r.tx, r.ty), r.data);
         }
+        area.known = known.into_values().collect();
+        area.known.sort_by(|a, b| a.id.cmp(&b.id));
         for d in &mut area.dests {
             if let Some((x, y, n)) = d.lake.and_then(|id| lake_pts.get(&id)) {
                 d.pt = (x / n, y / n);

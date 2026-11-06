@@ -28,6 +28,23 @@ def run(d, key):
     return int(secs), int(status), routes, timeouts
 
 
+def known(d, key):
+    """OSM hiking routes checked in the fixture: id -> its known.jsonl line,
+    the best coverage over the parks it's in."""
+    out = {}
+    path = os.path.join(d, key, 'known.jsonl')
+    if os.path.exists(path):
+        for line in open(path):
+            k = json.loads(line)
+            if k['id'] not in out or k['coverage'] > out[k['id']]['coverage']:
+                out[k['id']] = k
+    return out
+
+
+def found(ks):
+    return sum(k['coverage'] >= 0.7 for k in ks.values())
+
+
 def fmt_time(r):
     if r is None:
         return 'not run'
@@ -43,8 +60,17 @@ def describe(p):
     return f"{p['title']} ({p['type']}, {p.get('kind', '')}, {p['km']} km, {p['gain']:.0f} m)"
 
 
-rows, details = [], []
+rows, details, known_rows, known_details = [], [], [], []
 for f in parks:
+    bk_, nk_ = known(base_dir, f['key']), known(new_dir, f['key'])
+    if bk_ or nk_:
+        known_rows.append(f"| {f['key']} | {len(nk_)} | {found(bk_)} | {found(nk_)} |")
+        for i in sorted(set(bk_) | set(nk_)):
+            bc = bk_.get(i, {}).get('coverage', 0.0)
+            nc = nk_.get(i, {}).get('coverage', 0.0)
+            k = nk_.get(i) or bk_[i]
+            if (bc >= 0.7) != (nc >= 0.7) or abs(bc - nc) >= 0.2:
+                known_details.append(f"- {f['key']}: [{k['name']}](https://www.openstreetmap.org/relation/{i}) ({k['km']} km): {bc:.0%} → {nc:.0%}, best now {nk_.get(i, {}).get('best') or '—'}")
     b, n = run(base_dir, f['key']), run(new_dir, f['key'])
     br, nr = (b[2] if b else {}), (n[2] if n else {})
     # Routes match by title and type; ids are positions, which shift.
@@ -71,6 +97,14 @@ print('|---|---|---|---|---|---|')
 print('\n'.join(rows))
 if details:
     print('\n' + '\n\n'.join(details))
+if known_rows:
+    print('\n### Known hikes\n')
+    print('OSM hiking routes in or near each fixture park: found when one route covers 70% of it.\n')
+    print('| fixture | known hikes | found (main) | found (this change) |')
+    print('|---|---|---|---|')
+    print('\n'.join(known_rows))
+    if known_details:
+        print('\nChanged:\n\n' + '\n'.join(known_details))
 for d, label in ((base_dir, 'main'), (new_dir, 'this change')):
     for f in parks:
         r = run(d, f['key'])
