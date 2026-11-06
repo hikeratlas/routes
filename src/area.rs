@@ -368,15 +368,24 @@ fn read_tile(
                                 trailhead: l.str(f, "highway") == "trailhead",
                             });
                         }
-                        if name.is_empty() {
-                            continue;
-                        }
-                        if tourism == "camp_site" || tourism == "wilderness_hut" {
+                        // Places to sleep on a multi-day route: campsites, huts,
+                        // and lean-tos (the Letchworth Trail's shelters are
+                        // amenity=shelter, shelter_type=lean_to; #39). Unnamed
+                        // ones too (Sleeping Giant's Tee Harbour sites): curate
+                        // names them after the trail they're on.
+                        let sleep = tourism == "camp_site"
+                            || tourism == "wilderness_hut"
+                            || (amenity == "shelter"
+                                && matches!(l.str(f, "shelter_type"), "lean_to" | "basic_hut"));
+                        if sleep {
                             raw.camps.push(Place {
                                 name: name.to_string(),
                                 pt,
                                 trailhead: false,
                             });
+                        }
+                        if name.is_empty() {
+                            continue;
                         }
                         let kind = if l.name == "peak" {
                             Some(Kind::Peak)
