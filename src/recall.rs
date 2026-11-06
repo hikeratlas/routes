@@ -356,6 +356,56 @@ fn disambiguate(doc: &mut Value) {
 /// Mountain Trail trailhead" (#47). They're named for the destination alone,
 /// unless another route in the park goes there too or already has that
 /// name: then "from" tells them apart.
+/// A name without a trailing "(...)": "mount edith cavell (upper lot)" ->
+/// "mount edith cavell".
+fn strip_paren(s: &str) -> String {
+    match s
+        .strip_suffix(')')
+        .and_then(|t| t.rfind(" (").map(|i| &t[..i]))
+    {
+        Some(t) if !t.is_empty() => t.trim().to_string(),
+        _ => s.to_string(),
+    }
+}
+
+/// Multi-day loops are titled "<start> to <start>" (#55): Jasper's
+/// "Parking off Maligne Lake Road to Parking off Maligne Lake Road". Name
+/// an unnamed one for its turnaround, the stopover farthest from the start
+/// as the crow flies: "Tekarra loop from Parking off Maligne Lake Road".
+pub fn name_loops(doc: &mut Value) {
+    for t in doc["point_to_points"].as_array_mut().into_iter().flatten() {
+        if t["name"].is_string() {
+            continue;
+        }
+        let (Some(from), Some(to)) = (t["from"].as_str(), t["to"].as_str()) else {
+            continue;
+        };
+        if from != to || from.is_empty() {
+            continue;
+        }
+        let start = &t["route"]["line"][0];
+        let (Some(x0), Some(y0)) = (start[0].as_f64(), start[1].as_f64()) else {
+            continue;
+        };
+        let far = t["route"]["stopovers"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|s| {
+                let (x, y) = (s["at"][0].as_f64()?, s["at"][1].as_f64()?);
+                let k = y0.to_radians().cos();
+                Some((
+                    ((x - x0) * k).powi(2) + (y - y0).powi(2),
+                    s["name"].as_str()?,
+                ))
+            })
+            .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        if let Some((_, stop)) = far {
+            t["name"] = json!(format!("{stop} loop from {from}"));
+        }
+    }
+}
+
 /// What a start's name can end in after the trail or place it's named for.
 const START_SUFFIXES: [&str; 5] = [
     " trailhead",
@@ -385,7 +435,10 @@ pub fn drop_redundant_from(doc: &mut Value) {
         let (Some(dest), Some(from)) = (h["dest"].as_str(), h["from"].as_str()) else {
             continue;
         };
-        let (d, f) = (lower(dest), lower(from));
+        let d = lower(dest);
+        // A parenthetical on the start says which lot, not where you go:
+        // "Mount Edith Cavell (upper lot)" (#55).
+        let f = strip_paren(&lower(from));
         // A start named for the destination: exactly ("Skyline Trail from
         // Skyline Trail", a trailhead node named for its trail, #51), or with
         // a trailhead or parking suffix and maybe more of a trail name
@@ -465,6 +518,7 @@ mod tests {
             {"dest": "Fundy Footpath", "from": "Fundy Footpath Parking"},
             {"dest": "Cascade Falls", "from": "Cascade Falls Trail Head"},
             {"dest": "Gros Ventre", "from": "Gros Ventre Campground"},
+            {"dest": "Mount Edith Cavell", "from": "Mount Edith Cavell (upper lot)"},
         ]});
         drop_redundant_from(&mut doc);
         let names: Vec<Option<&str>> = doc["day_hikes"]
@@ -482,11 +536,40 @@ mod tests {
                 None, // not a trailhead name
                 None, // two routes to Green Gardens: "from" tells them apart
                 None,
-                Some("Lookout Trail"),  // already named
-                Some("Skyline Trail"),  // a start named exactly for it (#51)
-                Some("Fundy Footpath"), // ... or with a parking suffix
-                Some("Cascade Falls"),  // ... or "trail head"
-                None,                   // a campground isn't a trailhead name
+                Some("Lookout Trail"),      // already named
+                Some("Skyline Trail"),      // a start named exactly for it (#51)
+                Some("Fundy Footpath"),     // ... or with a parking suffix
+                Some("Cascade Falls"),      // ... or "trail head"
+                None,                       // a campground isn't a trailhead name
+                Some("Mount Edith Cavell"), // a parenthetical on the start (#55)
+            ]
+        );
+    }
+
+    #[test]
+    fn multi_day_loops_are_named_for_their_turnaround() {
+        let stop = |name: &str, x: f64, y: f64| json!({"name": name, "km": 0, "at": [x, y]});
+        let mut doc = json!({"point_to_points": [
+            {"from": "Lot", "to": "Lot", "route": {"line": [[0.0, 0.0], [0.1, 0.1]],
+              "stopovers": [stop("Near", 0.01, 0.0), stop("Far", 0.1, 0.1), stop("Middle", 0.05, 0.0)]}},
+            {"from": "Lot", "to": "Lot", "name": "La Cloche Silhouette Trail", "route": {"line": [[0.0, 0.0]], "stopovers": [stop("Far", 1.0, 1.0)]}},
+            {"from": "A", "to": "B", "route": {"line": [[0.0, 0.0]], "stopovers": [stop("Far", 1.0, 1.0)]}},
+            {"from": "Lot", "to": "Lot", "route": {"line": [[0.0, 0.0]], "stopovers": []}},
+        ]});
+        name_loops(&mut doc);
+        let names: Vec<Option<&str>> = doc["point_to_points"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str())
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                Some("Far loop from Lot"),
+                Some("La Cloche Silhouette Trail"),
+                None,
+                None
             ]
         );
     }
