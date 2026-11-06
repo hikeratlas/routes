@@ -1,0 +1,2082 @@
+[
+ {
+  "key": "1950657",
+  "park": "Tualatin River National Wildlife Refuge",
+  "half": "tune",
+  "known": 3,
+  "bbox": [
+   -122.965,
+   45.301,
+   -122.744,
+   45.46
+  ],
+  "id": "1950657"
+ },
+ {
+  "key": "8050176",
+  "park": "August A Busch Memorial Conservation Area",
+  "half": "holdout",
+  "known": 2,
+  "bbox": [
+   -90.854,
+   38.647,
+   -90.641,
+   38.79
+  ],
+  "id": "8050176"
+ },
+ {
+  "key": "6367622",
+  "park": "Rocky Point Pine Barrens State Forest",
+  "half": "holdout",
+  "known": 4,
+  "bbox": [
+   -73.024,
+   40.839,
+   -72.842,
+   40.993
+  ],
+  "id": "6367622"
+ },
+ {
+  "key": "186207",
+  "park": "Prairie Creek Redwoods State Park",
+  "half": "tune",
+  "known": 6,
+  "bbox": [
+   -124.138,
+   41.302,
+   -123.935,
+   41.517
+  ],
+  "id": "186207"
+ },
+ {
+  "key": "1537198148",
+  "park": "West Branch Wildlife Area",
+  "half": "tune",
+  "known": 3,
+  "bbox": [
+   -81.266,
+   41.074,
+   -81.086,
+   41.197
+  ],
+  "id": "1537198148"
+ },
+ {
+  "key": "16719724",
+  "park": "Northern Watershed",
+  "half": "tune",
+  "known": 3,
+  "bbox": [
+   -71.919,
+   42.563,
+   -71.751,
+   42.708
+  ],
+  "id": "16719724"
+ },
+ {
+  "key": "11865794",
+  "park": "Rockaway River Wildlife Management Area",
+  "half": "holdout",
+  "known": 11,
+  "bbox": [
+   -74.65,
+   40.853,
+   -74.328,
+   41.055
+  ],
+  "id": "11865794"
+ },
+ {
+  "key": "5966652",
+  "park": "Veranito Wilderness Study Area",
+  "half": "holdout",
+  "known": 3,
+  "bbox": [
+   -106.935,
+   34.084,
+   -106.746,
+   34.25
+  ],
+  "id": "5966652"
+ },
+ {
+  "key": "7445774",
+  "park": "Mount Greylock State Reservation",
+  "half": "holdout",
+  "known": 7,
+  "bbox": [
+   -73.298,
+   42.503,
+   -73.064,
+   42.727
+  ],
+  "id": "7445774"
+ },
+ {
+  "key": "2304556",
+  "park": "Manchester Waterworks",
+  "half": "holdout",
+  "known": 10,
+  "bbox": [
+   -71.474,
+   42.901,
+   -71.232,
+   43.151
+  ],
+  "id": "2304556"
+ },
+ {
+  "key": "8491736",
+  "park": "Pawtuckaway State Park",
+  "half": "tune",
+  "known": 12,
+  "bbox": [
+   -71.273,
+   43.027,
+   -71.064,
+   43.173
+  ],
+  "id": "8491736"
+ },
+ {
+  "key": "9581700",
+  "park": "Hickory Creek Preserve",
+  "half": "tune",
+  "known": 3,
+  "bbox": [
+   -87.988,
+   41.458,
+   -87.79,
+   41.573
+  ],
+  "id": "9581700"
+ },
+ {
+  "key": "5946757",
+  "park": "El Malpais Wilderness Study Area",
+  "half": "tune",
+  "known": 2,
+  "bbox": [
+   -108.258,
+   34.658,
+   -107.758,
+   35.075
+  ],
+  "id": "5946757"
+ },
+ {
+  "key": "9703151",
+  "park": "Jordan Lake State Recreation Area",
+  "half": "tune",
+  "known": 2,
+  "bbox": [
+   -79.161,
+   35.616,
+   -78.932,
+   35.812
+  ],
+  "id": "9703151"
+ },
+ {
+  "key": "6109778",
+  "park": "Glacier View Wilderness",
+  "half": "tune",
+  "known": 11,
+  "bbox": [
+   -122.018,
+   46.72,
+   -121.853,
+   46.869
+  ],
+  "id": "6109778"
+ },
+ {
+  "key": "8472098",
+  "park": "Long Pond Ironworks State Park",
+  "half": "tune",
+  "known": 32,
+  "bbox": [
+   -74.413,
+   41.064,
+   -74.236,
+   41.225
+  ],
+  "id": "8472098"
+ },
+ {
+  "key": "18145044",
+  "park": "Huntsville State Park",
+  "half": "holdout",
+  "known": 6,
+  "bbox": [
+   -95.599,
+   30.558,
+   -95.457,
+   30.684
+  ],
+  "id": "18145044"
+ },
+ {
+  "key": "9688730",
+  "park": "Lower Haw River State Natural Area",
+  "half": "tune",
+  "known": 2,
+  "bbox": [
+   -79.211,
+   35.669,
+   -79.027,
+   35.829
+  ],
+  "id": "9688730"
+ },
+ {
+  "key": "7231694",
+  "park": "McLean Creek Off-Highway Vehicle Public Land Use Zone",
+  "half": "holdout",
+  "known": 9,
+  "bbox": [
+   -114.872,
+   50.716,
+   -114.461,
+   50.957
+  ],
+  "id": "7231694"
+ },
+ {
+  "key": "18380489",
+  "park": "Town of Winchester Watershed Lands",
+  "half": "tune",
+  "known": 10,
+  "bbox": [
+   -73.206,
+   41.871,
+   -73.031,
+   41.991
+  ],
+  "id": "18380489"
+ },
+ {
+  "key": "2971288",
+  "park": "Chama River Canyon Wilderness",
+  "half": "tune",
+  "known": 3,
+  "bbox": [
+   -106.844,
+   36.17,
+   -106.48,
+   36.518
+  ],
+  "id": "2971288"
+ },
+ {
+  "key": "6366922",
+  "park": "Black Moshannon State Park",
+  "half": "holdout",
+  "known": 2,
+  "bbox": [
+   -78.146,
+   40.832,
+   -77.98,
+   40.971
+  ],
+  "id": "6366922"
+ },
+ {
+  "key": "8732589",
+  "park": "Mountain Bridge Wilderness Area",
+  "half": "tune",
+  "known": 26,
+  "bbox": [
+   -82.727,
+   35.028,
+   -82.404,
+   35.223
+  ],
+  "id": "8732589"
+ },
+ {
+  "key": "5834752",
+  "park": "Picacho State Recreational Area",
+  "half": "tune",
+  "known": 2,
+  "bbox": [
+   -114.75,
+   32.963,
+   -114.537,
+   33.115
+  ],
+  "id": "5834752"
+ },
+ {
+  "key": "2964453",
+  "park": "Wichita Mountains National Wildlife Refuge",
+  "half": "holdout",
+  "known": 2,
+  "bbox": [
+   -98.863,
+   34.637,
+   -98.455,
+   34.871
+  ],
+  "id": "2964453"
+ },
+ {
+  "key": "5827904",
+  "park": "Hellsgate Wilderness",
+  "half": "tune",
+  "known": 2,
+  "bbox": [
+   -111.318,
+   34.065,
+   -110.949,
+   34.329
+  ],
+  "id": "5827904"
+ },
+ {
+  "key": "6373662",
+  "park": "Eastern Five Ponds Access Primitive Area",
+  "half": "tune",
+  "known": 2,
+  "bbox": [
+   -74.833,
+   43.993,
+   -74.568,
+   44.185
+  ],
+  "id": "6373662"
+ },
+ {
+  "key": "11900925",
+  "park": "Pinkham Notch Scenic Area",
+  "half": "tune",
+  "known": 43,
+  "bbox": [
+   -71.371,
+   44.185,
+   -71.164,
+   44.341
+  ],
+  "id": "11900925"
+ },
+ {
+  "key": "144422",
+  "park": "High Point State Park",
+  "half": "holdout",
+  "known": 26,
+  "bbox": [
+   -74.859,
+   41.151,
+   -74.496,
+   41.395
+  ],
+  "id": "144422"
+ },
+ {
+  "key": "2907014",
+  "park": "Garden of the Gods Park",
+  "half": "holdout",
+  "known": 4,
+  "bbox": [
+   -104.963,
+   38.816,
+   -104.811,
+   38.932
+  ],
+  "id": "2907014"
+ },
+ {
+  "key": "15313337",
+  "park": "Minnesota Valley National Wildlife Refuge",
+  "half": "holdout",
+  "known": 7,
+  "bbox": [
+   -93.712,
+   44.649,
+   -93.14,
+   44.907
+  ],
+  "id": "15313337"
+ },
+ {
+  "key": "9517835",
+  "park": "Monte Sano State Park",
+  "half": "tune",
+  "known": 11,
+  "bbox": [
+   -86.596,
+   34.663,
+   -86.438,
+   34.802
+  ],
+  "id": "9517835"
+ },
+ {
+  "key": "6109074",
+  "park": "Indian Heaven Wilderness",
+  "half": "tune",
+  "known": 15,
+  "bbox": [
+   -121.915,
+   45.89,
+   -121.639,
+   46.124
+  ],
+  "id": "6109074"
+ },
+ {
+  "key": "1152589",
+  "park": "Hal Scott Regional Preserve and Park",
+  "half": "tune",
+  "known": 5,
+  "bbox": [
+   -81.209,
+   28.407,
+   -81.011,
+   28.581
+  ],
+  "id": "1152589"
+ },
+ {
+  "key": "933043005",
+  "park": "Mt. Pleasant Roadless Area",
+  "half": "tune",
+  "known": 2,
+  "bbox": [
+   -79.3,
+   37.658,
+   -79.08,
+   37.819
+  ],
+  "id": "933043005"
+ },
+ {
+  "key": "6442288",
+  "park": "Letchworth State Park",
+  "half": "holdout",
+  "known": 12,
+  "bbox": [
+   -78.12,
+   42.522,
+   -77.821,
+   42.794
+  ],
+  "id": "6442288"
+ },
+ {
+  "key": "64728",
+  "park": "October Mountain State Forest",
+  "half": "holdout",
+  "known": 15,
+  "bbox": [
+   -73.301,
+   42.245,
+   -73.057,
+   42.463
+  ],
+  "id": "64728"
+ },
+ {
+  "key": "171070166",
+  "park": "Little Manatee River State Park",
+  "half": "holdout",
+  "known": 3,
+  "bbox": [
+   -82.453,
+   27.613,
+   -82.294,
+   27.733
+  ],
+  "id": "171070166"
+ },
+ {
+  "key": "16200272",
+  "park": "Blackwater Falls State Park",
+  "half": "tune",
+  "known": 10,
+  "bbox": [
+   -79.591,
+   39.052,
+   -79.417,
+   39.169
+  ],
+  "id": "16200272"
+ },
+ {
+  "key": "6467713",
+  "park": "Minnewaska State Park Preserve",
+  "half": "holdout",
+  "known": 11,
+  "bbox": [
+   -74.454,
+   41.607,
+   -74.122,
+   41.818
+  ],
+  "id": "6467713"
+ },
+ {
+  "key": "16220874",
+  "park": "Wyantenock State Forest",
+  "half": "tune",
+  "known": 12,
+  "bbox": [
+   -73.487,
+   41.692,
+   -73.26,
+   41.885
+  ],
+  "id": "16220874"
+ },
+ {
+  "key": "2127682",
+  "park": "Green River Game Land",
+  "half": "tune",
+  "known": 9,
+  "bbox": [
+   -82.461,
+   35.2,
+   -82.133,
+   35.372
+  ],
+  "id": "2127682"
+ },
+ {
+  "key": "4480174",
+  "park": "Gateway National Recreation Area",
+  "half": "tune",
+  "known": 12,
+  "bbox": [
+   -74.166,
+   40.377,
+   -73.718,
+   40.704
+  ],
+  "id": "4480174"
+ },
+ {
+  "key": "1359055",
+  "park": "State Game Lands Number 170",
+  "half": "tune",
+  "known": 4,
+  "bbox": [
+   -77.182,
+   40.252,
+   -76.904,
+   40.424
+  ],
+  "id": "1359055"
+ },
+ {
+  "key": "7185092",
+  "park": "Desoto State Park",
+  "half": "holdout",
+  "known": 12,
+  "bbox": [
+   -85.707,
+   34.431,
+   -85.545,
+   34.554
+  ],
+  "id": "7185092"
+ },
+ {
+  "key": "11876991",
+  "park": "Marshall Swamp Tract",
+  "half": "tune",
+  "known": 6,
+  "bbox": [
+   -82.105,
+   29.05,
+   -81.899,
+   29.253
+  ],
+  "id": "11876991"
+ },
+ {
+  "key": "11535608",
+  "park": "Garin Regional Park Restricted Area",
+  "half": "tune",
+  "known": 16,
+  "bbox": [
+   -122.084,
+   37.568,
+   -121.895,
+   37.711
+  ],
+  "id": "11535608"
+ },
+ {
+  "key": "5372302",
+  "park": "Monarch Wilderness",
+  "half": "tune",
+  "known": 12,
+  "bbox": [
+   -118.961,
+   36.731,
+   -118.641,
+   36.96
+  ],
+  "id": "5372302"
+ },
+ {
+  "key": "2221065",
+  "park": "Sea to Sea Regional Park",
+  "half": "tune",
+  "known": 4,
+  "bbox": [
+   -123.805,
+   48.366,
+   -123.544,
+   48.533
+  ],
+  "id": "2221065"
+ },
+ {
+  "key": "5664016",
+  "park": "Pinckney State Recreation Area",
+  "half": "holdout",
+  "known": 5,
+  "bbox": [
+   -84.144,
+   42.29,
+   -83.881,
+   42.513
+  ],
+  "id": "5664016"
+ },
+ {
+  "key": "3327818",
+  "park": "Straight River Wildlife Area",
+  "half": "tune",
+  "known": 4,
+  "bbox": [
+   -92.491,
+   45.56,
+   -92.311,
+   45.671
+  ],
+  "id": "3327818"
+ },
+ {
+  "key": "5759707",
+  "park": "Kendrick Mountain Wilderness",
+  "half": "tune",
+  "known": 4,
+  "bbox": [
+   -111.963,
+   35.341,
+   -111.763,
+   35.486
+  ],
+  "id": "5759707"
+ },
+ {
+  "key": "6207158",
+  "park": "Lassen Volcanic National Park",
+  "half": "tune",
+  "known": 31,
+  "bbox": [
+   -121.637,
+   40.364,
+   -121.188,
+   40.63
+  ],
+  "id": "6207158"
+ },
+ {
+  "key": "12479463",
+  "park": "Berkshire Valley Wildlife Management Area",
+  "half": "holdout",
+  "known": 3,
+  "bbox": [
+   -74.699,
+   40.853,
+   -74.532,
+   40.986
+  ],
+  "id": "12479463"
+ },
+ {
+  "key": "11507515",
+  "park": "Pachaug State Forest",
+  "half": "tune",
+  "known": 16,
+  "bbox": [
+   -71.995,
+   41.419,
+   -71.727,
+   41.807
+  ],
+  "id": "11507515"
+ },
+ {
+  "key": "4237276",
+  "park": "Appalachian National Scenic Trail",
+  "half": "holdout",
+  "known": 7,
+  "bbox": [
+   -77.736,
+   39.29,
+   -77.427,
+   39.882
+  ],
+  "id": "4237276"
+ },
+ {
+  "key": "296096756",
+  "park": "Upper Stevens Creek County Park",
+  "half": "holdout",
+  "known": 12,
+  "bbox": [
+   -122.214,
+   37.218,
+   -122.067,
+   37.343
+  ],
+  "id": "296096756"
+ },
+ {
+  "key": "12308991",
+  "park": "Union Lake Wildlife Management Area",
+  "half": "holdout",
+  "known": 6,
+  "bbox": [
+   -75.172,
+   39.354,
+   -74.991,
+   39.567
+  ],
+  "id": "12308991"
+ },
+ {
+  "key": "14634221",
+  "park": "White Salmon National Wild and Scenic River",
+  "half": "holdout",
+  "known": 2,
+  "bbox": [
+   -121.583,
+   45.735,
+   -121.401,
+   45.902
+  ],
+  "id": "14634221"
+ },
+ {
+  "key": "11901287",
+  "park": "State Game Lands Number 211",
+  "half": "tune",
+  "known": 24,
+  "bbox": [
+   -76.985,
+   40.304,
+   -76.378,
+   40.631
+  ],
+  "id": "11901287"
+ },
+ {
+  "key": "1281589",
+  "park": "Little Manatee River Upper Tract",
+  "half": "tune",
+  "known": 4,
+  "bbox": [
+   -82.376,
+   27.597,
+   -82.17,
+   27.75
+  ],
+  "id": "1281589"
+ },
+ {
+  "key": "4163145",
+  "park": "Brooklyn State Wildlife Area",
+  "half": "tune",
+  "known": 3,
+  "bbox": [
+   -89.564,
+   42.769,
+   -89.387,
+   42.934
+  ],
+  "id": "4163145"
+ },
+ {
+  "key": "4234039",
+  "park": "Chapman Residual",
+  "half": "tune",
+  "known": 2,
+  "bbox": [
+   -77.176,
+   38.543,
+   -77.021,
+   38.662
+  ],
+  "id": "4234039"
+ },
+ {
+  "key": "3681588",
+  "park": "Youghiogheny Wild River Natural Environmental Area",
+  "half": "holdout",
+  "known": 13,
+  "bbox": [
+   -79.507,
+   39.379,
+   -79.34,
+   39.707
+  ],
+  "id": "3681588"
+ },
+ {
+  "key": "12157016",
+  "park": "Raystown Lake Recreation Area",
+  "half": "tune",
+  "known": 30,
+  "bbox": [
+   -78.327,
+   40.148,
+   -77.912,
+   40.504
+  ],
+  "id": "12157016"
+ },
+ {
+  "key": "944035",
+  "park": "Burns Run Wild Area",
+  "half": "tune",
+  "known": 3,
+  "bbox": [
+   -77.966,
+   41.152,
+   -77.784,
+   41.297
+  ],
+  "id": "944035"
+ },
+ {
+  "key": "7822936",
+  "park": "Paugussett State Forest",
+  "half": "tune",
+  "known": 14,
+  "bbox": [
+   -73.385,
+   41.341,
+   -73.127,
+   41.514
+  ],
+  "id": "7822936"
+ },
+ {
+  "key": "373343982",
+  "park": "Haymeadow Flowage State Natural Area",
+  "half": "holdout",
+  "known": 3,
+  "bbox": [
+   -89.11,
+   45.818,
+   -88.914,
+   45.935
+  ],
+  "id": "373343982"
+ },
+ {
+  "key": "5212364",
+  "park": "Parc national du Bic",
+  "half": "holdout",
+  "known": 9,
+  "bbox": [
+   -68.94,
+   48.264,
+   -68.64,
+   48.425
+  ],
+  "id": "5212364"
+ },
+ {
+  "key": "14401540",
+  "park": "Big East River Provincial Park",
+  "half": "tune",
+  "known": 3,
+  "bbox": [
+   -79.286,
+   45.33,
+   -78.855,
+   45.573
+  ],
+  "id": "14401540"
+ },
+ {
+  "key": "6368738",
+  "park": "Pine Creek Gorge Natural Area",
+  "half": "holdout",
+  "known": 4,
+  "bbox": [
+   -77.553,
+   41.511,
+   -77.301,
+   41.788
+  ],
+  "id": "6368738"
+ },
+ {
+  "key": "890202981",
+  "park": "R\u00e9serve \u00e9cologique Claude-M\u00e9lan\u00e7on",
+  "half": "tune",
+  "known": 15,
+  "bbox": [
+   -70.528,
+   46.55,
+   -70.351,
+   46.665
+  ],
+  "id": "890202981"
+ },
+ {
+  "key": "5908559",
+  "park": "Riverside State Park",
+  "half": "holdout",
+  "known": 2,
+  "bbox": [
+   -117.92,
+   47.633,
+   -117.386,
+   47.92
+  ],
+  "id": "5908559"
+ },
+ {
+  "key": "18956162",
+  "park": "Keweenaw Community Forest",
+  "half": "holdout",
+  "known": 3,
+  "bbox": [
+   -88.218,
+   47.258,
+   -87.98,
+   47.418
+  ],
+  "id": "18956162"
+ },
+ {
+  "key": "3225393",
+  "park": "Cunningham Falls State Park",
+  "half": "holdout",
+  "known": 15,
+  "bbox": [
+   -77.544,
+   39.499,
+   -77.366,
+   39.68
+  ],
+  "id": "3225393"
+ },
+ {
+  "key": "13334093",
+  "park": "Hammonasset Fishing Association Lands",
+  "half": "tune",
+  "known": 36,
+  "bbox": [
+   -72.71,
+   41.343,
+   -72.544,
+   41.478
+  ],
+  "id": "13334093"
+ },
+ {
+  "key": "11139478",
+  "park": "Cheat Wildlife Management Area",
+  "half": "tune",
+  "known": 3,
+  "bbox": [
+   -80.098,
+   38.43,
+   -79.683,
+   38.872
+  ],
+  "id": "11139478"
+ },
+ {
+  "key": "716982070",
+  "park": "Big Slough Preserve",
+  "half": "holdout",
+  "known": 2,
+  "bbox": [
+   -82.255,
+   27.075,
+   -82.113,
+   27.24
+  ],
+  "id": "716982070"
+ },
+ {
+  "key": "7066320",
+  "park": "Kettle Moraine State Forest - Southern Unit",
+  "half": "tune",
+  "known": 24,
+  "bbox": [
+   -88.766,
+   42.723,
+   -88.368,
+   43.012
+  ],
+  "id": "7066320"
+ },
+ {
+  "key": "31736168",
+  "park": "Winton Woods",
+  "half": "tune",
+  "known": 2,
+  "bbox": [
+   -84.613,
+   39.197,
+   -84.43,
+   39.329
+  ],
+  "id": "31736168"
+ },
+ {
+  "key": "16651523",
+  "park": "Bandelier Wilderness",
+  "half": "holdout",
+  "known": 48,
+  "bbox": [
+   -106.474,
+   35.655,
+   -106.199,
+   35.876
+  ],
+  "id": "16651523"
+ },
+ {
+  "key": "14195507",
+  "park": "Breadloaf Wilderness",
+  "half": "holdout",
+  "known": 6,
+  "bbox": [
+   -73.037,
+   43.881,
+   -72.77,
+   44.139
+  ],
+  "id": "14195507"
+ },
+ {
+  "key": "7140587",
+  "park": "Wissahickon Valley Park",
+  "half": "tune",
+  "known": 17,
+  "bbox": [
+   -75.3,
+   39.969,
+   -75.126,
+   40.131
+  ],
+  "id": "7140587"
+ },
+ {
+  "key": "16617293",
+  "park": "Deer Creek Fish and Wildlife Area",
+  "half": "holdout",
+  "known": 6,
+  "bbox": [
+   -86.966,
+   39.5,
+   -86.812,
+   39.645
+  ],
+  "id": "16617293"
+ },
+ {
+  "key": "11061832",
+  "park": "Morgan Hill State Forest",
+  "half": "holdout",
+  "known": 4,
+  "bbox": [
+   -76.096,
+   42.692,
+   -75.914,
+   42.86
+  ],
+  "id": "11061832"
+ },
+ {
+  "key": "5982567",
+  "park": "Tule Springs Fossil Beds National Monument",
+  "half": "tune",
+  "known": 2,
+  "bbox": [
+   -115.503,
+   36.248,
+   -115.08,
+   36.514
+  ],
+  "id": "5982567"
+ },
+ {
+  "key": "4495545",
+  "park": "Indian Peaks Wilderness",
+  "half": "holdout",
+  "known": 2,
+  "bbox": [
+   -105.896,
+   39.883,
+   -105.484,
+   40.236
+  ],
+  "id": "4495545"
+ },
+ {
+  "key": "4433255",
+  "park": "Frederick City Watershed",
+  "half": "tune",
+  "known": 9,
+  "bbox": [
+   -77.561,
+   39.438,
+   -77.397,
+   39.624
+  ],
+  "id": "4433255"
+ },
+ {
+  "key": "11015334",
+  "park": "Sparta Mountain Wildlife Management Area",
+  "half": "tune",
+  "known": 3,
+  "bbox": [
+   -74.678,
+   40.989,
+   -74.471,
+   41.159
+  ],
+  "id": "11015334"
+ },
+ {
+  "key": "11012082",
+  "park": "Norvin Green State Forest",
+  "half": "holdout",
+  "known": 35,
+  "bbox": [
+   -74.445,
+   40.971,
+   -74.249,
+   41.162
+  ],
+  "id": "11012082"
+ },
+ {
+  "key": "21813848",
+  "park": "Cypress Creek and Loxahatchee River Management Area",
+  "half": "holdout",
+  "known": 4,
+  "bbox": [
+   -80.273,
+   26.89,
+   -80.108,
+   27.042
+  ],
+  "id": "21813848"
+ },
+ {
+  "key": "5968853",
+  "park": "Little San Pascual Wilderness",
+  "half": "holdout",
+  "known": 5,
+  "bbox": [
+   -106.954,
+   33.641,
+   -106.703,
+   33.915
+  ],
+  "id": "5968853"
+ },
+ {
+  "key": "3718296",
+  "park": "Gunpowder Falls State Park Hereford Area",
+  "half": "holdout",
+  "known": 2,
+  "bbox": [
+   -76.778,
+   39.546,
+   -76.576,
+   39.675
+  ],
+  "id": "3718296"
+ },
+ {
+  "key": "7547258",
+  "park": "Core Enchantments Permit Area",
+  "half": "tune",
+  "known": 8,
+  "bbox": [
+   -120.904,
+   47.421,
+   -120.66,
+   47.57
+  ],
+  "id": "7547258"
+ },
+ {
+  "key": "10917131",
+  "park": "Thurmond Chatham Gameland",
+  "half": "tune",
+  "known": 9,
+  "bbox": [
+   -81.296,
+   36.304,
+   -81.068,
+   36.478
+  ],
+  "id": "10917131"
+ },
+ {
+  "key": "6364999",
+  "park": "Hunter-West Kill Wilderness",
+  "half": "holdout",
+  "known": 13,
+  "bbox": [
+   -74.476,
+   42.046,
+   -74.138,
+   42.248
+  ],
+  "id": "6364999"
+ },
+ {
+  "key": "11183890",
+  "park": "Clarksburg State Forest",
+  "half": "tune",
+  "known": 2,
+  "bbox": [
+   -73.228,
+   42.655,
+   -73.048,
+   42.789
+  ],
+  "id": "11183890"
+ },
+ {
+  "key": "4234637",
+  "park": "Susquehanna State Park",
+  "half": "tune",
+  "known": 7,
+  "bbox": [
+   -76.252,
+   39.45,
+   -76.034,
+   39.71
+  ],
+  "id": "4234637"
+ },
+ {
+  "key": "2786627",
+  "park": "San Gabriel Wilderness",
+  "half": "holdout",
+  "known": 2,
+  "bbox": [
+   -118.083,
+   34.195,
+   -117.797,
+   34.405
+  ],
+  "id": "2786627"
+ },
+ {
+  "key": "9392661",
+  "park": "B. Everett Jordan Project",
+  "half": "holdout",
+  "known": 4,
+  "bbox": [
+   -79.175,
+   35.588,
+   -78.838,
+   35.999
+  ],
+  "id": "9392661"
+ },
+ {
+  "key": "1085887",
+  "park": "Quehanna Wild Area",
+  "half": "tune",
+  "known": 4,
+  "bbox": [
+   -78.356,
+   41.124,
+   -78.045,
+   41.359
+  ],
+  "id": "1085887"
+ },
+ {
+  "key": "2227664",
+  "park": "Juan de Fuca Provincial Park",
+  "half": "tune",
+  "known": 2,
+  "bbox": [
+   -124.531,
+   48.38,
+   -124.006,
+   48.593
+  ],
+  "id": "2227664"
+ },
+ {
+  "key": "6195746",
+  "park": "Slinkard Wilderness Study Area",
+  "half": "holdout",
+  "known": 2,
+  "bbox": [
+   -119.697,
+   38.532,
+   -119.521,
+   38.708
+  ],
+  "id": "6195746"
+ },
+ {
+  "key": "3554290",
+  "park": "Manassas National Battlefield Park",
+  "half": "tune",
+  "known": 10,
+  "bbox": [
+   -77.631,
+   38.754,
+   -77.431,
+   38.89
+  ],
+  "id": "3554290"
+ },
+ {
+  "key": "39394317",
+  "park": "Calaveras South Grove Natural Preserve",
+  "half": "holdout",
+  "known": 2,
+  "bbox": [
+   -120.322,
+   38.189,
+   -120.157,
+   38.307
+  ],
+  "id": "39394317"
+ },
+ {
+  "key": "57872691",
+  "park": "Chatfield State Park",
+  "half": "holdout",
+  "known": 3,
+  "bbox": [
+   -105.153,
+   39.447,
+   -104.969,
+   39.612
+  ],
+  "id": "57872691"
+ },
+ {
+  "key": "6090018",
+  "park": "Middle Santiam Wilderness",
+  "half": "holdout",
+  "known": 2,
+  "bbox": [
+   -122.329,
+   44.453,
+   -122.104,
+   44.601
+  ],
+  "id": "6090018"
+ },
+ {
+  "key": "6947283",
+  "park": "ZEC Louise-Gosford",
+  "half": "tune",
+  "known": 4,
+  "bbox": [
+   -70.978,
+   45.184,
+   -70.557,
+   45.559
+  ],
+  "id": "6947283"
+ },
+ {
+  "key": "14162431",
+  "park": "State Ice Age Trail Area - Camp 27 Segment",
+  "half": "holdout",
+  "known": 4,
+  "bbox": [
+   -90.068,
+   45.25,
+   -89.898,
+   45.374
+  ],
+  "id": "14162431"
+ },
+ {
+  "key": "7193774",
+  "park": "Wind Creek State Park",
+  "half": "holdout",
+  "known": 2,
+  "bbox": [
+   -86.0,
+   32.801,
+   -85.865,
+   32.923
+  ],
+  "id": "7193774"
+ },
+ {
+  "key": "12146521",
+  "park": "R\u00e9serve \u00e9cologique Jackrabbit",
+  "half": "holdout",
+  "known": 3,
+  "bbox": [
+   -74.564,
+   45.942,
+   -74.376,
+   46.076
+  ],
+  "id": "12146521"
+ },
+ {
+  "key": "3085949",
+  "park": "Lake James State Park",
+  "half": "holdout",
+  "known": 6,
+  "bbox": [
+   -81.965,
+   35.678,
+   -81.783,
+   35.84
+  ],
+  "id": "3085949"
+ },
+ {
+  "key": "18380342",
+  "park": "Green Diamond Timberland",
+  "half": "holdout",
+  "known": 4,
+  "bbox": [
+   -123.256,
+   47.001,
+   -123.02,
+   47.152
+  ],
+  "id": "18380342"
+ },
+ {
+  "key": "14257255",
+  "park": "City of Meriden Watershed Reserve Land",
+  "half": "holdout",
+  "known": 16,
+  "bbox": [
+   -72.91,
+   41.501,
+   -72.72,
+   41.644
+  ],
+  "id": "14257255"
+ },
+ {
+  "key": "11801920",
+  "park": "Sleeping Giant Provincial Park",
+  "half": "holdout",
+  "known": 2,
+  "bbox": [
+   -89.009,
+   48.262,
+   -88.609,
+   48.609
+  ],
+  "id": "11801920"
+ },
+ {
+  "key": "21566828",
+  "park": "Roaring Creek Tract - Weiser State Forest",
+  "half": "holdout",
+  "known": 2,
+  "bbox": [
+   -76.562,
+   40.768,
+   -76.242,
+   40.899
+  ],
+  "id": "21566828"
+ },
+ {
+  "key": "14990826",
+  "park": "Katahdin Lake North Public Reserved Land",
+  "half": "holdout",
+  "known": 9,
+  "bbox": [
+   -68.888,
+   45.901,
+   -68.719,
+   46.047
+  ],
+  "id": "14990826"
+ },
+ {
+  "key": "11139474",
+  "park": "Rimel Wildlife Management Area",
+  "half": "holdout",
+  "known": 2,
+  "bbox": [
+   -80.222,
+   38.019,
+   -79.729,
+   38.434
+  ],
+  "id": "11139474"
+ },
+ {
+  "key": "5762749",
+  "park": "Cottonwood Canyon Wilderness",
+  "half": "tune",
+  "known": 30,
+  "bbox": [
+   -113.6,
+   37.139,
+   -113.347,
+   37.274
+  ],
+  "id": "5762749"
+ },
+ {
+  "key": "6437643",
+  "park": "Yakima River Wildlife Area",
+  "half": "tune",
+  "known": 3,
+  "bbox": [
+   -121.321,
+   47.123,
+   -120.791,
+   47.306
+  ],
+  "id": "6437643"
+ },
+ {
+  "key": "19432096",
+  "park": "Fort Hill State Memorial",
+  "half": "tune",
+  "known": 3,
+  "bbox": [
+   -83.479,
+   39.053,
+   -83.315,
+   39.179
+  ],
+  "id": "19432096"
+ },
+ {
+  "key": "2227687",
+  "park": "Gowlland Tod Provincial Park",
+  "half": "tune",
+  "known": 4,
+  "bbox": [
+   -123.619,
+   48.456,
+   -123.384,
+   48.617
+  ],
+  "id": "2227687"
+ },
+ {
+  "key": "21121697",
+  "park": "Loxahatchee Slough Natural Area",
+  "half": "holdout",
+  "known": 3,
+  "bbox": [
+   -80.296,
+   26.767,
+   -80.093,
+   26.943
+  ],
+  "id": "21121697"
+ },
+ {
+  "key": "6089576",
+  "park": "Badger Creek Wilderness",
+  "half": "tune",
+  "known": 14,
+  "bbox": [
+   -121.711,
+   45.188,
+   -121.29,
+   45.404
+  ],
+  "id": "6089576"
+ },
+ {
+  "key": "1205069",
+  "park": "Charles H. Bronson State Forest",
+  "half": "tune",
+  "known": 6,
+  "bbox": [
+   -81.126,
+   28.539,
+   -80.933,
+   28.695
+  ],
+  "id": "1205069"
+ },
+ {
+  "key": "944257",
+  "park": "State Game Lands Number 158",
+  "half": "holdout",
+  "known": 2,
+  "bbox": [
+   -78.466,
+   40.583,
+   -78.217,
+   40.779
+  ],
+  "id": "944257"
+ },
+ {
+  "key": "14568112",
+  "park": "Dolly Sods Wilderness",
+  "half": "tune",
+  "known": 18,
+  "bbox": [
+   -79.464,
+   38.913,
+   -79.243,
+   39.122
+  ],
+  "id": "14568112"
+ },
+ {
+  "key": "4487807",
+  "park": "Harold Parker State Forest",
+  "half": "holdout",
+  "known": 6,
+  "bbox": [
+   -71.179,
+   42.544,
+   -70.993,
+   42.71
+  ],
+  "id": "4487807"
+ },
+ {
+  "key": "8328784",
+  "park": "Gould Lake Conservation Area",
+  "half": "tune",
+  "known": 6,
+  "bbox": [
+   -76.666,
+   44.401,
+   -76.502,
+   44.544
+  ],
+  "id": "8328784"
+ },
+ {
+  "key": "14569133",
+  "park": "Little Lake Creek Wilderness",
+  "half": "holdout",
+  "known": 4,
+  "bbox": [
+   -95.809,
+   30.407,
+   -95.642,
+   30.565
+  ],
+  "id": "14569133"
+ },
+ {
+  "key": "537566",
+  "park": "Thickhead Mountain Wild Area",
+  "half": "tune",
+  "known": 17,
+  "bbox": [
+   -77.849,
+   40.655,
+   -77.629,
+   40.797
+  ],
+  "id": "537566"
+ },
+ {
+  "key": "13529689",
+  "park": "Zaleski State Forest",
+  "half": "tune",
+  "known": 3,
+  "bbox": [
+   -82.506,
+   39.192,
+   -82.19,
+   39.451
+  ],
+  "id": "13529689"
+ },
+ {
+  "key": "4854438",
+  "park": "Five Bridge Lakes Wilderness Area",
+  "half": "holdout",
+  "known": 3,
+  "bbox": [
+   -63.941,
+   44.49,
+   -63.675,
+   44.725
+  ],
+  "id": "4854438"
+ },
+ {
+  "key": "12835486",
+  "park": "Camel's Hump State Park",
+  "half": "holdout",
+  "known": 9,
+  "bbox": [
+   -73.01,
+   44.157,
+   -72.747,
+   44.423
+  ],
+  "id": "12835486"
+ },
+ {
+  "key": "19198574",
+  "park": "Ossipee Pine Barrens Preserve",
+  "half": "tune",
+  "known": 3,
+  "bbox": [
+   -71.262,
+   43.764,
+   -71.082,
+   43.914
+  ],
+  "id": "19198574"
+ },
+ {
+  "key": "12307958",
+  "park": "Gifford Point State Wildlife Management Area",
+  "half": "holdout",
+  "known": 10,
+  "bbox": [
+   -95.95,
+   41.121,
+   -95.783,
+   41.232
+  ],
+  "id": "12307958"
+ },
+ {
+  "key": "13364620",
+  "park": "Heald Tract",
+  "half": "holdout",
+  "known": 5,
+  "bbox": [
+   -71.884,
+   42.74,
+   -71.718,
+   42.874
+  ],
+  "id": "13364620"
+ },
+ {
+  "key": "8392864",
+  "park": "Wild Rogue Wilderness",
+  "half": "holdout",
+  "known": 2,
+  "bbox": [
+   -124.123,
+   42.547,
+   -123.757,
+   42.854
+  ],
+  "id": "8392864"
+ },
+ {
+  "key": "18592072",
+  "park": "Sandy Hook Unit",
+  "half": "holdout",
+  "known": 2,
+  "bbox": [
+   -74.079,
+   40.354,
+   -73.916,
+   40.527
+  ],
+  "id": "18592072"
+ },
+ {
+  "key": "12130365",
+  "park": "White Clay Creek Preserve",
+  "half": "tune",
+  "known": 2,
+  "bbox": [
+   -75.85,
+   39.677,
+   -75.696,
+   39.819
+  ],
+  "id": "12130365"
+ },
+ {
+  "key": "17793299",
+  "park": "McDonald Research Forest",
+  "half": "holdout",
+  "known": 20,
+  "bbox": [
+   -123.417,
+   44.558,
+   -123.159,
+   44.722
+  ],
+  "id": "17793299"
+ },
+ {
+  "key": "5749060",
+  "park": "Florissant Fossil Beds National Monument",
+  "half": "tune",
+  "known": 2,
+  "bbox": [
+   -105.37,
+   38.839,
+   -105.188,
+   38.986
+  ],
+  "id": "5749060"
+ },
+ {
+  "key": "1318007786",
+  "park": "Bald Mountain Public Reserved Land",
+  "half": "tune",
+  "known": 2,
+  "bbox": [
+   -70.856,
+   44.88,
+   -70.686,
+   45.008
+  ],
+  "id": "1318007786"
+ },
+ {
+  "key": "10396498",
+  "park": "Raging River State Forest",
+  "half": "holdout",
+  "known": 4,
+  "bbox": [
+   -121.996,
+   47.383,
+   -121.735,
+   47.555
+  ],
+  "id": "10396498"
+ },
+ {
+  "key": "1167206",
+  "park": "Saylorville Lake Project",
+  "half": "tune",
+  "known": 22,
+  "bbox": [
+   -93.841,
+   41.57,
+   -93.569,
+   41.857
+  ],
+  "id": "1167206"
+ },
+ {
+  "key": "35762959",
+  "park": "South Bluff/Devil's Nose State Natural Area",
+  "half": "holdout",
+  "known": 9,
+  "bbox": [
+   -89.835,
+   43.338,
+   -89.62,
+   43.459
+  ],
+  "id": "35762959"
+ },
+ {
+  "key": "4237288",
+  "park": "Piscataway Park",
+  "half": "tune",
+  "known": 2,
+  "bbox": [
+   -77.163,
+   38.623,
+   -76.944,
+   38.753
+  ],
+  "id": "4237288"
+ },
+ {
+  "key": "184358",
+  "park": "Jedediah Smith Redwoods State Park",
+  "half": "holdout",
+  "known": 2,
+  "bbox": [
+   -124.215,
+   41.681,
+   -123.99,
+   41.885
+  ],
+  "id": "184358"
+ },
+ {
+  "key": "11348156",
+  "park": "Lowden-Miller State Forest",
+  "half": "tune",
+  "known": 3,
+  "bbox": [
+   -89.444,
+   41.886,
+   -89.272,
+   42.021
+  ],
+  "id": "11348156"
+ },
+ {
+  "key": "7573791",
+  "park": "Penns Creek Wild Area",
+  "half": "tune",
+  "known": 6,
+  "bbox": [
+   -77.521,
+   40.77,
+   -77.235,
+   40.908
+  ],
+  "id": "7573791"
+ },
+ {
+  "key": "7547211",
+  "park": "Stuart Permit Area",
+  "half": "tune",
+  "known": 11,
+  "bbox": [
+   -120.987,
+   47.433,
+   -120.753,
+   47.578
+  ],
+  "id": "7547211"
+ },
+ {
+  "key": "6196739",
+  "park": "Granite Chief Wilderness",
+  "half": "tune",
+  "known": 6,
+  "bbox": [
+   -120.439,
+   39.008,
+   -120.173,
+   39.268
+  ],
+  "id": "6196739"
+ },
+ {
+  "key": "12250276",
+  "park": "Patapsco Valley State Park",
+  "half": "holdout",
+  "known": 9,
+  "bbox": [
+   -77.074,
+   39.133,
+   -76.567,
+   39.421
+  ],
+  "id": "12250276"
+ },
+ {
+  "key": "13621754",
+  "park": "Mount Rainier Gateway Protected Area",
+  "half": "holdout",
+  "known": 5,
+  "bbox": [
+   -122.111,
+   46.676,
+   -121.859,
+   46.824
+  ],
+  "id": "13621754"
+ },
+ {
+  "key": "187247",
+  "park": "Cuyamaca Rancho State Park",
+  "half": "holdout",
+  "known": 3,
+  "bbox": [
+   -116.674,
+   32.814,
+   -116.455,
+   33.073
+  ],
+  "id": "187247"
+ },
+ {
+  "key": "1309932833",
+  "park": "Wolf Ridge Environmental Learning Center",
+  "half": "tune",
+  "known": 3,
+  "bbox": [
+   -91.286,
+   47.327,
+   -91.105,
+   47.445
+  ],
+  "id": "1309932833"
+ },
+ {
+  "key": "6258591",
+  "park": "Foothills Nature Preserve",
+  "half": "tune",
+  "known": 3,
+  "bbox": [
+   -122.257,
+   37.288,
+   -122.112,
+   37.415
+  ],
+  "id": "6258591"
+ },
+ {
+  "key": "411184016",
+  "park": "Marathon County Forest-Nine Mile Unit",
+  "half": "tune",
+  "known": 5,
+  "bbox": [
+   -89.811,
+   44.792,
+   -89.607,
+   44.936
+  ],
+  "id": "411184016"
+ },
+ {
+  "key": "171095",
+  "park": "Valles Caldera National Preserve",
+  "half": "holdout",
+  "known": 19,
+  "bbox": [
+   -106.677,
+   35.783,
+   -106.344,
+   36.053
+  ],
+  "id": "171095"
+ },
+ {
+  "key": "14368561",
+  "park": "Connecticut Lakes Wildlife Management Area North",
+  "half": "tune",
+  "known": 2,
+  "bbox": [
+   -71.346,
+   45.137,
+   -71.116,
+   45.313
+  ],
+  "id": "14368561"
+ }
+]

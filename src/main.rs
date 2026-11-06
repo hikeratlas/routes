@@ -35,6 +35,7 @@ use std::time::Instant;
 
 const USAGE: &str = "usage: routes --tiles FILE|URL [--tiles ...] --out DIR
   [--park NAME]          only parks whose name contains NAME
+  [--park-id ID]         only the park (or trail area) with this osm_id
   [--bbox W,S,E,N]       only parks in this box (default: the tiles' bounds)
   [--min-area KM2]       smallest park to curate (default 5)
   [--max-tiles N]        skip parks needing more z14 tiles than this (default 50000)
@@ -55,6 +56,7 @@ struct Args {
     tiles: Vec<String>,
     out: PathBuf,
     park: Option<String>,
+    park_id: Option<String>,
     bbox: Option<[f64; 4]>,
     min_area: f64,
     max_tiles: usize,
@@ -72,6 +74,7 @@ fn args() -> Args {
         tiles: vec![],
         out: PathBuf::new(),
         park: None,
+        park_id: None,
         bbox: None,
         min_area: 5.0,
         max_tiles: 50000,
@@ -95,6 +98,7 @@ fn args() -> Args {
             "--tiles" => a.tiles.push(val),
             "--out" => a.out = val.into(),
             "--park" => a.park = Some(val.to_lowercase()),
+            "--park-id" => a.park_id = Some(val),
             "--bbox" => {
                 let b: Vec<f64> = val
                     .split(',')
@@ -205,6 +209,9 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> Vec<Park> {
                         || a.park
                             .as_ref()
                             .is_some_and(|p| !name.to_lowercase().contains(p))
+                        || a.park_id
+                            .as_ref()
+                            .is_some_and(|id| l.str(f, "osm_id") != id)
                     {
                         continue;
                     }
