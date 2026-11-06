@@ -21,7 +21,9 @@ import requests
 from pmtiles.tile import Compression, deserialize_directory, deserialize_header, find_tile, zxy_to_tileid
 from pmtiles.writer import Writer
 
-LAYERS = ['ways', 'land', 'water', 'parks', 'peaks', 'pois', 'trailareas']
+LAYERS = ['ways', 'land', 'water', 'parks', 'peaks', 'pois', 'trailareas', 'hikingroutes']
+# Layers a build may not have yet: skipped if missing.
+OPTIONAL = {'trailareas', 'hikingroutes'}
 GAP = 1 << 20
 session = requests.Session()
 
@@ -104,6 +106,8 @@ def main():
     def run(job):
         p, layer = job
         t = time.time()
+        if layer in OPTIONAL and requests.head(f'{base}/{layer}.pmtiles', timeout=60).status_code == 404:
+            return f"{p['key']}/{layer}: none in this build, skipped"
         n, spans, size = extract(f'{base}/{layer}.pmtiles', p['bbox'], os.path.join(out_dir, p['key'], f'{layer}.pmtiles'))
         return f"{p['key']}/{layer}: {n} tiles in {spans} ranges, {size / 1e6:.1f} MB, {time.time() - t:.0f}s"
 

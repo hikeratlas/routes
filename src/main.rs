@@ -15,11 +15,12 @@ mod dem;
 mod geo;
 mod mvt;
 mod pmtiles;
+mod recall;
 
 use area::Area;
 use pmtiles::PmTiles;
 use rayon::prelude::*;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
@@ -351,6 +352,9 @@ fn main() {
             );
             let mut doc = c.to_json();
             doc["park"] = json!({"id": p.id, "name": p.name});
+            // Kept apart from the park's routes (write_outputs moves it to
+            // known.jsonl), so the website's files don't grow.
+            doc["known"] = json!(recall::check(&area, &doc));
             Some(Curated { area: p.area, doc })
         })
         .collect();
@@ -415,11 +419,26 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
     std::fs::create_dir_all(out.join("parks")).unwrap();
     let mut lines =
         std::io::BufWriter::new(std::fs::File::create(out.join("routes.geojsonl")).unwrap());
+    let mut known =
+        std::io::BufWriter::new(std::fs::File::create(out.join("known.jsonl")).unwrap());
+    // Each relation's best coverage over the parks it's checked in.
+    let mut best: HashMap<String, f64> = HashMap::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let s = |v: &serde_json::Value, k: &str| v[k].as_str().unwrap_or("").to_string();
     let mut written = 0;
     for Curated { mut doc, .. } in docs {
         let (p_id, p_name) = (s(&doc["park"], "id"), s(&doc["park"], "name"));
+        if let Some(Value::Array(ks)) = doc.as_object_mut().and_then(|o| o.remove("known")) {
+            for mut k in ks {
+                let id = s(&k, "id");
+                let c = k["coverage"].as_f64().unwrap_or(0.0);
+                let e = best.entry(id).or_insert(0.0);
+                *e = e.max(c);
+                k["park_id"] = json!(p_id);
+                k["park"] = json!(p_name);
+                writeln!(known, "{k}").unwrap();
+            }
+        }
         let mut keep = |list: &str, key: &dyn Fn(&serde_json::Value) -> String| {
             let v: Vec<serde_json::Value> = doc[list]
                 .as_array()
@@ -516,4 +535,15 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
     }
     eprintln!("{written} parks with routes");
     lines.flush().unwrap();
+    known.flush().unwrap();
+    let n = best.len();
+    let found = best.values().filter(|&&c| c >= recall::FOUND).count();
+    let partial = best
+        .values()
+        .filter(|&&c| (recall::PARTIAL..recall::FOUND).contains(&c))
+        .count();
+    eprintln!(
+        "known hikes (OSM hiking routes): {n}, found {found}, partly {partial}, missed {} (details in known.jsonl)",
+        n - found - partial
+    );
 }
