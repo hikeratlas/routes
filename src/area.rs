@@ -599,6 +599,30 @@ impl Area {
         best
     }
 
+    /// Km of walkable trail (paths and tracks, not bike-only) in the park:
+    /// how much hiking it has, for how many day hikes to choose (#38).
+    pub fn trail_km_in_park(&self) -> f64 {
+        let g = &self.graph;
+        let mut m = 0.0;
+        for (a, es) in g.adj.iter().enumerate() {
+            for e in es {
+                // Each edge is in both nodes' lists: count it once.
+                if (e.to as usize) < a {
+                    continue;
+                }
+                let w = &g.ways[e.way as usize];
+                if !matches!(w.class, Class::Trail | Class::Track) || w.bike {
+                    continue;
+                }
+                let (p, q) = (g.pts[a], g.pts[e.to as usize]);
+                if self.in_park(((p.0 + q.0) / 2.0, (p.1 + q.1) / 2.0)) {
+                    m += e.m as f64;
+                }
+            }
+        }
+        m / 1000.0
+    }
+
     pub fn in_park(&self, p: P) -> bool {
         self.tiles
             .get(&geo::tile_of(p))

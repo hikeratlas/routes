@@ -348,7 +348,20 @@ fn main() {
                     }
                 }
             }
-            let n_day = (((p.area / 1e6).sqrt() / 2.0) as usize).clamp(3, 15);
+            let k: f64 = std::env::var("BUDGET_K").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
+            let n_day = (((p.area / 1e6).sqrt() / 2.0) as usize)
+                .max((k * area.trail_km_in_park().sqrt()).round() as usize)
+                .clamp(3, 15);
+            if std::env::var_os("DEBUG_BUDGET").is_some() {
+                eprintln!(
+                    "BUDGET {}\t{}\t{:.1}\t{:.1}\t{}",
+                    p.id,
+                    p.name,
+                    p.area / 1e6,
+                    area.trail_km_in_park(),
+                    n_day
+                );
+            }
             let deadline = a
                 .park_timeout
                 .map(|secs| t + std::time::Duration::from_secs_f64(secs));
