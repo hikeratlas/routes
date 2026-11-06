@@ -19,7 +19,7 @@ pub struct Way {
     pub name: String,
     pub class: Class,
     pub bike: bool,
-    pub walk: bool, // foot=designated or yes
+    pub walk: bool, // foot=designated, or on a hiking route relation
 }
 
 #[derive(Clone, Copy)]
@@ -208,14 +208,20 @@ fn read_tile(
                         if matches!(foot, "no" | "private" | "use_sidepath") {
                             continue;
                         }
-                        // Bike trails: designated for bikes, or graded for
-                        // mountain bikes (mtb), unless walking is designated too.
-                        let mtb = l
-                            .get(f, "mtb")
-                            .is_some_and(|v| matches!(v, mvt::Value::Bool(true)));
-                        let bike = (l.str(f, "bicycle") == "designated" || mtb)
-                            && foot != "designated"
-                            && foot != "yes";
+                        // Bike trails. Graded for mountain bikes (mtb) is a
+                        // bike trail unless it's designated for walking or on
+                        // a hiking route: foot=yes only says walkers may use
+                        // it, and Whistler's bike park is mostly foot=yes. A
+                        // path designated for bikes is one unless walkers are
+                        // at least allowed (a shared-use path).
+                        let flag = |k: &str| {
+                            l.get(f, k)
+                                .is_some_and(|v| matches!(v, mvt::Value::Bool(true)))
+                        };
+                        let walk = foot == "designated" || flag("on_route");
+                        let bike = !walk
+                            && (flag("mtb")
+                                || (l.str(f, "bicycle") == "designated" && foot != "yes"));
                         for line in f.geometry() {
                             let pts: Vec<P> =
                                 line.into_iter().map(|(x, y)| s(x, y, l.extent)).collect();
@@ -224,7 +230,7 @@ fn read_tile(
                                     name: l.str(f, "name").to_string(),
                                     class,
                                     bike,
-                                    walk: foot == "designated" || foot == "yes",
+                                    walk,
                                 },
                                 pts,
                             ));
@@ -384,8 +390,8 @@ impl Graph {
         let mut edge_nodes = Vec::new();
         // A bike trail is often tagged as one on only some of its ways (e.g.
         // Whistler's Yummy Numby: one of four), so a named trail with any
-        // bike-only way is bike-only throughout, wherever walking isn't
-        // designated.
+        // bike way is a bike trail throughout, wherever walking isn't
+        // designated (or it's on a hiking route).
         let bike_names: std::collections::HashSet<&str> = raws
             .iter()
             .flat_map(|r| &r.lines)
