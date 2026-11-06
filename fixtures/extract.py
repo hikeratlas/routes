@@ -28,11 +28,28 @@ GAP = 1 << 20
 session = requests.Session()
 
 
+class Changed(Exception):
+    """The archive was replaced while we read it (a build rewriting it)."""
+
+
+etags = {}  # url -> the ETag of the version we started reading
+
+
 def fetch(url, offset, length):
+    """Bytes [offset, offset+length) of the archive's version we first read:
+    with If-Match, a replaced file answers 412 instead of mixing versions."""
     for attempt in range(6):
+        headers = {'Range': f'bytes={offset}-{offset + length - 1}'}
+        if url in etags:
+            headers['If-Match'] = etags[url]
         try:
-            r = session.get(url, headers={'Range': f'bytes={offset}-{offset + length - 1}'}, timeout=120)
+            r = session.get(url, headers=headers, timeout=120)
+            if r.status_code == 412:
+                raise Changed(f'{url} changed while extracting; run again once the build is done')
             r.raise_for_status()
+            etags.setdefault(url, r.headers.get('ETag'))
+            if etags[url] is None:
+                del etags[url]
             return r.content
         except requests.RequestException:
             if attempt == 5:
