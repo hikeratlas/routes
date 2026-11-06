@@ -26,10 +26,6 @@ jobs:
           ref: ${{ github.base_ref || 'main' }}
           path: base
 
-      - name: Week
-        id: week
-        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
-
       - name: Restore cargo builds
         uses: actions/cache@v4
         with:
@@ -45,28 +41,53 @@ jobs:
           (cd base && cargo build --release --locked)
           (cd new && cargo build --release --locked)
 
-      # The tiles are re-extracted weekly, so both builds see the same, fairly
-      # fresh data. Extracting takes ~5 min.
+      # The tiles come from a snapshot the last north-america build froze
+      # (basemap's build-area.yml fixtures job; fixtures/latest.json), so
+      # every pull request compares on the same tiles, and none is read while
+      # a build rewrites them. A change to parks.json needs tiles the
+      # snapshot doesn't have: those are extracted from the live layers.
+      - name: Pick the fixture tiles
+        id: snap
+        run: |
+          curl -sf https://public.hikeratlas.com/fixtures/latest.json > latest.json || echo '{}' > latest.json
+          cat latest.json
+          parks=$(sha256sum new/fixtures/parks.json | cut -d' ' -f1)
+          if [ "$(jq -r '.parks_sha256 // ""' latest.json)" = "$parks" ]; then
+            echo "key=snapshot-$(jq -r .id latest.json)" >> "$GITHUB_OUTPUT"
+            echo "url=$(jq -r .url latest.json)" >> "$GITHUB_OUTPUT"
+            echo "Fixture tiles: snapshot $(jq -r .id latest.json), built $(jq -r .built latest.json)" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "key=live-$parks-$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+            echo "Fixture tiles: extracted from the live layers (no snapshot for this parks.json)" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Restore fixture tiles
         id: tiles
         uses: actions/cache@v4
         with:
           path: tiles
-          key: fixtures-tiles-${{ hashFiles('new/fixtures/parks.json') }}-${{ steps.week.outputs.week }}
+          key: fixtures-tiles-${{ steps.snap.outputs.key }}
 
-      - name: Extract fixture tiles
+      - name: Fetch fixture tiles
         if: steps.tiles.outputs.cache-hit != 'true'
+        env:
+          URL: ${{ steps.snap.outputs.url }}
         run: |
-          python3 -m venv "$RUNNER_TEMP/venv"
-          "$RUNNER_TEMP/venv/bin/pip" install -q pmtiles requests
-          "$RUNNER_TEMP/venv/bin/python" new/fixtures/extract.py https://public.hikeratlas.com/layers/north-america tiles
+          if [ -n "$URL" ]; then
+            curl -sf --retry 4 "$URL" | tar xz
+          else
+            python3 -m venv "$RUNNER_TEMP/venv"
+            "$RUNNER_TEMP/venv/bin/pip" install -q pmtiles requests
+            "$RUNNER_TEMP/venv/bin/python" new/fixtures/extract.py https://public.hikeratlas.com/layers/north-america tiles
+          fi
+          du -sh tiles
 
       - name: Restore QRank
         id: qrank
         uses: actions/cache@v4
         with:
           path: qrank.db
-          key: fixtures-qrank-${{ steps.week.outputs.week }}
+          key: fixtures-qrank-${{ steps.snap.outputs.key }}
 
       - name: Fetch QRank
         if: steps.qrank.outputs.cache-hit != 'true'

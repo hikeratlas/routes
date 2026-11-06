@@ -9,6 +9,13 @@ To run them locally:
 
     pip install pmtiles requests
     fixtures/extract.py https://public.hikeratlas.com/layers/north-america /tmp/fx-tiles
+
+or use the snapshot the last north-america build froze, as CI does:
+
+    curl -s "$(curl -s https://public.hikeratlas.com/fixtures/latest.json | jq -r .url)" | tar xz -C /tmp && mv /tmp/tiles /tmp/fx-tiles
+
+then:
+
     fixtures/run.sh target/release/routes /tmp/fx-tiles /tmp/fx-out/new qrank.db /tmp/dem
     fixtures/run.sh OTHER_BUILD /tmp/fx-tiles /tmp/fx-out/base qrank.db /tmp/dem
     fixtures/compare.py /tmp/fx-out/base /tmp/fx-out/new
