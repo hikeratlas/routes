@@ -835,6 +835,7 @@ impl<'a> Ctx<'a> {
                 wikidata: String::new(),
                 qrank: 1.0,
                 lake: None,
+                minor: false,
             };
             let (sc, parts) = score(&ev, &d, *is_loop);
             out.push(Cand {
