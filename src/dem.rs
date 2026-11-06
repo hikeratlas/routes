@@ -34,18 +34,25 @@ impl Dem {
         let bytes = match path.as_ref().and_then(|p| std::fs::read(p).ok()) {
             Some(b) => b,
             None => {
+                // Retry a failed request, and a connection dropped while
+                // reading the body: one reset mid-download (basemap run
+                // 42134348228) panicked a whole shard.
                 let mut tries = 0;
                 let b = loop {
-                    match self.agent.get(&format!("{URL}/{z}/{x}/{y}.png")).call() {
+                    let got = match self.agent.get(&format!("{URL}/{z}/{x}/{y}.png")).call() {
                         Ok(r) => {
                             let mut b = Vec::new();
                             r.into_reader()
                                 .read_to_end(&mut b)
-                                .expect("reading DEM tile");
-                            break b;
+                                .map(|_| b)
+                                .map_err(|e| e.to_string())
                         }
-                        Err(ureq::Error::Status(404, _)) => break Vec::new(),
-                        Err(e) if tries < 5 => {
+                        Err(ureq::Error::Status(404, _)) => Ok(Vec::new()),
+                        Err(e) => Err(e.to_string()),
+                    };
+                    match got {
+                        Ok(b) => break b,
+                        Err(e) if tries < 6 => {
                             tries += 1;
                             eprintln!("DEM {z}/{x}/{y}: {e}, retrying");
                             std::thread::sleep(std::time::Duration::from_millis(500 << tries));
