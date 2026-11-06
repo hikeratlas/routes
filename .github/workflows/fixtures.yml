@@ -51,7 +51,8 @@ jobs:
         run: |
           curl -sf https://public.hikeratlas.com/fixtures/latest.json > latest.json || echo '{}' > latest.json
           cat latest.json
-          parks=$(sha256sum new/fixtures/parks.json | cut -d' ' -f1)
+          # The snapshot holds the fixtures and the oracle sample (oracle.json)
+          parks=$(cat new/fixtures/parks.json new/fixtures/oracle.json | sha256sum | cut -d' ' -f1)
           if [ "$(jq -r '.parks_sha256 // ""' latest.json)" = "$parks" ]; then
             echo "key=snapshot-$(jq -r .id latest.json)" >> "$GITHUB_OUTPUT"
             echo "url=$(jq -r .url latest.json)" >> "$GITHUB_OUTPUT"
@@ -79,6 +80,7 @@ jobs:
             python3 -m venv "$RUNNER_TEMP/venv"
             "$RUNNER_TEMP/venv/bin/pip" install -q pmtiles requests
             "$RUNNER_TEMP/venv/bin/python" new/fixtures/extract.py https://public.hikeratlas.com/layers/north-america tiles
+            "$RUNNER_TEMP/venv/bin/python" new/fixtures/extract.py --parks new/fixtures/oracle.json https://public.hikeratlas.com/layers/north-america tiles/oracle
           fi
           du -sh tiles
 
@@ -97,8 +99,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: dem
-          key: fixtures-dem-${{ hashFiles('new/fixtures/parks.json') }}-${{ github.sha }}
-          restore-keys: fixtures-dem-${{ hashFiles('new/fixtures/parks.json') }}-
+          key: fixtures-dem-${{ hashFiles('new/fixtures/parks.json', 'new/fixtures/oracle.json') }}-${{ github.sha }}
+          restore-keys: fixtures-dem-${{ hashFiles('new/fixtures/parks.json', 'new/fixtures/oracle.json') }}-
 
       - name: Curate with ${{ github.base_ref || 'main' }}
         run: new/fixtures/run.sh base/target/release/routes tiles out/base qrank.db dem "$LIMIT"
@@ -109,9 +111,22 @@ jobs:
       - name: Compare
         run: python3 new/fixtures/compare.py out/base out/new | tee -a "$GITHUB_STEP_SUMMARY"
 
+      # Known-hike recall on the oracle sample: ~160 parks with OSM hiking
+      # routes, in a tuning half and a held-out half (see fixtures/oracle.py).
+      - name: Oracle sample with ${{ github.base_ref || 'main' }}
+        run: new/fixtures/run.sh base/target/release/routes tiles/oracle out/oracle-base qrank.db dem 120 new/fixtures/oracle.json > /dev/null
+
+      - name: Oracle sample with this change
+        run: new/fixtures/run.sh new/target/release/routes tiles/oracle out/oracle-new qrank.db dem 120 new/fixtures/oracle.json > /dev/null
+
+      - name: Compare on the oracle sample
+        run: python3 new/fixtures/oracle.py out/oracle-base out/oracle-new new/fixtures/oracle.json | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Upload the routes and logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: fixtures
-          path: out/
+          path: |
+            out/
+            !out/**/parks/
