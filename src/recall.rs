@@ -12,6 +12,11 @@ pub struct Known {
     pub id: String,
     pub name: String,
     pub network: String,
+    pub wikidata: String,
+    pub roundtrip: String,
+    /// The whole relation's length, from the basemap's export (0 if the
+    /// build predates it): the tiles around a park only show part of it.
+    pub total_km: f64,
     pub segs: Vec<(P, P)>,
 }
 
@@ -98,8 +103,11 @@ pub fn check(area: &Area, doc: &Value) -> Vec<Value> {
         }
         let km = near_m / 1000.0;
         // Mostly elsewhere (a long-distance trail passing by), or too short
-        // or long to be one of our routes.
-        if near_m < all_m * 0.5 || !(MIN_KM..=MAX_KM).contains(&km) {
+        // or long to be one of our routes. The whole relation's length, where
+        // the build has it: the loaded tiles only reach 5 km past the park,
+        // so measured from them, a long trail looks mostly local.
+        let whole_m = all_m.max(k.total_km * 1000.0);
+        if near_m < whole_m * 0.5 || whole_m > MAX_KM * 1000.0 || !(MIN_KM..=MAX_KM).contains(&km) {
             continue;
         }
         let mut best: Option<(f64, &str)> = None;
@@ -112,6 +120,8 @@ pub fn check(area: &Area, doc: &Value) -> Vec<Value> {
         let (cov, title) = best.unwrap_or((0.0, ""));
         out.push(json!({
             "id": k.id, "name": k.name, "network": k.network,
+            "wikidata": k.wikidata, "roundtrip": k.roundtrip,
+            "total_km": (k.total_km * 10.0).round() / 10.0,
             "km": (km * 10.0).round() / 10.0,
             "coverage": (cov * 100.0).round() / 100.0,
             "best": title,
