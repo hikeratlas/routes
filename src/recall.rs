@@ -85,11 +85,26 @@ fn routes(doc: &Value) -> Vec<(String, Vec<P>)> {
     out
 }
 
+/// A relation tagged as a hiking route whose name says it's for bikes:
+/// Desoto State Park's "Never Never Land Mountain Bike Trail" and "Family
+/// Bike Loop" (#42). Routes rightly avoid them, so they're neither checked
+/// nor used as names.
+pub fn is_bike(k: &Known) -> bool {
+    let n = k.name.to_lowercase();
+    let words: Vec<&str> = n
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    ["bike", "bikes", "mtb", "bicycle", "biking", "cycling"]
+        .iter()
+        .any(|w| words.contains(w))
+}
+
 /// Each known hike in the park: how much of it the best single route covers.
 pub fn check(area: &Area, doc: &Value) -> Vec<Value> {
     let rs = routes(doc);
     let mut out = vec![];
-    for k in &area.known {
+    for k in area.known.iter().filter(|k| !is_bike(k)) {
         // The relation's stretch in or near the park, sampled every STEP_M.
         let mut pts: Vec<P> = vec![];
         let (mut near_m, mut all_m, mut in_m) = (0.0, 0.0, 0.0);
@@ -263,7 +278,7 @@ pub fn name_routes(area: &Area, doc: &mut Value) {
             .zip(&rel_box)
             .filter(|(_, b)| b.0.0 <= hi.0 && b.1.0 >= lo.0 && b.0.1 <= hi.1 && b.1.1 >= lo.1)
             .map(|(k, _)| k)
-            .filter(|(k, _)| !k.name.is_empty())
+            .filter(|(k, _)| !k.name.is_empty() && !is_bike(k))
             .map(|(k, rp)| (k, coverage(rp, &line), coverage_segs(&route_pts, &k.segs)))
             .filter(|&(_, rel, route)| rel >= NAME_RELATION && route >= NAME_ROUTE)
             .max_by(|a, b| (a.1 * a.2).partial_cmp(&(b.1 * b.2)).unwrap());
@@ -362,6 +377,24 @@ mod tests {
         );
         assert_eq!(doc["day_hikes"][1]["name"], "Nairn Falls Trail");
         assert!(doc["day_hikes"][2].get("name").is_none());
+    }
+
+    #[test]
+    fn bike_relations_are_not_hikes() {
+        let k = |name: &str| Known {
+            id: String::new(),
+            name: name.to_string(),
+            network: String::new(),
+            wikidata: String::new(),
+            roundtrip: String::new(),
+            total_km: 0.0,
+            segs: vec![],
+        };
+        assert!(is_bike(&k("Never Never Land Mountain Bike Trail")));
+        assert!(is_bike(&k("Family Bike Loop")));
+        assert!(is_bike(&k("Knotty Pine MTB Trail")));
+        assert!(!is_bike(&k("Bikeway Ridge Hike"))); // a whole word only
+        assert!(!is_bike(&k("Lake O'Hara Circuit")));
     }
 
     #[test]

@@ -252,7 +252,7 @@ fn read_tile(
                                 line.into_iter().map(|(x, y)| s(x, y, l.extent)).collect();
                             raw.lines.push((
                                 Way {
-                                    name: l.str(f, "name").to_string(),
+                                    name: not_a_note(l.str(f, "name")),
                                     class,
                                     bike,
                                     walk,
@@ -363,7 +363,7 @@ fn read_tile(
                         let amenity = l.str(f, "amenity");
                         if amenity == "parking" || l.str(f, "highway") == "trailhead" {
                             raw.parkings.push(Place {
-                                name: name.to_string(),
+                                name: not_a_note(name),
                                 pt,
                                 trailhead: l.str(f, "highway") == "trailhead",
                             });
@@ -648,5 +648,51 @@ impl Area {
             }
         }
         out
+    }
+}
+
+/// A way's or parking lot's name, or "" when the name is an access note
+/// rather than a name: Yoho's Lake O'Hara road is named "Bus Only", which
+/// made "Mount Whyte from Bus Only trailhead" (#42).
+pub fn not_a_note(name: &str) -> String {
+    let n = name.trim().to_lowercase();
+    let words: Vec<&str> = n
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    let note = words.contains(&"only")
+        || matches!(
+            n.as_str(),
+            "private"
+                | "private road"
+                | "private drive"
+                | "no access"
+                | "no entry"
+                | "no trespassing"
+                | "closed"
+                | "gate"
+                | "gated"
+                | "authorized vehicles"
+                | "emergency access"
+        );
+    if note {
+        String::new()
+    } else {
+        name.to_string()
+    }
+}
+
+#[cfg(test)]
+mod note_tests {
+    use super::not_a_note;
+
+    #[test]
+    fn access_notes_are_not_names() {
+        assert_eq!(not_a_note("Bus Only"), "");
+        assert_eq!(not_a_note("Authorized Vehicles Only"), "");
+        assert_eq!(not_a_note("Private"), "");
+        assert_eq!(not_a_note("Lake O'Hara Fire Road"), "Lake O'Hara Fire Road");
+        // "only" as part of a word is fine.
+        assert_eq!(not_a_note("Onlyhill Trail"), "Onlyhill Trail");
     }
 }
