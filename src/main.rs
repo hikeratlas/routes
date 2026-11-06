@@ -252,6 +252,10 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> Vec<Park> {
     v
 }
 
+/// Day hikes per square root of a park's km of trail (#38): 100 km of
+/// trail gets 10, 9 km gets 3.
+const DAY_HIKES_PER_SQRT_TRAIL_KM: f64 = 1.0;
+
 fn main() {
     let a = args();
     let t0 = Instant::now();
@@ -348,20 +352,15 @@ fn main() {
                     }
                 }
             }
-            let k: f64 = std::env::var("BUDGET_K").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
-            let n_day = (((p.area / 1e6).sqrt() / 2.0) as usize)
-                .max((k * area.trail_km_in_park().sqrt()).round() as usize)
-                .clamp(3, 15);
-            if std::env::var_os("DEBUG_BUDGET").is_some() {
-                eprintln!(
-                    "BUDGET {}\t{}\t{:.1}\t{:.1}\t{}",
-                    p.id,
-                    p.name,
-                    p.area / 1e6,
-                    area.trail_km_in_park(),
-                    n_day
-                );
-            }
+            // Day hikes: by the park's size, or by how much trail it has if
+            // that's more (#38). Small parks with dense networks got 3:
+            // Letchworth, 149 km of trail and 12 OSM hiking routes, found 1.
+            // On the oracle sample, recall rose from 28.9% to 41.9% (tune)
+            // and 23.6% to 45.0% (holdout); day hikes from 501 to 971.
+            let by_area = ((p.area / 1e6).sqrt() / 2.0) as usize;
+            let by_trail =
+                (DAY_HIKES_PER_SQRT_TRAIL_KM * area.trail_km_in_park().sqrt()).round() as usize;
+            let n_day = by_area.max(by_trail).clamp(3, 15);
             let deadline = a
                 .park_timeout
                 .map(|secs| t + std::time::Duration::from_secs_f64(secs));
