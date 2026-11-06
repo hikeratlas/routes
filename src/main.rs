@@ -448,7 +448,8 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
     let mut offset: u64 = 0;
     // Each relation's best coverage over the parks it's checked in.
     let mut best: HashMap<String, f64> = HashMap::new();
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Each route key, and the park that has it (the first, biggest, to).
+    let mut seen: HashMap<String, String> = HashMap::new();
     let s = |v: &serde_json::Value, k: &str| v[k].as_str().unwrap_or("").to_string();
     let mut written = 0;
     for Curated { mut doc, .. } in docs {
@@ -464,12 +465,23 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
                 writeln!(known, "{k}").unwrap();
             }
         }
+        // The park that already has one of this park's routes, if any.
+        let mut twin: Option<String> = None;
         let mut keep = |list: &str, key: &dyn Fn(&serde_json::Value) -> String| {
             let v: Vec<serde_json::Value> = doc[list]
                 .as_array()
                 .unwrap()
                 .iter()
-                .filter(|x| seen.insert(key(x)))
+                .filter(|x| match seen.get(&key(x)) {
+                    Some(owner) => {
+                        twin.get_or_insert_with(|| owner.clone());
+                        false
+                    }
+                    None => {
+                        seen.insert(key(x), p_id.clone());
+                        true
+                    }
+                })
                 .cloned()
                 .collect();
             doc[list] = json!(v);
@@ -487,6 +499,13 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
                 }
             });
         if n == 0 {
+            // Every route is already another park's: the same park mapped
+            // twice (Cape Breton Highlands is relations 4855583 and
+            // 17879029). Point this park's entry at that one's routes, so the
+            // website finds them under either id.
+            if let Some(at) = twin.and_then(|t| index.get(&t).cloned()) {
+                index.insert(p_id.clone(), at);
+            }
             continue;
         }
         written += 1;

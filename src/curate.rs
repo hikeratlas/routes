@@ -338,7 +338,7 @@ impl<'a> Ctx<'a> {
 
     /// Dijkstra by cost, out to `limit` metres. `penal` edges cost 8x.
     pub fn search(&self, src: u32, limit: f64, penal: Option<&HashSet<u64>>) -> Search {
-        self.search_until(src, limit, penal, None)
+        self.search_until(src, limit, penal, None, 1.0)
     }
 
     /// As search, but stops once `target` is settled, when only it is wanted:
@@ -352,7 +352,15 @@ impl<'a> Ctx<'a> {
         penal: Option<&HashSet<u64>>,
         target: u32,
     ) -> Search {
-        self.search_until(src, limit, penal, Some(target))
+        self.search_until(src, limit, penal, Some(target), 1.0)
+    }
+
+    /// As search, with roads ROAD_X_MULTI times their cost, for multi-day
+    /// routes: between two trailheads the shortest way is often a road
+    /// around (Jasper's Tonquin Valley trailheads are 17.5 km apart by road,
+    /// 43 km through the valley), but a multi-day hike is the trail.
+    pub fn search_trails(&self, src: u32, limit: f64) -> Search {
+        self.search_until(src, limit, None, None, ROAD_X_MULTI)
     }
 
     fn search_until(
@@ -361,6 +369,7 @@ impl<'a> Ctx<'a> {
         limit: f64,
         penal: Option<&HashSet<u64>>,
         target: Option<u32>,
+        road_x: f64,
     ) -> Search {
         let _t = Tm(&T_SEARCH, std::time::Instant::now());
         N_SEARCH.fetch_add(1, Relaxed);
@@ -389,6 +398,9 @@ impl<'a> Ctx<'a> {
                 let mut c = e.cost as f64;
                 if penal.is_some_and(|p| p.contains(&ekey(u, e.to))) {
                     c *= 8.0;
+                }
+                if road_x != 1.0 && g.ways[e.way as usize].class == Class::Road {
+                    c *= road_x;
                 }
                 let nd = d + c;
                 let v = e.to as usize;
@@ -630,6 +642,9 @@ pub struct Start {
 }
 
 /// Shortest and longest named trail (in the park) to offer for itself.
+/// Road cost multiplier in multi-day searches (see Ctx::search_trails).
+const ROAD_X_MULTI: f64 = 8.0;
+
 const NAMED_MIN_M: f64 = 1000.0;
 const NAMED_MAX_M: f64 = 15000.0;
 /// How far a trailhead may be from a named trail to start it.
@@ -1354,7 +1369,7 @@ pub fn curate(
                 return out;
             }
             // Up to 100 km: the West Coast Trail is ~75 km.
-            let s = ctx.search(a.node, 100000.0, None);
+            let s = ctx.search_trails(a.node, 100000.0);
             // Along the search tree: campsites passed (roughly: entering a
             // campsite's surroundings) and metres in the park.
             let mut camps: HashMap<u32, (u32, u32, f64)> = HashMap::default(); // node -> (count, last camp, metres in park)
@@ -1489,10 +1504,23 @@ pub fn curate(
         } else {
             (t.to.clone(), t.from.clone())
         };
+        // The same trip as one already chosen: mostly the same trail, or
+        // mostly the same campsites (Jasper's Skyline Trail, from a dozen
+        // trailheads near town and to two at Maligne Lake, took two of the
+        // three places, and one more went to the Skyline extended to
+        // Poboktan Creek).
+        let camps =
+            |x: &Through| -> HashSet<String> { x.ev.camps.iter().map(|c| c.0.clone()).collect() };
+        let tc = camps(&t);
         if seen.contains(&key)
-            || through
-                .iter()
-                .any(|u| t.edges.intersection(&u.edges).count() as f64 / t.edges.len() as f64 > 0.7)
+            || through.iter().any(|u| {
+                let uc = camps(u);
+                let shared = tc.intersection(&uc).count() as f64;
+                t.edges.intersection(&u.edges).count() as f64 / t.edges.len() as f64 > 0.7
+                    || (!tc.is_empty()
+                        && !uc.is_empty()
+                        && shared / tc.len().min(uc.len()) as f64 >= 0.5)
+            })
         {
             continue;
         }

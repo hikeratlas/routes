@@ -226,6 +226,13 @@ fn read_tile(
                         if matches!(foot, "no" | "private" | "use_sidepath") {
                             continue;
                         }
+                        // Closed trails (the basemap's closed flag: access=no,
+                        // or a 'Trail Closed' name), e.g. in Gros Morne.
+                        if l.get(f, "closed")
+                            .is_some_and(|v| matches!(v, mvt::Value::Bool(true)))
+                        {
+                            continue;
+                        }
                         // Bike trails. Graded for mountain bikes (mtb) is a
                         // bike trail unless it's designated for walking or on
                         // a hiking route: foot=yes only says walkers may use
