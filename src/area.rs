@@ -71,6 +71,9 @@ pub enum Kind {
     Lake,
     Waterfall,
     Hut,
+    /// A named trail walked for itself (see Ctx::named_trails): a loop, or
+    /// out and back to its far end, with no destination on it needed.
+    Trail,
 }
 
 impl Kind {
@@ -81,6 +84,7 @@ impl Kind {
             Kind::Lake => "lake",
             Kind::Waterfall => "waterfall",
             Kind::Hut => "hut",
+            Kind::Trail => "trail",
         }
     }
     pub fn appeal(self) -> f64 {
@@ -90,9 +94,14 @@ impl Kind {
             Kind::Lake => 0.8,
             Kind::Waterfall => 0.75,
             Kind::Hut => 0.4,
+            Kind::Trail => TRAIL_APPEAL,
         }
     }
 }
+
+/// Appeal of a named trail walked for itself (Kind::Trail). Tuned on the
+/// oracle sample's tuning half (fixtures/oracle.py).
+pub const TRAIL_APPEAL: f64 = 0.6;
 
 pub struct Dest {
     pub name: String,

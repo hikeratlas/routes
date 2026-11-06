@@ -592,6 +592,263 @@ pub struct Start {
     pub trailhead: bool,
 }
 
+/// Shortest and longest named trail (in the park) to offer for itself.
+const NAMED_MIN_M: f64 = 1000.0;
+const NAMED_MAX_M: f64 = 15000.0;
+/// How far a trailhead may be from a named trail to start it.
+const NAMED_ACCESS_M: f64 = 3000.0;
+
+impl<'a> Ctx<'a> {
+    /// Named trails as hikes in themselves: a trail with a name, in the park,
+    /// that's a simple loop or a simple line of NAMED_MIN_M to NAMED_MAX_M,
+    /// walked from the nearest trailhead within NAMED_ACCESS_M: around a loop
+    /// and back, or out to a line's far end and back. Destination-first
+    /// candidates miss these when nothing on them is a destination
+    /// (interpretive loops, ridge and creek trails), and they're much of the
+    /// OSM hiking routes the oracle sample (fixtures/oracle.json) checks.
+    pub fn named_trails(&self, starts: &[Start]) -> Vec<Cand> {
+        let g = &self.area.graph;
+        // In-park, non-bike trail edges, by name.
+        let mut by_name: HashMap<&str, Vec<(u32, u32, u32)>> = HashMap::default();
+        for (u, adj) in g.adj.iter().enumerate() {
+            let u = u as u32;
+            for e in adj {
+                let w = &g.ways[e.way as usize];
+                if u < e.to
+                    && w.class == Class::Trail
+                    && !w.bike
+                    && !w.name.is_empty()
+                    && self.in_park[u as usize]
+                    && self.in_park[e.to as usize]
+                {
+                    by_name
+                        .entry(w.name.as_str())
+                        .or_default()
+                        .push((u, e.to, e.way));
+                }
+            }
+        }
+        // Each name's connected pieces that are a simple loop or line, as
+        // (name, nodes in order, ways between them, is a loop).
+        let mut pieces: Vec<(&str, Vec<u32>, Vec<u32>, bool)> = vec![];
+        for (name, edges) in &by_name {
+            let mut nbrs: HashMap<u32, Vec<(u32, u32)>> = HashMap::default();
+            for &(u, v, w) in edges {
+                nbrs.entry(u).or_default().push((v, w));
+                nbrs.entry(v).or_default().push((u, w));
+            }
+            let mut seen: HashSet<u32> = HashSet::default();
+            let mut nodes: Vec<u32> = nbrs.keys().copied().collect();
+            nodes.sort();
+            for &n0 in &nodes {
+                if seen.contains(&n0) {
+                    continue;
+                }
+                // The piece's nodes.
+                let mut comp = vec![n0];
+                seen.insert(n0);
+                let mut i = 0;
+                while i < comp.len() {
+                    for &(v, _) in &nbrs[&comp[i]] {
+                        if seen.insert(v) {
+                            comp.push(v);
+                        }
+                    }
+                    i += 1;
+                }
+                let branched = comp.iter().any(|n| nbrs[n].len() > 2);
+                let ends: Vec<u32> = comp
+                    .iter()
+                    .copied()
+                    .filter(|n| nbrs[n].len() == 1)
+                    .collect();
+                let is_loop = ends.is_empty() && !branched;
+                let (path, ways): (Vec<u32>, Vec<u32>) = if branched || ends.len() != 2 && !is_loop
+                {
+                    // A trail that forks (side spurs, a lollipop): its
+                    // longest end-to-end line, found as the farthest node
+                    // from the farthest node from any.
+                    let far = |from: u32| -> (u32, HashMap<u32, (u32, u32)>) {
+                        let mut dist: HashMap<u32, f64> = HashMap::default();
+                        let mut prev: HashMap<u32, (u32, u32)> = HashMap::default();
+                        let mut pq = BinaryHeap::new();
+                        dist.insert(from, 0.0);
+                        pq.push(Q(0.0, from));
+                        while let Some(Q(d, u)) = pq.pop() {
+                            if d > dist[&u] {
+                                continue;
+                            }
+                            for &(v, w) in &nbrs[&u] {
+                                let nd = d + metres(g.pts[u as usize], g.pts[v as usize]);
+                                if nd < *dist.get(&v).unwrap_or(&f64::MAX) {
+                                    dist.insert(v, nd);
+                                    prev.insert(v, (u, w));
+                                    pq.push(Q(nd, v));
+                                }
+                            }
+                        }
+                        let f = *dist
+                            .iter()
+                            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap().then(b.0.cmp(a.0)))
+                            .unwrap()
+                            .0;
+                        (f, prev)
+                    };
+                    let (a, _) = far(n0);
+                    let (b, prev) = far(a);
+                    let (mut p, mut w) = (vec![b], vec![]);
+                    while *p.last().unwrap() != a {
+                        let (u, wy) = prev[p.last().unwrap()];
+                        p.push(u);
+                        w.push(wy);
+                    }
+                    (p, w)
+                } else {
+                    // Walk it in order from an end (or anywhere, for a loop).
+                    let first = if is_loop {
+                        *comp.iter().min().unwrap()
+                    } else {
+                        ends[0].min(ends[1])
+                    };
+                    let (mut path, mut ways) = (vec![first], vec![]);
+                    let mut prev = u32::MAX;
+                    let mut cur = first;
+                    loop {
+                        let next = nbrs[&cur].iter().find(|&&(v, _)| v != prev);
+                        let Some(&(v, w)) = next else { break };
+                        if v == first {
+                            if is_loop {
+                                path.push(v);
+                                ways.push(w);
+                            }
+                            break;
+                        }
+                        if path.contains(&v) {
+                            break;
+                        }
+                        path.push(v);
+                        ways.push(w);
+                        prev = cur;
+                        cur = v;
+                    }
+                    if path.len() != comp.len() + is_loop as usize {
+                        continue;
+                    }
+                    (path, ways)
+                };
+                let m: f64 = path
+                    .windows(2)
+                    .map(|p| metres(g.pts[p[0] as usize], g.pts[p[1] as usize]))
+                    .sum();
+                if (NAMED_MIN_M..=NAMED_MAX_M).contains(&m) {
+                    pieces.push((name, path, ways, is_loop));
+                }
+            }
+        }
+        if pieces.is_empty() {
+            return vec![];
+        }
+        // The nearest trailhead to each piece: to any node of a loop, to
+        // either end of a line.
+        let entries: Vec<Vec<u32>> = pieces
+            .iter()
+            .map(|(_, p, _, l)| {
+                if *l {
+                    p.clone()
+                } else {
+                    vec![p[0], *p.last().unwrap()]
+                }
+            })
+            .collect();
+        let near: Vec<Vec<(f64, usize, u32)>> = starts
+            .par_iter()
+            .enumerate()
+            .map(|(si, s)| {
+                let sr = self.search(s.node, NAMED_ACCESS_M, None);
+                entries
+                    .iter()
+                    .map(|es| {
+                        es.iter()
+                            .filter_map(|&n| sr.reached(n).map(|m| (m, si, n)))
+                            .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
+                            .unwrap_or((f64::MAX, si, u32::MAX))
+                    })
+                    .collect()
+            })
+            .collect();
+        let mut out = vec![];
+        for (pi, (name, path, ways, is_loop)) in pieces.iter().enumerate() {
+            let Some(&(m, si, entry)) = near
+                .iter()
+                .map(|v| &v[pi])
+                .filter(|x| x.0 < f64::MAX)
+                .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
+            else {
+                continue;
+            };
+            let _ = m;
+            let s = &starts[si];
+            let sr = self.search_to(s.node, NAMED_ACCESS_M, None, entry);
+            let (mut full, mut fw) = sr.path(entry);
+            // Along the trail from where we joined it.
+            let (tp, tw): (Vec<u32>, Vec<u32>) = if *is_loop {
+                // Rotate the loop to start and end at the entry.
+                let k = path.iter().position(|&n| n == entry).unwrap();
+                let ring = &path[..path.len() - 1];
+                let rp: Vec<u32> = (0..=ring.len())
+                    .map(|i| ring[(k + i) % ring.len()])
+                    .collect();
+                let rw: Vec<u32> = (0..ring.len())
+                    .map(|i| ways[(k + i) % ring.len()])
+                    .collect();
+                (rp, rw)
+            } else if entry == path[0] {
+                (path.clone(), ways.clone())
+            } else {
+                (
+                    path.iter().rev().copied().collect(),
+                    ways.iter().rev().copied().collect(),
+                )
+            };
+            full.extend(tp.iter().skip(1));
+            fw.extend(tw.iter());
+            let far = g.pts[tp[tp.len() / 2] as usize];
+            let ev = if *is_loop {
+                // Back to the trailhead the way we came.
+                let (back, bw) = sr.path(entry);
+                full.extend(back.iter().rev().skip(1));
+                fw.extend(bw.iter().rev());
+                self.evaluate(&full, &fw, false)
+            } else {
+                self.evaluate(&full, &fw, true)
+            };
+            let d = Dest {
+                name: name.to_string(),
+                kind: Kind::Trail,
+                pt: far,
+                area: 0.0,
+                wikidata: String::new(),
+                qrank: 1.0,
+                lake: None,
+            };
+            let (sc, parts) = score(&ev, &d, *is_loop);
+            out.push(Cand {
+                from: s.name.clone(),
+                start: g.pts[s.node as usize],
+                dest: name.to_string(),
+                dest_kind: Kind::Trail,
+                dest_pt: far,
+                kind: if *is_loop { "loop" } else { "out-and-back" },
+                score: sc,
+                parts,
+                edges: edge_set(&full),
+                ev,
+            });
+        }
+        out
+    }
+}
+
 impl<'a> Ctx<'a> {
     /// Destinations, each with the network nodes it can be reached from.
     pub fn targets(&self, park_m: f64) -> Vec<(usize, Vec<u32>)> {
@@ -952,6 +1209,24 @@ pub fn curate(
             ctx.candidates(s.node, &s.name, &targets, 1500.0, 15000.0)
         })
         .collect();
+    let mut cands = cands;
+    if !late() {
+        // A named trail that a destination hike from the same trailhead
+        // already walks (Wapta Falls Trail to Wapta Falls) is the same hike:
+        // keep the one named for where it goes.
+        let named: Vec<Cand> = ctx
+            .named_trails(&starts)
+            .into_iter()
+            .filter(|n| {
+                !cands.iter().any(|c| {
+                    c.from == n.from
+                        && n.edges.intersection(&c.edges).count() as f64
+                            >= 0.7 * n.edges.len().max(1) as f64
+                })
+            })
+            .collect();
+        cands.extend(named);
+    }
     let day = select(&cands, n_day, true);
     stats += &format!("; day {:.1}s", t.elapsed().as_secs_f64());
 
