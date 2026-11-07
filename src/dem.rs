@@ -1,36 +1,81 @@
-// Elevation from Terrarium DEM tiles (the same source the website uses).
+// Elevation from Mapterhorn's Terrarium-encoded DEM tiles (the same source
+// as the website's hillshade and contours, hikeratlas/basemap#187): 512 px
+// WebP, lidar resolution where it exists (US 1 m, Canada's HRDEM 2 m), USGS
+// 10 m across the US, and Copernicus 30 m elsewhere. Its z12 is global; past
+// a region's coverage tiles 404, and a point is sampled from the nearest
+// ancestor instead.
+//
+// Over Newfoundland, hikeratlas/nl-dem's tiles of the province's 5 m DEM come
+// first, as on the website: Mapterhorn only has 30 m data there.
 use crate::geo::{P, lonlat};
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-const URL: &str = "https://elevation-tiles-prod.s3.amazonaws.com/terrarium";
-const MAX_TILES: usize = 3000; // decoded tiles kept in memory, 256 KB each
+const URL: &str = "https://tiles.mapterhorn.com";
+pub const NL_DEM: &str = "https://public.hikeratlas.com/nl-dem/nl-dem.pmtiles";
+const NL_ZOOMS: std::ops::RangeInclusive<u8> = 10..=13;
+const TILE: usize = 512;
+const MAX_TILES: usize = 1000; // decoded tiles kept in memory, 1 MB each
+
+type Grid = Arc<Vec<f32>>;
 
 pub struct Dem {
     z: u8,
     cache: Option<PathBuf>,
-    tiles: Mutex<HashMap<(u32, u32), Arc<Vec<f32>>>>,
+    // None: the tile doesn't exist (404).
+    tiles: Mutex<HashMap<(u8, u32, u32), Option<Grid>>>,
     agent: ureq::Agent,
+    nl: Option<crate::pmtiles::PmTiles>,
+}
+
+/// Terrarium heights from a WebP tile: h = R * 256 + G + B / 256 - 32768.
+fn decode(bytes: &[u8]) -> Vec<f32> {
+    let mut dec = image_webp::WebPDecoder::new(std::io::Cursor::new(bytes)).expect("DEM webp");
+    let (w, h) = dec.dimensions();
+    assert!(w as usize == TILE && h as usize == TILE, "DEM tile is {w}x{h}, not {TILE}");
+    let ch = if dec.has_alpha() { 4 } else { 3 };
+    let mut buf = vec![0; dec.output_buffer_size().expect("DEM webp size")];
+    dec.read_image(&mut buf).expect("DEM webp");
+    (0..TILE * TILE)
+        .map(|i| {
+            let p = &buf[i * ch..];
+            p[0] as f32 * 256.0 + p[1] as f32 + p[2] as f32 / 256.0 - 32768.0
+        })
+        .collect()
 }
 
 impl Dem {
-    pub fn new(z: u8, cache: Option<PathBuf>) -> Dem {
-        Dem {
-            z,
-            cache,
-            tiles: Mutex::new(HashMap::new()),
-            agent: ureq::AgentBuilder::new().build(),
-        }
+    /// `nl`: nl-dem's archive URL, or None for Mapterhorn alone.
+    pub fn new(z: u8, cache: Option<PathBuf>, nl: Option<&str>) -> Dem {
+        let nl_cache = cache.as_ref().map(|c| c.join("nl-dem"));
+        let nl = nl.and_then(|u| match crate::pmtiles::PmTiles::open(u, nl_cache) {
+            Ok(a) => Some(a),
+            Err(e) => {
+                eprintln!("nl-dem unavailable ({e}); using Mapterhorn alone");
+                None
+            }
+        });
+        Dem { z, cache, tiles: Mutex::new(HashMap::new()), agent: ureq::AgentBuilder::new().build(), nl }
     }
 
-    fn fetch(&self, x: u32, y: u32) -> Vec<f32> {
-        let z = self.z;
+    /// nl-dem's tile, if it has one (the reader caches tiles under nl-dem/).
+    fn fetch_nl(&self, z: u8, x: u32, y: u32) -> Option<Vec<u8>> {
+        let a = self.nl.as_ref()?;
+        if !NL_ZOOMS.contains(&z) {
+            return None;
+        }
+        a.get(z, x, y).unwrap_or_else(|e| panic!("nl-dem {z}/{x}/{y}: {e}"))
+    }
+
+    /// A tile's bytes, or None if it doesn't exist. Cached on disk (a 404 as
+    /// an empty file) under mapterhorn/, apart from older Terrarium caches.
+    fn fetch(&self, z: u8, x: u32, y: u32) -> Option<Vec<u8>> {
         let path = self
             .cache
             .as_ref()
-            .map(|c| c.join(format!("{z}-{x}-{y}.png")));
+            .map(|c| c.join("mapterhorn").join(format!("{z}-{x}-{y}.webp")));
         let bytes = match path.as_ref().and_then(|p| std::fs::read(p).ok()) {
             Some(b) => b,
             None => {
@@ -39,7 +84,7 @@ impl Dem {
                 // 42134348228) panicked a whole shard.
                 let mut tries = 0;
                 let b = loop {
-                    let got = match self.agent.get(&format!("{URL}/{z}/{x}/{y}.png")).call() {
+                    let got = match self.agent.get(&format!("{URL}/{z}/{x}/{y}.webp")).call() {
                         Ok(r) => {
                             let mut b = Vec::new();
                             r.into_reader()
@@ -67,28 +112,21 @@ impl Dem {
                 b
             }
         };
-        if bytes.is_empty() {
-            return vec![0.0; 256 * 256];
-        }
-        let mut dec = png::Decoder::new(std::io::Cursor::new(bytes));
-        dec.set_transformations(png::Transformations::EXPAND);
-        let mut r = dec.read_info().expect("DEM png");
-        let mut buf = vec![0; r.output_buffer_size().unwrap()];
-        let info = r.next_frame(&mut buf).expect("DEM png");
-        let ch = info.color_type.samples();
-        (0..256 * 256)
-            .map(|i| {
-                let p = &buf[i * ch..];
-                p[0] as f32 * 256.0 + p[1] as f32 + p[2] as f32 / 256.0 - 32768.0
-            })
-            .collect()
+        if bytes.is_empty() { None } else { Some(bytes) }
     }
 
-    fn tile(&self, x: u32, y: u32) -> Arc<Vec<f32>> {
-        if let Some(t) = self.tiles.lock().unwrap().get(&(x, y)) {
+    fn tile(&self, z: u8, x: u32, y: u32) -> Option<Grid> {
+        if let Some(t) = self.tiles.lock().unwrap().get(&(z, x, y)) {
             return t.clone();
         }
-        let t = Arc::new(self.fetch(x, y));
+        // Past nl-dem's max zoom, where it covers: none here, so the point is
+        // sampled from nl-dem's tile, not Mapterhorn's blurrier one.
+        let nl_max = *NL_ZOOMS.end();
+        if z > nl_max && self.fetch_nl(nl_max, x >> (z - nl_max), y >> (z - nl_max)).is_some() {
+            self.tiles.lock().unwrap().insert((z, x, y), None);
+            return None;
+        }
+        let t = self.fetch_nl(z, x, y).or_else(|| self.fetch(z, x, y)).map(|b| Arc::new(decode(&b)));
         let mut m = self.tiles.lock().unwrap();
         if m.len() >= MAX_TILES {
             // Crude eviction: drop about half.
@@ -97,35 +135,39 @@ impl Dem {
                 m.remove(&k);
             }
         }
-        m.insert((x, y), t.clone());
+        m.insert((z, x, y), t.clone());
         t
     }
 
     /// Elevations at many points; tiles are looked up once per call.
     pub fn profile(&self, pts: &[P]) -> Vec<f64> {
-        let mut local: HashMap<(u32, u32), Arc<Vec<f32>>> = HashMap::new();
+        let mut local: HashMap<(u8, u32, u32), Option<Grid>> = HashMap::new();
         pts.iter()
             .map(|&p| {
-                self.sample(p, &mut |x, y| {
-                    local
-                        .entry((x, y))
-                        .or_insert_with(|| self.tile(x, y))
-                        .clone()
+                self.sample(p, &mut |z, x, y| {
+                    local.entry((z, x, y)).or_insert_with(|| self.tile(z, x, y)).clone()
                 })
             })
             .collect()
     }
 
-    fn sample(&self, p: P, tile: &mut dyn FnMut(u32, u32) -> Arc<Vec<f32>>) -> f64 {
+    fn sample(&self, p: P, tile: &mut dyn FnMut(u8, u32, u32) -> Option<Grid>) -> f64 {
         let (lon, lat) = lonlat(p);
-        let n = (1u64 << self.z) as f64 * 256.0;
+        let t = TILE as i64;
+        let n = (1u64 << self.z) as f64 * TILE as f64;
         let fx = (lon + 180.0) / 360.0 * n - 0.5;
         let fy = (1.0 - lat.to_radians().tan().asinh() / std::f64::consts::PI) / 2.0 * n - 0.5;
         let (x0, y0) = (fx.floor() as i64, fy.floor() as i64);
         let (u, w) = (fx - x0 as f64, fy - y0 as f64);
+        // A pixel at self.z, from the nearest zoom that has its tile.
         let mut v = |x: i64, y: i64| -> f64 {
-            let t = tile((x / 256) as u32, (y / 256) as u32);
-            t[(y % 256) as usize * 256 + (x % 256) as usize] as f64
+            for up in 0..=self.z {
+                let (px, py) = (x >> up, y >> up);
+                if let Some(g) = tile(self.z - up, (px / t) as u32, (py / t) as u32) {
+                    return g[(py % t) as usize * TILE + (px % t) as usize] as f64;
+                }
+            }
+            0.0
         };
         (v(x0, y0) * (1.0 - u) + v(x0 + 1, y0) * u) * (1.0 - w)
             + (v(x0, y0 + 1) * (1.0 - u) + v(x0 + 1, y0 + 1) * u) * w
@@ -144,4 +186,53 @@ pub fn gain_loss(ele: &[f64], thr: f64) -> (f64, f64) {
         }
     }
     (up, down)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn terrarium_webp(h: impl Fn(usize, usize) -> f32) -> Vec<u8> {
+        let mut rgb = Vec::with_capacity(TILE * TILE * 3);
+        for y in 0..TILE {
+            for x in 0..TILE {
+                let v = (h(x, y) + 32768.0) as f64;
+                let r = (v / 256.0).floor();
+                let g = v.floor() - r * 256.0;
+                let b = ((v - v.floor()) * 256.0).floor();
+                rgb.extend([r as u8, g as u8, b as u8]);
+            }
+        }
+        let mut out = Vec::new();
+        image_webp::WebPEncoder::new(&mut out)
+            .encode(&rgb, TILE as u32, TILE as u32, image_webp::ColorType::Rgb8)
+            .unwrap();
+        out
+    }
+
+    #[test]
+    fn decodes_terrarium_webp() {
+        let h = decode(&terrarium_webp(|x, y| x as f32 * 0.5 + y as f32 - 20.25));
+        assert_eq!(h.len(), TILE * TILE);
+        assert!((h[0] - -20.25).abs() < 1.0 / 256.0);
+        assert!((h[3 * TILE + 10] - (5.0 + 3.0 - 20.25)).abs() < 1.0 / 256.0);
+    }
+
+    // A point whose tile 404s at the DEM's zoom is sampled from its parent.
+    #[test]
+    fn samples_from_the_parent_past_coverage() {
+        let dem = Dem::new(13, None, None);
+        let (lon, lat) = (-116.2, 51.42);
+        let wx = (lon + 180.0) / 360.0 * crate::geo::WORLD;
+        let wy = (1.0 - f64::to_radians(lat).tan().asinh() / std::f64::consts::PI) / 2.0 * crate::geo::WORLD;
+        let p: P = (wx, wy);
+        let parent = Arc::new(vec![1234.0f32; TILE * TILE]);
+        let mut asked = Vec::new();
+        let e = dem.sample(p, &mut |z, x, y| {
+            asked.push((z, x, y));
+            if z == 12 { Some(parent.clone()) } else { None }
+        });
+        assert!((e - 1234.0).abs() < 1e-6);
+        assert!(asked.iter().any(|a| a.0 == 13) && asked.iter().any(|a| a.0 == 12));
+    }
 }

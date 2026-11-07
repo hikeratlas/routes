@@ -43,6 +43,9 @@ const USAGE: &str = "usage: routes --tiles FILE|URL [--tiles ...] --out DIR
   [--tile-cache DIR]     cache tiles fetched from a URL here
   [--dem-cache DIR]      cache DEM tiles here
   [--dem-zoom Z]         DEM zoom (default 12)
+  [--nl-dem URL|FILE]    nl-dem's PMTiles of Newfoundland's 5 m DEM, used
+                         before Mapterhorn there (default the published
+                         archive; none for Mapterhorn alone)
   [--no-known-bonus]     don't score up routes that follow an OSM hiking
                          route (to measure the proposer on its own)
   [--park-timeout SECS]  stop starting new searches in a park after this
@@ -66,6 +69,7 @@ struct Args {
     tile_cache: Option<PathBuf>,
     dem_cache: Option<PathBuf>,
     dem_zoom: u8,
+    nl_dem: Option<String>,
     shard: Option<(usize, usize)>,
     merge: Vec<PathBuf>,
     park_timeout: Option<f64>,
@@ -84,6 +88,7 @@ fn args() -> Args {
         tile_cache: None,
         dem_cache: None,
         dem_zoom: 12,
+        nl_dem: Some(dem::NL_DEM.to_string()),
         shard: None,
         merge: vec![],
         park_timeout: None,
@@ -119,6 +124,7 @@ fn args() -> Args {
             "--tile-cache" => a.tile_cache = Some(val.into()),
             "--dem-cache" => a.dem_cache = Some(val.into()),
             "--dem-zoom" => a.dem_zoom = val.parse().unwrap_or_else(|_| die()),
+            "--nl-dem" => a.nl_dem = if val == "none" { None } else { Some(val) },
             "--shard" => {
                 let (k, n) = val.split_once('/').unwrap_or_else(|| die());
                 let (k, n): (usize, usize) = (
@@ -307,7 +313,7 @@ fn main() {
             parks.iter().map(|p| p.tiles().len()).sum::<usize>()
         );
     }
-    let dem = dem::Dem::new(a.dem_zoom, a.dem_cache.clone());
+    let dem = dem::Dem::new(a.dem_zoom, a.dem_cache.clone(), a.nl_dem.as_deref());
     let qrank = a.qrank.as_ref().map(|p| {
         Mutex::new(
             rusqlite::Connection::open_with_flags(p, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
