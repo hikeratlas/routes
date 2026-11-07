@@ -465,8 +465,59 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
     // Each route key, and the park that has it (the first, biggest, to).
     let mut seen: HashMap<String, String> = HashMap::new();
     let s = |v: &serde_json::Value, k: &str| v[k].as_str().unwrap_or("").to_string();
+    let multi_key = |t: &serde_json::Value| {
+        let (a, b) = (s(t, "from"), s(t, "to"));
+        if a < b {
+            format!("multi|{a}|{b}")
+        } else {
+            format!("multi|{b}|{a}")
+        }
+    };
+    let camps = |t: &serde_json::Value| -> std::collections::HashSet<String> {
+        t["route"]["stopovers"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            // By place, not just name: "Campsite 1" is in many parks.
+            .filter_map(|c| {
+                let (x, y) = (c["at"][0].as_f64()?, c["at"][1].as_f64()?);
+                Some(format!("{}@{:.3},{:.3}", s(c, "name"), x, y))
+            })
+            .collect()
+    };
+    // Each park's multi-day trips (key, campsites), to find the same trip in
+    // a smaller park that overlaps this one.
+    let multis: Vec<Vec<(String, std::collections::HashSet<String>)>> = docs
+        .iter()
+        .map(|c| {
+            c.doc["point_to_points"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|t| (multi_key(t), camps(t)))
+                .collect()
+        })
+        .collect();
     let mut written = 0;
-    for Curated { mut doc, .. } in docs {
+    for (i, Curated { mut doc, .. }) in docs.into_iter().enumerate() {
+        // A multi-day trip a smaller park also has, between other ends, with
+        // half or more of the same campsites, is that park's (#53): Pacific
+        // Rim's whole-reserve relation had the West Coast Trail to a logging
+        // road 6.5 km past its end, and its West Coast Trail Unit had it
+        // trailhead to trailhead. Trips with the same ends are left to the
+        // first (biggest) park below, so a park mapped twice stays one.
+        if let Some(Value::Array(ts)) = doc.get_mut("point_to_points") {
+            ts.retain(|t| {
+                let (k, c) = (multi_key(t), camps(t));
+                c.is_empty()
+                    || !multis[i + 1..].iter().flatten().any(|(uk, uc)| {
+                        *uk != k
+                            && !uc.is_empty()
+                            && c.intersection(uc).count() as f64 / c.len().min(uc.len()) as f64
+                                >= 0.5
+                    })
+            });
+        }
         let (p_id, p_name) = (s(&doc["park"], "id"), s(&doc["park"], "name"));
         if let Some(Value::Array(ks)) = doc.as_object_mut().and_then(|o| o.remove("known")) {
             for mut k in ks {
@@ -504,14 +555,7 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
         let n = keep("day_hikes", &|h| {
             format!("day|{}|{}|{}", s(h, "from"), s(h, "dest"), s(h, "kind"))
         }) + keep("base_camps", &|b| format!("base|{}", s(b, "camp")))
-            + keep("point_to_points", &|t| {
-                let (a, b) = (s(t, "from"), s(t, "to"));
-                if a < b {
-                    format!("multi|{a}|{b}")
-                } else {
-                    format!("multi|{b}|{a}")
-                }
-            });
+            + keep("point_to_points", &multi_key);
         if n == 0 {
             // Every route is already another park's: the same park mapped
             // twice (Cape Breton Highlands is relations 4855583 and
@@ -622,4 +666,93 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
         "known hikes (OSM hiking routes): {n}, found {found}, partly {partial}, missed {} (details in known.jsonl)",
         n - found - partial
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn trip(from: &str, to: &str, camps: &[(&str, f64)]) -> Value {
+        json!({"from": from, "to": to, "kind": "point-to-point", "route": {
+            "km": 1.0, "gain": 0.0, "line": [[0.0, 0.0], [1.0, 1.0]],
+            "stopovers": camps.iter().map(|(n, x)| json!({"name": n, "km": 0.0, "at": [x, 48.0]})).collect::<Vec<_>>(),
+        }})
+    }
+
+    fn park(id: &str, area: f64, day: &[&str], multi: Vec<Value>) -> Curated {
+        Curated {
+            area,
+            doc: json!({
+                "park": {"id": id, "name": id},
+                "day_hikes": day.iter().map(|d| json!({"from": "T", "dest": d, "kind": "out-and-back",
+                    "route": {"km": 1.0, "gain": 0.0, "line": [[0.0, 0.0], [1.0, 1.0]]}})).collect::<Vec<_>>(),
+                "base_camps": [],
+                "point_to_points": multi,
+            }),
+        }
+    }
+
+    fn written(dir: &std::path::Path, id: &str) -> Option<Value> {
+        std::fs::read(dir.join("parks").join(format!("{id}.json")))
+            .ok()
+            .map(|b| serde_json::from_slice(&b).unwrap())
+    }
+
+    fn tmp(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("routes-test-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        d
+    }
+
+    // #53: the whole Pacific Rim reserve had the West Coast Trail to a
+    // logging road; its West Coast Trail Unit, trailhead to trailhead.
+    #[test]
+    fn same_trip_between_other_ends_goes_to_the_smaller_park() {
+        let camps = [("Tsusiat Falls", -124.9), ("Cribs Creek", -124.7), ("Walbran Creek", -124.6)];
+        let dir = tmp("smaller");
+        write_outputs(
+            &dir,
+            vec![
+                park("reserve", 2.0, &["Long Beach"], vec![trip("WCT", "F-0100 trailhead", &camps)]),
+                park("unit", 1.0, &[], vec![trip("WCT", "WCT", &camps)]),
+            ],
+        );
+        let big = written(&dir, "reserve").unwrap();
+        assert_eq!(big["point_to_points"].as_array().unwrap().len(), 0);
+        assert_eq!(big["day_hikes"].as_array().unwrap().len(), 1);
+        let small = written(&dir, "unit").unwrap();
+        assert_eq!(small["point_to_points"][0]["to"], "WCT");
+    }
+
+    // A park mapped twice (Cape Breton Highlands): the same trips, the same
+    // ends, stay in the bigger one, and the smaller points at it.
+    #[test]
+    fn a_park_mapped_twice_stays_one() {
+        let camps = [("A", -60.0), ("B", -60.1)];
+        let dir = tmp("twins");
+        write_outputs(
+            &dir,
+            vec![
+                park("big", 2.0, &["Lake"], vec![trip("X", "Y", &camps)]),
+                park("small", 1.0, &["Lake"], vec![trip("X", "Y", &camps)]),
+            ],
+        );
+        assert_eq!(written(&dir, "big").unwrap()["point_to_points"].as_array().unwrap().len(), 1);
+        assert!(written(&dir, "small").is_none());
+    }
+
+    // Same-named campsites elsewhere aren't the same trip.
+    #[test]
+    fn campsites_match_by_place_not_just_name() {
+        let dir = tmp("names");
+        write_outputs(
+            &dir,
+            vec![
+                park("a", 2.0, &[], vec![trip("X", "Y", &[("Campsite 1", -60.0), ("Campsite 2", -60.1)])]),
+                park("b", 1.0, &[], vec![trip("P", "Q", &[("Campsite 1", -120.0), ("Campsite 2", -120.1)])]),
+            ],
+        );
+        assert_eq!(written(&dir, "a").unwrap()["point_to_points"].as_array().unwrap().len(), 1);
+        assert_eq!(written(&dir, "b").unwrap()["point_to_points"].as_array().unwrap().len(), 1);
+    }
 }
