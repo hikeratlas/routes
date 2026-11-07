@@ -43,9 +43,6 @@ const USAGE: &str = "usage: routes --tiles FILE|URL [--tiles ...] --out DIR
   [--tile-cache DIR]     cache tiles fetched from a URL here
   [--dem-cache DIR]      cache DEM tiles here
   [--dem-zoom Z]         DEM zoom (default 12)
-  [--route-order FILE]   OSM hiking routes' member order (basemap's
-                         bin/route-order.py): loops and point-to-points
-                         that follow a route go its way
   [--nl-dem URL|FILE]    nl-dem's PMTiles of Newfoundland's 5 m DEM, used
                          before Mapterhorn there (default the published
                          archive; none for Mapterhorn alone)
@@ -73,7 +70,6 @@ struct Args {
     dem_cache: Option<PathBuf>,
     dem_zoom: u8,
     nl_dem: Option<String>,
-    route_order: Option<PathBuf>,
     shard: Option<(usize, usize)>,
     merge: Vec<PathBuf>,
     park_timeout: Option<f64>,
@@ -93,7 +89,6 @@ fn args() -> Args {
         dem_cache: None,
         dem_zoom: 12,
         nl_dem: Some(dem::NL_DEM.to_string()),
-        route_order: None,
         shard: None,
         merge: vec![],
         park_timeout: None,
@@ -130,7 +125,6 @@ fn args() -> Args {
             "--dem-cache" => a.dem_cache = Some(val.into()),
             "--dem-zoom" => a.dem_zoom = val.parse().unwrap_or_else(|_| die()),
             "--nl-dem" => a.nl_dem = if val == "none" { None } else { Some(val) },
-            "--route-order" => a.route_order = Some(val.into()),
             "--shard" => {
                 let (k, n) = val.split_once('/').unwrap_or_else(|| die());
                 let (k, n): (usize, usize) = (
@@ -320,14 +314,6 @@ fn main() {
         );
     }
     let dem = dem::Dem::new(a.dem_zoom, a.dem_cache.clone(), a.nl_dem.as_deref());
-    let orders = match &a.route_order {
-        Some(p) => {
-            let o = recall::load_orders(p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
-            eprintln!("{} OSM hiking routes' member order from {}", o.len(), p.display());
-            o
-        }
-        None => recall::Orders::default(),
-    };
     let qrank = a.qrank.as_ref().map(|p| {
         Mutex::new(
             rusqlite::Connection::open_with_flags(p, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
@@ -407,7 +393,7 @@ fn main() {
             // Kept apart from the park's routes (write_outputs moves it to
             // known.jsonl), so the website's files don't grow.
             doc["known"] = json!(recall::check(&area, &doc));
-            recall::name_routes(&area, &mut doc, &orders);
+            recall::name_routes(&area, &mut doc);
             recall::name_loops(&mut doc);
             recall::drop_redundant_from(&mut doc);
             Some(Curated { area: p.area, doc })

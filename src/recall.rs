@@ -227,7 +227,7 @@ const NAME_ROUTE: f64 = 0.85;
 /// relation qualifies (the best, if several). Only routes already chosen, so
 /// the relations don't change which routes are picked, and the known-hikes
 /// check stays a measure.
-pub fn name_routes(area: &Area, doc: &mut Value, orders: &Orders) {
+pub fn name_routes(area: &Area, doc: &mut Value) {
     if area.known.is_empty() {
         return;
     }
@@ -284,12 +284,11 @@ pub fn name_routes(area: &Area, doc: &mut Value, orders: &Orders) {
             .max_by(|a, b| (a.1 * a.2).partial_cmp(&(b.1 * b.2)).unwrap());
         if let Some((k, _, _)) = best {
             r["name"] = json!(k.name);
-            // The relation's member order says which way the route goes
+            // The relation's segments run in its member order (basemap's
+            // hiking-routes export), which says which way the route goes
             // (#73): a loop or point-to-point that follows it goes that way.
-            if let Some(trace) = orders.get(&k.id) {
-                if runs_against(r["kind"].as_str() == Some("loop"), &line, trace) {
-                    reverse(r);
-                }
+            if runs_against(r["kind"].as_str() == Some("loop"), &line, &k.segs) {
+                reverse(r);
             }
         }
     };
@@ -305,24 +304,6 @@ pub fn name_routes(area: &Area, doc: &mut Value, orders: &Orders) {
         name(t);
     }
     disambiguate(doc);
-}
-
-/// OSM hiking route relations' member order, as traces of points along
-/// each (basemap's bin/route-order.py), by relation id.
-pub type Orders = HashMap<String, Vec<P>>;
-
-/// Reads route-order.py's JSON lines: {"id", "gaps", "pts": [[lon, lat], ...]}.
-pub fn load_orders(path: &std::path::Path) -> std::io::Result<Orders> {
-    let mut out = Orders::default();
-    for line in std::fs::read_to_string(path)?.lines() {
-        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
-        let (Some(id), Some(pts)) = (v["id"].as_str(), v["pts"].as_array()) else { continue };
-        let pts: Vec<P> = pts.iter().filter_map(|c| Some(world(c[0].as_f64()?, c[1].as_f64()?))).collect();
-        if pts.len() >= 2 {
-            out.insert(id.to_string(), pts);
-        }
-    }
-    Ok(out)
 }
 
 /// How far along a line a point is (metres), and how far from it.
@@ -343,44 +324,34 @@ fn along(line: &[P], p: P) -> (f64, f64) {
     (at, best)
 }
 
-/// A trace point this close to a route is on it.
+/// A relation's segment this close to a route (both ends) is on it.
 const ORDER_NEAR_M: f64 = 150.0;
 
-/// Whether a route runs against a relation's trace: its points, taken in
-/// order, mostly move backwards along the route. For a loop, along is
-/// cyclic: each next point is ahead if it's less than half the loop on.
-/// Needs 3 trace points on the route, and a clear majority.
-fn runs_against(is_loop: bool, line: &[P], trace: &[P]) -> bool {
+/// Whether a route runs against a relation: the relation's segments, which
+/// run in its member order, mostly point backwards along the route. For a
+/// loop, along is cyclic: a segment points ahead if its end is less than half
+/// the loop on from its start. Needs 3 segments on the route, and a clear
+/// majority.
+fn runs_against(is_loop: bool, line: &[P], segs: &[(P, P)]) -> bool {
     let len: f64 = line.windows(2).map(|w| metres(w[0], w[1])).sum();
     if len == 0.0 {
         return false;
     }
-    let at: Vec<f64> = trace
-        .iter()
-        .map(|&p| along(line, p))
-        .filter(|&(_, d)| d <= ORDER_NEAR_M)
-        .map(|(a, _)| a)
-        .collect();
-    if at.len() < 3 {
-        return false;
-    }
-    let (mut fwd, mut back) = (0usize, 0usize);
-    if is_loop {
-        for w in at.windows(2) {
-            let d = (w[1] - w[0]).rem_euclid(len);
-            if d == 0.0 {
-                continue;
-            }
-            if d < len / 2.0 { fwd += 1 } else { back += 1 }
+    let (mut fwd, mut back, mut on) = (0usize, 0usize, 0usize);
+    for &(a, b) in segs {
+        let ((at_a, da), (at_b, db)) = (along(line, a), along(line, b));
+        if da > ORDER_NEAR_M || db > ORDER_NEAR_M {
+            continue;
         }
-    } else {
-        for i in 0..at.len() {
-            for j in i + 1..at.len() {
-                if at[j] > at[i] { fwd += 1 } else if at[j] < at[i] { back += 1 }
-            }
+        on += 1;
+        let d = if is_loop { (at_b - at_a).rem_euclid(len) } else { at_b - at_a };
+        if d == 0.0 {
+            continue;
         }
+        let ahead = if is_loop { d < len / 2.0 } else { d > 0.0 };
+        if ahead { fwd += 1 } else { back += 1 }
     }
-    back > 2 * fwd
+    on >= 3 && back > 2 * fwd
 }
 
 /// Turn a route round: its line, stopovers (and their distances), gain and
@@ -721,6 +692,10 @@ mod order_tests {
         vec![(x, y), (x + d, y), (x + d, y + d), (x, y + d), (x, y)]
     }
 
+    fn segs(pts: &[P]) -> Vec<(P, P)> {
+        pts.windows(2).map(|w| (w[0], w[1])).collect()
+    }
+
     fn walk(line: &[P], n: usize) -> Vec<P> {
         // n points evenly along a closed line's corners, in its order.
         let mut out = vec![];
@@ -738,24 +713,24 @@ mod order_tests {
         let line = square();
         let mut rev = line.clone();
         rev.reverse();
-        let trace = walk(&line, 4);
-        assert!(!runs_against(true, &line, &trace));
-        assert!(runs_against(true, &rev, &trace));
+        let segs = segs(&walk(&line, 4));
+        assert!(!runs_against(true, &line, &segs));
+        assert!(runs_against(true, &rev, &segs));
         // Starting elsewhere on the loop doesn't matter, only the direction.
-        let shifted: Vec<P> = trace[5..].iter().chain(trace[..5].iter()).copied().collect();
+        let shifted: Vec<(P, P)> = segs[5..].iter().chain(segs[..5].iter()).copied().collect();
         assert!(!runs_against(true, &line, &shifted));
     }
 
     #[test]
     fn point_to_point_against_its_relation() {
         let line: Vec<P> = square()[..3].to_vec();
-        let trace = walk(&line, 4);
+        let segs = segs(&walk(&line, 4));
         let mut rev = line.clone();
         rev.reverse();
-        assert!(!runs_against(false, &line, &trace));
-        assert!(runs_against(false, &rev, &trace));
+        assert!(!runs_against(false, &line, &segs));
+        assert!(runs_against(false, &rev, &segs));
         // A relation elsewhere says nothing.
-        let far: Vec<P> = trace.iter().map(|p| (p.0 + 1e5, p.1)).collect();
+        let far: Vec<(P, P)> = segs.iter().map(|&(a, b)| ((a.0 + 1e5, a.1), (b.0 + 1e5, b.1))).collect();
         assert!(!runs_against(false, &rev, &far));
     }
 
