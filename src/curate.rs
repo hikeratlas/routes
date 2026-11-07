@@ -680,6 +680,10 @@ pub struct Start {
     pub node: u32,
     pub pt: P,
     pub trailhead: bool,
+    /// A trailhead, or a parking lot with a name, in OSM. False for an
+    /// unnamed lot and for where a trail meets a road (see Ctx::starts):
+    /// those are named here, after the trail or road nearby (#63).
+    pub known: bool,
 }
 
 /// Shortest and longest named trail (in the park) to offer for itself.
@@ -849,6 +853,33 @@ fn named_throughs(ctx: &Ctx, starts: &[Start]) -> Vec<Through> {
         });
     }
     out
+}
+
+/// How near a route must pass a known trailhead to pass it, and how far
+/// before a made-up end it must be to count as running past it (#63).
+const PASS_KNOWN_M: f64 = 300.0;
+const PAST_KNOWN_M: f64 = 1500.0;
+
+/// Whether a line, walked back from its last point, comes within
+/// PASS_KNOWN_M of a known start PAST_KNOWN_M or more before its end, not
+/// counting starts by its first point (its other end).
+fn runs_past_known(line: &[P], known: &[P]) -> bool {
+    let Some(&first) = line.first() else {
+        return false;
+    };
+    let others: Vec<P> = known
+        .iter()
+        .copied()
+        .filter(|&p| metres(p, first) > PASS_KNOWN_M)
+        .collect();
+    let mut acc = 0.0;
+    for i in (1..line.len()).rev() {
+        acc += metres(line[i], line[i - 1]);
+        if others.iter().any(|&p| metres(p, line[i - 1]) <= PASS_KNOWN_M) {
+            return acc >= PAST_KNOWN_M;
+        }
+    }
+    false
 }
 
 /// Road cost multiplier in multi-day searches (see Ctx::search_trails).
@@ -1279,6 +1310,7 @@ impl<'a> Ctx<'a> {
                     node,
                     pt: p.pt,
                     trailhead: p.trailhead,
+                    known: p.trailhead || !p.name.is_empty(),
                 })
             })
             .collect();
@@ -1331,6 +1363,7 @@ impl<'a> Ctx<'a> {
                 node: n,
                 pt,
                 trailhead: false,
+                known: false,
             });
         }
         merged
@@ -1722,6 +1755,30 @@ pub fn curate(
     if ctx.camps.len() >= 2 && !late() {
         thru.extend(named_throughs(&ctx, &starts));
     }
+    // A point-to-point that ends at a start named here (an unnamed lot, or
+    // where a trail meets a road), after passing a known trailhead well
+    // before it, runs past the trip's real end (#63): Pacific Rim's West
+    // Coast Trail went on from the trail's end at Gordon River along
+    // Deering and Pacific Marine Roads to an unnamed lot by Fairy Lake, the
+    // "F-0100 trailhead", 81.4 km to its 74.9. Such trips go; the one ending
+    // at the known trailhead is a candidate of its own. A trail whose only
+    // access is a road (no known trailhead passed) keeps its road end.
+    let known: Vec<P> = starts.iter().filter(|s| s.known).map(|s| s.pt).collect();
+    let made_up: HashSet<&str> = starts
+        .iter()
+        .filter(|s| !s.known)
+        .map(|s| s.name.as_str())
+        .filter(|n| !starts.iter().any(|s| s.known && s.name == *n))
+        .collect();
+    thru.retain(|t| {
+        if t.kind != "point-to-point" {
+            return true;
+        }
+        let line = &t.ev.line;
+        let rev: Vec<P> = line.iter().rev().copied().collect();
+        !((made_up.contains(t.to.as_str()) && runs_past_known(line, &known))
+            || (made_up.contains(t.from.as_str()) && runs_past_known(&rev, &known)))
+    });
     thru.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
     // Multi-day trips: 3, or more in big parks, by the day-hike budget (a
     // third of it, as for base camps): Jasper (15 day hikes) gets 5, and
@@ -1941,6 +1998,39 @@ impl Curated {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A line along y, 100 m a step (see geo::metres), as a route's points.
+    fn line_m(n: usize) -> Vec<P> {
+        let step = 100.0 / metres((0.0, 0.0), (0.0, 1.0));
+        (0..n).map(|i| (0.0, i as f64 * step)).collect()
+    }
+
+    // #63: past a known trailhead 6.5 km before a made-up end.
+    #[test]
+    fn a_trip_running_past_a_known_trailhead() {
+        let line = line_m(700); // 70 km
+        let end_of_trail = line[635];
+        assert!(runs_past_known(&line, &[end_of_trail]));
+    }
+
+    // A known trailhead next to the made-up end, or none at all (a trail
+    // whose only access is a road), keeps the end.
+    #[test]
+    fn a_road_end_with_no_known_trailhead_before_it() {
+        let line = line_m(700);
+        assert!(!runs_past_known(&line, &[line[695]]));
+        assert!(!runs_past_known(&line, &[]));
+        // A trailhead off to the side, 1 km from the route, isn't passed.
+        let aside = (line[600].0 + (line[10].1 - line[0].1), line[600].1);
+        assert!(!runs_past_known(&line, &[aside]));
+    }
+
+    // The trip's own start (the other end) doesn't count.
+    #[test]
+    fn its_own_start_does_not_count() {
+        let line = line_m(700);
+        assert!(!runs_past_known(&line, &[line[0], line[1]]));
+    }
 
     fn lot(m_east: f64, m_north: f64) -> Place {
         // Around 45°N: place lots by metres, converted to world units there.
