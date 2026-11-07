@@ -20,6 +20,8 @@ pub struct Way {
     pub class: Class,
     pub bike: bool,
     pub walk: bool, // foot=designated, or on a hiking route relation
+    /// SAC hiking grade, T1-T6 as 1-6 (the basemap's sac); 0 if ungraded.
+    pub sac: u8,
 }
 
 #[derive(Clone, Copy)]
@@ -239,6 +241,17 @@ fn read_tile(
                         // it, and Whistler's bike park is mostly foot=yes. A
                         // path designated for bikes is one unless walkers are
                         // at least allowed (a shared-use path).
+                        // Paths graded T5-T6 on the SAC scale (demanding or
+                        // difficult alpine hiking): climbing and glaciers,
+                        // which need ropes or crampons (#45). Jasper's Mount
+                        // Edith Cavell Route (T6) took the Tonquin Valley
+                        // hike over the mountain (#54). T4 is a scramble:
+                        // allowed, and reported (Eval::max_sac).
+                        let sac = l.get(f, "sac").map(|v| v.as_f64()).unwrap_or(0.0);
+                        if sac >= 5.0 {
+                            continue;
+                        }
+                        let sac = sac.max(0.0) as u8;
                         let flag = |k: &str| {
                             l.get(f, k)
                                 .is_some_and(|v| matches!(v, mvt::Value::Bool(true)))
@@ -256,6 +269,7 @@ fn read_tile(
                                     class,
                                     bike,
                                     walk,
+                                    sac,
                                 },
                                 pts,
                             ));
@@ -454,6 +468,7 @@ impl Graph {
                     class: way.class,
                     bike,
                     walk: way.walk,
+                    sac: way.sac,
                 });
                 let factor = match way.class {
                     Class::Trail => 1.0,
@@ -501,6 +516,7 @@ impl Graph {
             class: Class::Join,
             bike: false,
             walk: false,
+            sac: 0,
         });
         let mut buckets: HashMap<(i64, i64), Vec<u32>> = HashMap::new();
         for &i in &edge_nodes {

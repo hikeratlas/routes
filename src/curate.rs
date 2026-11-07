@@ -189,6 +189,9 @@ pub struct Eval {
     /// Share of the route along an OSM hiking route (see Ctx::on_known).
     pub known: f64,
     pub via: Vec<String>,
+    /// Hardest SAC grade along the route (1-4; 0 if none is graded): 4 is
+    /// a scramble (#45).
+    pub max_sac: u8,
     pub line: Vec<P>,
 }
 
@@ -575,6 +578,7 @@ impl<'a> Ctx<'a> {
                 via.push(n.clone());
             }
         }
+        let max_sac = ways.iter().map(|&w| g.ways[w as usize].sac).max().unwrap_or(0);
         Eval {
             one_way,
             total,
@@ -591,6 +595,7 @@ impl<'a> Ctx<'a> {
             bike,
             known,
             via,
+            max_sac,
             line: full,
         }
     }
@@ -1860,6 +1865,7 @@ pub fn eval_json(ev: &Eval) -> Value {
         "stopovers": ev.camps.iter().map(|(n, m, p)| json!({"name": n, "km": (m / 100.0).round() / 10.0, "at": geo::round_ll(*p)})).collect::<Vec<_>>(),
         "via": ev.via,
         "road_share": (ev.road * 100.0).round() / 100.0,
+        "max_sac": ev.max_sac,
         "line": line_json(&ev.line),
     })
 }
