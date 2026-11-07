@@ -622,6 +622,12 @@ const W_KNOWN: f64 = 2.0;
 /// mountain-bike trails belong on the map, not in hikes, and in a bike park
 /// the best of a bad lot still scored as a hike.
 pub const MAX_BIKE: f64 = 0.5;
+/// A day hike with more of its length on roads open to cars than this isn't
+/// offered (#66): Terra Nova's Ochre Hill Fire Tower, a viewpoint with a
+/// road to its door, was a 10.6 km walk up that road (98% of it), as the
+/// trail from the road's end is under the 1.5 km a day hike needs. Roads closed
+/// to cars are tracks (area.rs), so fire roads and the like still count.
+pub const MAX_ROAD: f64 = 0.5;
 const W_TOO_LONG: f64 = -1.5;
 const W_TOO_MUCH_GAIN: f64 = -1.0;
 
@@ -1225,7 +1231,7 @@ impl<'a> Ctx<'a> {
                 edges,
                 ev,
             };
-            if ev.bike <= MAX_BIKE {
+            if ev.bike <= MAX_BIKE && ev.road <= MAX_ROAD {
                 out.push(mk("out-and-back", sc, parts, pen.clone(), ev));
             }
             // a loop: back by a different way, if there's a good one
@@ -1238,7 +1244,7 @@ impl<'a> Ctx<'a> {
                     let full: Vec<u32> = path.iter().chain(back.iter().skip(1)).copied().collect();
                     let fw: Vec<u32> = ways.iter().chain(bways.iter()).copied().collect();
                     let ev2 = self.evaluate(&full, &fw, false);
-                    if ev2.bike <= MAX_BIKE {
+                    if ev2.bike <= MAX_BIKE && ev2.road <= MAX_ROAD {
                         let (s2, p2) = score(&ev2, d, true);
                         out.push(mk("loop", s2, p2, edge_set(&full), ev2));
                     }
