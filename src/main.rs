@@ -498,7 +498,13 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
                 .collect()
         })
         .collect();
-    let mut written = 0;
+    let ids: Vec<String> = docs.iter().map(|c| s(&c.doc["park"], "id")).collect();
+    // The parks with routes of their own, after the de-duplication below, in
+    // order; parks whose routes are all another's (twin); and multi-day trips
+    // given to a smaller park: (bigger park, smaller park's position, trip key).
+    let mut kept: Vec<serde_json::Value> = vec![];
+    let mut twins: Vec<(String, String)> = vec![];
+    let mut moves: Vec<(String, usize, String)> = vec![];
     for (i, Curated { mut doc, .. }) in docs.into_iter().enumerate() {
         // A multi-day trip a smaller park also has, between other ends, with
         // half or more of the same campsites, is that park's (#53): Pacific
@@ -509,13 +515,22 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
         if let Some(Value::Array(ts)) = doc.get_mut("point_to_points") {
             ts.retain(|t| {
                 let (k, c) = (multi_key(t), camps(t));
-                c.is_empty()
-                    || !multis[i + 1..].iter().flatten().any(|(uk, uc)| {
-                        *uk != k
+                if c.is_empty() {
+                    return true;
+                }
+                for (j, ms) in multis.iter().enumerate().skip(i + 1) {
+                    for (uk, uc) in ms {
+                        if *uk != k
                             && !uc.is_empty()
                             && c.intersection(uc).count() as f64 / c.len().min(uc.len()) as f64
                                 >= 0.5
-                    })
+                        {
+                            moves.push((ids[i].clone(), j, uk.clone()));
+                            return false;
+                        }
+                    }
+                }
+                true
             });
         }
         let (p_id, p_name) = (s(&doc["park"], "id"), s(&doc["park"], "name"));
@@ -561,11 +576,66 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
             // twice (Cape Breton Highlands is relations 4855583 and
             // 17879029). Point this park's entry at that one's routes, so the
             // website finds them under either id.
-            if let Some(at) = twin.and_then(|t| index.get(&t).cloned()) {
-                index.insert(p_id.clone(), at);
+            if let Some(t) = twin {
+                twins.push((p_id.clone(), t));
             }
             continue;
         }
+        kept.push(doc);
+    }
+
+    // A park whose multi-day trip went to a smaller park inside it lists it
+    // too, as see_also (#53's follow-up): Guadalupe Mountains National
+    // Park's trips are its Wilderness's, and its page should still show
+    // them. They're references, not copies: the map and search have each
+    // trip once, under the smaller park.
+    let at: HashMap<String, usize> = kept
+        .iter()
+        .enumerate()
+        .map(|(k, d)| (s(&d["park"], "id"), k))
+        .collect();
+    // A smaller park that took one of a park's trips lies in it: the park
+    // lists all of the smaller park's multi-day trips (Guadalupe Mountains
+    // Wilderness has a loop that replaced the national park's own, and the
+    // McKittrick Ridge traverse besides).
+    let mut pairs: Vec<(String, usize)> = moves.iter().map(|(b, j, _)| (b.clone(), *j)).collect();
+    pairs.dedup();
+    for (bigger, j) in &pairs {
+        let smaller = &ids[*j];
+        let (Some(&b), Some(&sm)) = (at.get(bigger), at.get(smaller)) else {
+            continue;
+        };
+        let entries: Vec<Value> = kept[sm]["point_to_points"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .map(|(k, t)| {
+                json!({
+                    "id": format!("{smaller}/multi/{k}"), "park": smaller,
+                    "park_name": kept[sm]["park"]["name"],
+                    "name": t["name"], "from": t["from"], "to": t["to"], "kind": t["kind"],
+                    "km": t["route"]["km"], "gain": t["route"]["gain"],
+                })
+            })
+            .collect();
+        let list = kept[b]
+            .as_object_mut()
+            .unwrap()
+            .entry("see_also")
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .unwrap();
+        for e in entries {
+            if !list.iter().any(|x| x["id"] == e["id"]) {
+                list.push(e);
+            }
+        }
+    }
+
+    let mut written = 0;
+    for doc in kept {
+        let (p_id, p_name) = (s(&doc["park"], "id"), s(&doc["park"], "name"));
         written += 1;
         let body = serde_json::to_vec(&doc).unwrap();
         std::fs::write(out.join("parks").join(format!("{p_id}.json")), &body).unwrap();
@@ -647,6 +717,11 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
             );
         }
     }
+    for (p, t) in twins {
+        if let Some(i) = index.get(&t).cloned() {
+            index.insert(p, i);
+        }
+    }
     eprintln!("{written} parks with routes");
     lines.flush().unwrap();
     known.flush().unwrap();
@@ -722,6 +797,10 @@ mod tests {
         assert_eq!(big["day_hikes"].as_array().unwrap().len(), 1);
         let small = written(&dir, "unit").unwrap();
         assert_eq!(small["point_to_points"][0]["to"], "WCT");
+        // The bigger park still lists it, pointing at the smaller park's.
+        assert_eq!(big["see_also"][0]["id"], "unit/multi/0");
+        assert_eq!(big["see_also"][0]["park"], "unit");
+        assert!(small.get("see_also").is_none());
     }
 
     // A park mapped twice (Cape Breton Highlands): the same trips, the same
