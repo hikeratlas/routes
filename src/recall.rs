@@ -227,7 +227,7 @@ const NAME_ROUTE: f64 = 0.85;
 /// relation qualifies (the best, if several). Only routes already chosen, so
 /// the relations don't change which routes are picked, and the known-hikes
 /// check stays a measure.
-pub fn name_routes(area: &Area, doc: &mut Value) {
+pub fn name_routes(area: &Area, doc: &mut Value, orders: &Orders) {
     if area.known.is_empty() {
         return;
     }
@@ -284,6 +284,13 @@ pub fn name_routes(area: &Area, doc: &mut Value) {
             .max_by(|a, b| (a.1 * a.2).partial_cmp(&(b.1 * b.2)).unwrap());
         if let Some((k, _, _)) = best {
             r["name"] = json!(k.name);
+            // The relation's member order says which way the route goes
+            // (#73): a loop or point-to-point that follows it goes that way.
+            if let Some(trace) = orders.get(&k.id) {
+                if runs_against(r["kind"].as_str() == Some("loop"), &line, trace) {
+                    reverse(r);
+                }
+            }
         }
     };
     for h in doc["day_hikes"].as_array_mut().into_iter().flatten() {
@@ -298,6 +305,120 @@ pub fn name_routes(area: &Area, doc: &mut Value) {
         name(t);
     }
     disambiguate(doc);
+}
+
+/// OSM hiking route relations' member order, as traces of points along
+/// each (basemap's bin/route-order.py), by relation id.
+pub type Orders = HashMap<String, Vec<P>>;
+
+/// Reads route-order.py's JSON lines: {"id", "gaps", "pts": [[lon, lat], ...]}.
+pub fn load_orders(path: &std::path::Path) -> std::io::Result<Orders> {
+    let mut out = Orders::default();
+    for line in std::fs::read_to_string(path)?.lines() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        let (Some(id), Some(pts)) = (v["id"].as_str(), v["pts"].as_array()) else { continue };
+        let pts: Vec<P> = pts.iter().filter_map(|c| Some(world(c[0].as_f64()?, c[1].as_f64()?))).collect();
+        if pts.len() >= 2 {
+            out.insert(id.to_string(), pts);
+        }
+    }
+    Ok(out)
+}
+
+/// How far along a line a point is (metres), and how far from it.
+fn along(line: &[P], p: P) -> (f64, f64) {
+    let (mut best, mut at, mut acc) = (f64::MAX, 0.0, 0.0);
+    for w in line.windows(2) {
+        let (dx, dy) = (w[1].0 - w[0].0, w[1].1 - w[0].1);
+        let l2 = dx * dx + dy * dy;
+        let t = if l2 == 0.0 { 0.0 } else { (((p.0 - w[0].0) * dx + (p.1 - w[0].1) * dy) / l2).clamp(0.0, 1.0) };
+        let q = (w[0].0 + t * dx, w[0].1 + t * dy);
+        let d = metres(p, q);
+        if d < best {
+            best = d;
+            at = acc + t * metres(w[0], w[1]);
+        }
+        acc += metres(w[0], w[1]);
+    }
+    (at, best)
+}
+
+/// A trace point this close to a route is on it.
+const ORDER_NEAR_M: f64 = 150.0;
+
+/// Whether a route runs against a relation's trace: its points, taken in
+/// order, mostly move backwards along the route. For a loop, along is
+/// cyclic: each next point is ahead if it's less than half the loop on.
+/// Needs 3 trace points on the route, and a clear majority.
+fn runs_against(is_loop: bool, line: &[P], trace: &[P]) -> bool {
+    let len: f64 = line.windows(2).map(|w| metres(w[0], w[1])).sum();
+    if len == 0.0 {
+        return false;
+    }
+    let at: Vec<f64> = trace
+        .iter()
+        .map(|&p| along(line, p))
+        .filter(|&(_, d)| d <= ORDER_NEAR_M)
+        .map(|(a, _)| a)
+        .collect();
+    if at.len() < 3 {
+        return false;
+    }
+    let (mut fwd, mut back) = (0usize, 0usize);
+    if is_loop {
+        for w in at.windows(2) {
+            let d = (w[1] - w[0]).rem_euclid(len);
+            if d == 0.0 {
+                continue;
+            }
+            if d < len / 2.0 { fwd += 1 } else { back += 1 }
+        }
+    } else {
+        for i in 0..at.len() {
+            for j in i + 1..at.len() {
+                if at[j] > at[i] { fwd += 1 } else if at[j] < at[i] { back += 1 }
+            }
+        }
+    }
+    back > 2 * fwd
+}
+
+/// Turn a route round: its line, stopovers (and their distances), gain and
+/// loss, the trails and sights it passes in order, and a point-to-point's
+/// ends. A loop keeps its start.
+fn reverse(r: &mut Value) {
+    let is_loop = r["kind"].as_str() == Some("loop");
+    let route = &mut r["route"];
+    let km = route["km"].as_f64().unwrap_or(0.0);
+    if let Some(l) = route["line"].as_array_mut() {
+        l.reverse();
+    }
+    if let Some(st) = route["stopovers"].as_array_mut() {
+        for s in st.iter_mut() {
+            if let Some(k) = s["km"].as_f64() {
+                s["km"] = json!(((km - k) * 10.0).round() / 10.0);
+            }
+        }
+        st.reverse();
+    }
+    let (g, l) = (route["gain"].clone(), route["loss"].clone());
+    route["gain"] = l;
+    route["loss"] = g;
+    if let Some(v) = route["via"].as_array_mut() {
+        v.reverse();
+    }
+    for p in route["passes"].as_array_mut().into_iter().flatten() {
+        if let Some(names) = p[1].as_array_mut() {
+            names.reverse();
+        }
+    }
+    if !is_loop {
+        let (f, t) = (r["from"].clone(), r["to"].clone());
+        if !t.is_null() {
+            r["from"] = t;
+            r["to"] = f;
+        }
+    }
 }
 
 /// Two routes in a park named after the same relation (Joffre Lakes Trail,
@@ -587,5 +708,76 @@ mod tests {
         assert!((c - 0.65).abs() < 1e-9, "{c}");
         // 100 m away covers nothing.
         assert_eq!(coverage(&pts, &[at(0.0, 100.0), at(1000.0, 100.0)]), 0.0);
+    }
+}
+
+#[cfg(test)]
+mod order_tests {
+    use super::*;
+
+    // A square loop ~2 km a side, clockwise on the map (y grows south).
+    fn square() -> Vec<P> {
+        let (x, y, d) = (0.25 * geo::WORLD, 0.35 * geo::WORLD, 2000.0 / mpu(0.35 * geo::WORLD));
+        vec![(x, y), (x + d, y), (x + d, y + d), (x, y + d), (x, y)]
+    }
+
+    fn walk(line: &[P], n: usize) -> Vec<P> {
+        // n points evenly along a closed line's corners, in its order.
+        let mut out = vec![];
+        for w in line.windows(2) {
+            for i in 0..n {
+                let t = i as f64 / n as f64;
+                out.push((w[0].0 + (w[1].0 - w[0].0) * t, w[0].1 + (w[1].1 - w[0].1) * t));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn loop_against_its_relation() {
+        let line = square();
+        let mut rev = line.clone();
+        rev.reverse();
+        let trace = walk(&line, 4);
+        assert!(!runs_against(true, &line, &trace));
+        assert!(runs_against(true, &rev, &trace));
+        // Starting elsewhere on the loop doesn't matter, only the direction.
+        let shifted: Vec<P> = trace[5..].iter().chain(trace[..5].iter()).copied().collect();
+        assert!(!runs_against(true, &line, &shifted));
+    }
+
+    #[test]
+    fn point_to_point_against_its_relation() {
+        let line: Vec<P> = square()[..3].to_vec();
+        let trace = walk(&line, 4);
+        let mut rev = line.clone();
+        rev.reverse();
+        assert!(!runs_against(false, &line, &trace));
+        assert!(runs_against(false, &rev, &trace));
+        // A relation elsewhere says nothing.
+        let far: Vec<P> = trace.iter().map(|p| (p.0 + 1e5, p.1)).collect();
+        assert!(!runs_against(false, &rev, &far));
+    }
+
+    #[test]
+    fn reversing_a_point_to_point() {
+        let mut r = json!({
+            "kind": "point-to-point", "from": "A", "to": "B",
+            "route": {"km": 10.0, "gain": 500.0, "loss": 100.0, "line": [[0, 0], [1, 1]],
+                      "stopovers": [{"name": "c1", "km": 3.0}, {"name": "c2", "km": 7.5}],
+                      "via": ["x", "y"], "passes": [["lake", ["l1", "l2"]]]}
+        });
+        reverse(&mut r);
+        assert_eq!(r["from"], "B");
+        assert_eq!(r["to"], "A");
+        let route = &r["route"];
+        assert_eq!(route["gain"], 100.0);
+        assert_eq!(route["loss"], 500.0);
+        assert_eq!(route["line"][0], json!([1, 1]));
+        assert_eq!(route["stopovers"][0]["name"], "c2");
+        assert_eq!(route["stopovers"][0]["km"], 2.5);
+        assert_eq!(route["stopovers"][1]["km"], 7.0);
+        assert_eq!(route["via"], json!(["y", "x"]));
+        assert_eq!(route["passes"][0][1], json!(["l2", "l1"]));
     }
 }
