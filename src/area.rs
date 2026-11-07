@@ -5,7 +5,7 @@ use crate::geo::{self, EXT, P, Poly, Z, metres, mpu};
 use crate::mvt;
 use crate::pmtiles::PmTiles;
 use rayon::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Class {
@@ -190,6 +190,11 @@ fn read_tile(
                 match l.name.as_str() {
                     "path" | "road" if f.typ == 2 => {
                         let kind = l.str(f, "kind");
+                        // Via ferratas need a harness and lanyards, not
+                        // just boots (#45).
+                        if kind == "via_ferrata" {
+                            continue;
+                        }
                         let class = if l.name == "path" {
                             // Ferries and cable cars on trails (e.g. the West
                             // Coast Trail's Nitinat Narrows): walkable, at a
@@ -608,7 +613,59 @@ impl Area {
                 d.pt = (x / n, y / n);
             }
         }
+        area.drop_glacier_trails();
         area
+    }
+
+    /// Whether a point is on a glacier (land cover).
+    fn on_glacier(&self, p: P) -> bool {
+        self.tiles
+            .get(&geo::tile_of(p))
+            .is_some_and(|t| t.land.iter().any(|(c, poly)| *c == 0 && poly.contains(p)))
+    }
+
+    /// Drop ungraded trail edges across a glacier (#45): crossing one needs
+    /// a rope and crampons, and most alpine paths have no sac_scale to say
+    /// so (Area's T5-T6 skip only catches graded ones). An edge goes when
+    /// both its ends and its middle are on the ice, so a trail to a
+    /// glacier's toe or along its edge stays. A graded path (T1-T4) is
+    /// trusted: glaciers shrink, and their outlines lag.
+    fn drop_glacier_trails(&mut self) {
+        if !self.tiles.values().any(|t| t.land.iter().any(|(c, _)| *c == 0)) {
+            return;
+        }
+        let g = &self.graph;
+        let ungraded = |w: u32| {
+            let w = &g.ways[w as usize];
+            w.class == Class::Trail && w.sac == 0
+        };
+        let mut ice: HashMap<u32, bool> = HashMap::new();
+        let mut drop: HashSet<(u32, u32)> = HashSet::new();
+        for (u, es) in g.adj.iter().enumerate() {
+            let u = u as u32;
+            for e in es {
+                if e.to < u || !ungraded(e.way) {
+                    continue;
+                }
+                let (a, b) = (g.pts[u as usize], g.pts[e.to as usize]);
+                let on = |n: u32, ice: &mut HashMap<u32, bool>| {
+                    *ice.entry(n).or_insert_with(|| self.on_glacier(g.pts[n as usize]))
+                };
+                if on(u, &mut ice)
+                    && on(e.to, &mut ice)
+                    && self.on_glacier(((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0))
+                {
+                    drop.insert((u, e.to));
+                }
+            }
+        }
+        if drop.is_empty() {
+            return;
+        }
+        for (u, es) in self.graph.adj.iter_mut().enumerate() {
+            let u = u as u32;
+            es.retain(|e| !drop.contains(&(u.min(e.to), u.max(e.to))));
+        }
     }
 
     pub fn landcover(&self, p: P) -> u8 {
