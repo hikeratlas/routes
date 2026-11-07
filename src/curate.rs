@@ -703,6 +703,54 @@ pub struct Start {
 /// A line's nodes in order, and the ways between them.
 type Line = (Vec<u32>, Vec<u32>);
 
+/// The number a campsite goes by: the first run of digits in its name
+/// ("H22 - Moose Pass" is 22, "Site 14" is 14).
+fn camp_number(name: &str) -> Option<u32> {
+    let digits: String = name
+        .chars()
+        .skip_while(|c| !c.is_ascii_digit())
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse().ok()
+}
+
+/// Whether the numbered campsites along a path mostly count down, so the
+/// trip runs against the park's usual direction: parks number backcountry
+/// campsites along their trails, and Killarney's La Cloche Silhouette runs
+/// clockwise from H1 up to H53 (#73). Needs at least 3 numbered campsites;
+/// compares every pair, so one out-of-order site doesn't flip it.
+fn runs_backwards(ctx: &Ctx, path: &[u32]) -> bool {
+    let mut seen: HashSet<u32> = HashSet::default();
+    let mut nums: Vec<u32> = vec![];
+    for n in path {
+        for &ci in ctx.camp_near.get(n).map(|v| &v[..]).unwrap_or(&[]) {
+            if seen.insert(ci) {
+                if let Some(k) = camp_number(&ctx.camps[ci as usize].name) {
+                    nums.push(k);
+                }
+            }
+        }
+    }
+    counts_down(&nums)
+}
+
+fn counts_down(nums: &[u32]) -> bool {
+    if nums.len() < 3 {
+        return false;
+    }
+    let (mut up, mut down) = (0usize, 0usize);
+    for i in 0..nums.len() {
+        for j in i + 1..nums.len() {
+            if nums[j] > nums[i] {
+                up += 1;
+            } else if nums[j] < nums[i] {
+                down += 1;
+            }
+        }
+    }
+    down > up
+}
+
 fn named_throughs(ctx: &Ctx, starts: &[Start]) -> Vec<Through> {
     let g = &ctx.area.graph;
     // The trailhead nearest a node, within NAMED_ACCESS_M: the path from
@@ -1801,8 +1849,15 @@ pub fn curate(
                 if shared >= 0.3 || bm > m * 1.6 || !(18000.0..=100000.0).contains(&total) {
                     continue;
                 }
-                let full: Vec<u32> = path.iter().chain(back.iter().skip(1)).copied().collect();
-                let fw: Vec<u32> = ways.iter().chain(bways.iter()).copied().collect();
+                let mut full: Vec<u32> = path.iter().chain(back.iter().skip(1)).copied().collect();
+                let mut fw: Vec<u32> = ways.iter().chain(bways.iter()).copied().collect();
+                // Which way round is arbitrary here (out by the shortest
+                // path to the turn): go the way the park numbers its
+                // campsites (#73).
+                if runs_backwards(&ctx, &full) {
+                    full.reverse();
+                    fw.reverse();
+                }
                 // Campsites passed, and metres in the park.
                 let mut passed: HashSet<u32> = HashSet::default();
                 let mut inp = 0.0;
@@ -2086,6 +2141,25 @@ impl Curated {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn camp_numbers() {
+        assert_eq!(camp_number("H22 - Moose Pass"), Some(22));
+        assert_eq!(camp_number("H3"), Some(3));
+        assert_eq!(camp_number("Site 14"), Some(14));
+        assert_eq!(camp_number("Moose Pass"), None);
+    }
+
+    #[test]
+    fn counting_down() {
+        // La Cloche as built before #73: H53 round to H3.
+        assert!(counts_down(&[53, 49, 47, 38, 31, 22, 3]));
+        assert!(!counts_down(&[3, 22, 31, 38, 47, 49, 53]));
+        // One site out of order doesn't flip it.
+        assert!(!counts_down(&[3, 22, 5, 38, 47]));
+        // Too few to tell.
+        assert!(!counts_down(&[9, 2]));
+    }
+
     use super::*;
 
     // A line along y, 100 m a step (see geo::metres), as a route's points.
