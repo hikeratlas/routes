@@ -1444,6 +1444,8 @@ pub struct Through {
 
 pub struct Curated {
     pub day: Vec<Cand>,
+    /// Short walks to a sight from where a car can get to (#70).
+    pub stops: Vec<Cand>,
     pub bases: Vec<BaseCamp>,
     pub through: Vec<Through>,
     pub stats: String,
@@ -1453,6 +1455,83 @@ pub struct Curated {
 }
 
 const MULTI_STARTS_PER_CAMP: usize = 6;
+
+/// How far a stop may be from where the car is (#70).
+const STOP_MAX_M: f64 = 1000.0;
+/// Under this, a stop's walk may be along the road (a pull-out viewpoint).
+const STOP_ROADSIDE_M: f64 = 200.0;
+/// Sights this close together are one stop.
+const STOP_SAME_M: f64 = 200.0;
+
+/// Stops (#70): a viewpoint, peak or waterfall a short walk (STOP_MAX_M)
+/// from where a car can get to, which a day hike can't be, as those start
+/// 1.5 km or more away. Terra Nova's Ochre Hill Fire Tower is 100 m from the
+/// turning circle at the end of its road; Banff's Peyto Lake View, 600 m
+/// from the Bow Summit lot. Cars get to the trailheads and parking lots
+/// (starts) and the ends of roads open to them (a turning circle often has
+/// no lot mapped). One stop per sight, from the nearest of those; the most
+/// appealing and best known first, a third of the day-hike budget (2 to 5).
+fn stops(ctx: &Ctx, starts: &[Start], targets: &[(usize, Vec<u32>)], n_day: usize) -> Vec<Cand> {
+    let g = &ctx.area.graph;
+    let sights: Vec<(usize, Vec<u32>)> = targets
+        .iter()
+        .filter(|(di, _)| {
+            let d = &ctx.dests[*di];
+            matches!(d.kind, Kind::Viewpoint | Kind::Peak | Kind::Waterfall) && !d.minor
+        })
+        .cloned()
+        .collect();
+    if sights.is_empty() {
+        return vec![];
+    }
+    // Where cars get to: the starts, and the dead ends of roads near the
+    // park, named for the road.
+    let mut cars: Vec<(u32, String)> = starts.iter().map(|s| (s.node, s.name.clone())).collect();
+    for (n, adj) in g.adj.iter().enumerate() {
+        let n = n as u32;
+        // A road's end: one road edge, whatever paths also meet it there
+        // (Ochre Hill's turning circle is where its lookout loop starts).
+        let mut roads = adj.iter().filter(|e| g.ways[e.way as usize].class == Class::Road);
+        let (Some(e), None) = (roads.next(), roads.next()) else {
+            continue;
+        };
+        if ctx.area.park_dist(g.pts[n as usize], 1000.0).is_none() {
+            continue;
+        }
+        let road = &g.ways[e.way as usize].name;
+        cars.push((n, if road.is_empty() { "Road's end".into() } else { format!("End of {road}") }));
+    }
+    let cands: Vec<Cand> = cars
+        .par_iter()
+        .flat_map(|(n, name)| ctx.candidates(*n, name, &sights, 0.0, STOP_MAX_M))
+        .filter(|c| c.kind == "out-and-back" && c.ev.bike <= MAX_BIKE)
+        .filter(|c| c.ev.one_way < STOP_ROADSIDE_M || c.ev.road <= MAX_ROAD)
+        .collect();
+    // Per sight, the shortest walk; then by appeal and how well known.
+    let mut best: HashMap<&str, &Cand> = HashMap::default();
+    for c in &cands {
+        if best.get(c.dest.as_str()).is_none_or(|b| c.ev.one_way < b.ev.one_way) {
+            best.insert(&c.dest, c);
+        }
+    }
+    let worth = |c: &Cand| {
+        c.parts.iter().filter(|(k, _)| matches!(*k, "appeal" | "popularity")).map(|(_, v)| v).sum::<f64>()
+    };
+    let mut v: Vec<&Cand> = best.into_values().collect();
+    v.sort_by(|a, b| worth(b).partial_cmp(&worth(a)).unwrap().then_with(|| a.dest.cmp(&b.dest)));
+    // A sight beside one already chosen is the same stop (Ochre Hill's fire
+    // tower and the lookout platform 30 m from it).
+    let mut out: Vec<Cand> = vec![];
+    for c in v {
+        if out.len() >= (n_day / 3).clamp(2, 5) {
+            break;
+        }
+        if out.iter().all(|o| metres(o.dest_pt, c.dest_pt) > STOP_SAME_M) {
+            out.push(c.clone());
+        }
+    }
+    out
+}
 
 /// Curate a park's routes. With a `deadline`, trailheads and campsites not
 /// started by then are skipped, so a pathological park can't hold up a whole
@@ -1544,6 +1623,8 @@ pub fn curate(
     }
     let day = select(&cands, n_day, true);
     stats += &format!("; day {:.1}s", t.elapsed().as_secs_f64());
+
+    let stops = if late() { vec![] } else { stops(&ctx, &starts, &targets, n_day) };
 
     // base camps: campsites in the park, reached from the nearest trailhead,
     // with day hikes from them
@@ -1839,6 +1920,7 @@ pub fn curate(
     }
     Curated {
         day,
+        stops,
         bases,
         through,
         stats,
@@ -1976,6 +2058,7 @@ impl Curated {
     pub fn to_json(&self) -> Value {
         json!({
             "day_hikes": self.day.iter().map(cand_json).collect::<Vec<_>>(),
+            "stops": self.stops.iter().map(cand_json).collect::<Vec<_>>(),
             "base_camps": self.bases.iter().map(|b| json!({
                 "camp": b.camp,
                 "at": geo::round_ll(b.camp_pt),

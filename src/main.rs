@@ -545,6 +545,10 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
                 writeln!(known, "{k}").unwrap();
             }
         }
+        // Documents from before stops (#70) have none.
+        if doc.get("stops").is_none() {
+            doc["stops"] = json!([]);
+        }
         // The park that already has one of this park's routes, if any.
         let mut twin: Option<String> = None;
         let mut keep = |list: &str, key: &dyn Fn(&serde_json::Value) -> String| {
@@ -569,7 +573,8 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
         };
         let n = keep("day_hikes", &|h| {
             format!("day|{}|{}|{}", s(h, "from"), s(h, "dest"), s(h, "kind"))
-        }) + keep("base_camps", &|b| format!("base|{}", s(b, "camp")))
+        }) + keep("stops", &|h| format!("stop|{}", s(h, "dest")))
+            + keep("base_camps", &|b| format!("base|{}", s(b, "camp")))
             + keep("point_to_points", &multi_key);
         if n == 0 {
             // Every route is already another park's: the same park mapped
@@ -674,6 +679,16 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
                 named(h, format!("{} from {}", s(h, "dest"), s(h, "from"))),
                 &h["route"],
                 json!({"kind": h["kind"]}),
+            );
+        }
+        // Stops (#70): "<sight> from <where the car is>".
+        for (i, h) in doc["stops"].as_array().into_iter().flatten().enumerate() {
+            emit(
+                format!("{p_id}/stop/{i}"),
+                "stop",
+                format!("{} from {}", s(h, "dest"), s(h, "from")),
+                &h["route"],
+                json!({"kind": "stop"}),
             );
         }
         for (i, b) in doc["base_camps"].as_array().unwrap().iter().enumerate() {
