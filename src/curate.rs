@@ -713,8 +713,8 @@ fn named_throughs(ctx: &Ctx, starts: &[Start]) -> Vec<Through> {
             by_name.entry(name).or_default().push((path, ways));
         }
     }
-    let mut lines: Vec<Line> = vec![];
-    for (_, mut ps) in by_name {
+    let mut lines: Vec<(&str, Line)> = vec![];
+    for (trail, mut ps) in by_name {
         // Join any two pieces with ends close together, until none are.
         'join: loop {
             for i in 0..ps.len() {
@@ -765,9 +765,9 @@ fn named_throughs(ctx: &Ctx, starts: &[Start]) -> Vec<Through> {
             }
             break;
         }
-        lines.extend(ps);
+        lines.extend(ps.into_iter().map(|p| (trail, p)));
     }
-    for (path, ways) in lines {
+    for (trail, (path, ways)) in lines {
         let len: f64 = path
             .windows(2)
             .map(|w| metres(g.pts[w[0] as usize], g.pts[w[1] as usize]))
@@ -823,9 +823,16 @@ fn named_throughs(ctx: &Ctx, starts: &[Start]) -> Vec<Through> {
             continue;
         }
         let kinds: HashSet<Kind> = ev.passed.iter().map(|(k, _)| *k).collect();
+        // A long named trail walked end to end, past campsites, is a trip
+        // people know, as much as an OSM hiking route is: the same bump
+        // (W_KNOWN), by the share of the trip on the trail. Jasper's
+        // Tonquin Valley trail (no hiking route relation) scored 3.97, under
+        // the three trips chosen then (#54).
+        let on_trail = (len / m).min(1.0);
         let sc = 1.0 * kinds.len() as f64 + 2.5 * ev.open_high + 0.7 * ev.lc_variety.min(4.0)
             - 2.5 * ev.road
-            - 2.0 * ev.bike;
+            - 2.0 * ev.bike
+            + W_KNOWN * on_trail;
         out.push(Through {
             from: a.name.clone(),
             to: b.name.clone(),
@@ -833,6 +840,7 @@ fn named_throughs(ctx: &Ctx, starts: &[Start]) -> Vec<Through> {
             score: sc,
             ev,
             edges: edge_set(&full),
+            name: Some(trail.to_string()),
         });
     }
     out
@@ -1385,6 +1393,9 @@ pub struct Through {
     pub score: f64,
     pub ev: Eval,
     edges: HashSet<u64>,
+    /// The named trail it walks end to end (named_throughs): its title,
+    /// unless an OSM hiking route names it (recall::name_routes).
+    pub name: Option<String>,
 }
 
 pub struct Curated {
@@ -1628,6 +1639,7 @@ pub fn curate(
                     score: sc,
                     ev,
                     edges: edge_set(&path),
+                    name: None,
                 });
             }
             // Multi-day loops back to this trailhead (e.g. Killarney's La
@@ -1696,6 +1708,7 @@ pub fn curate(
                     score: sc,
                     ev,
                     edges: edge_set(&full),
+                    name: None,
                 });
             }
             out
@@ -1705,6 +1718,10 @@ pub fn curate(
         thru.extend(named_throughs(&ctx, &starts));
     }
     thru.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+    // Multi-day trips: 3, or more in big parks, by the day-hike budget (a
+    // third of it, as for base camps): Jasper (15 day hikes) gets 5, and
+    // had room for only three of its well-known trips (#54).
+    let n_multi = (n_day / 3).clamp(3, 5);
     let mut through: Vec<Through> = vec![];
     let mut seen: HashSet<(String, String)> = HashSet::default();
     for t in thru {
@@ -1730,12 +1747,20 @@ pub fn curate(
                         && !uc.is_empty()
                         && shared / tc.len().min(uc.len()) as f64 >= 0.5)
             })
+            // Or mostly campsites the chosen trips already pass, between
+            // them: with more places (n_multi), Jasper's fifth was a 79 km
+            // loop from town through the Skyline's and Signal loop's camps.
+            || (!tc.is_empty()
+                && tc.iter().filter(|c| through.iter().any(|u| camps(u).contains(*c))).count()
+                    as f64
+                    / tc.len() as f64
+                    >= 0.5)
         {
             continue;
         }
         seen.insert(key);
         through.push(t);
-        if through.len() >= 3 {
+        if through.len() >= n_multi {
             break;
         }
     }
@@ -1890,13 +1915,19 @@ impl Curated {
                 "approach": eval_json(&b.approach),
                 "hikes": b.hikes.iter().map(cand_json).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
-            "point_to_points": self.through.iter().map(|t| json!({
-                "from": t.from,
-                "to": t.to,
-                "kind": t.kind,
-                "score": (t.score * 100.0).round() / 100.0,
-                "route": eval_json(&t.ev),
-            })).collect::<Vec<_>>(),
+            "point_to_points": self.through.iter().map(|t| {
+                let mut j = json!({
+                    "from": t.from,
+                    "to": t.to,
+                    "kind": t.kind,
+                    "score": (t.score * 100.0).round() / 100.0,
+                    "route": eval_json(&t.ev),
+                });
+                if let Some(n) = &t.name {
+                    j["name"] = json!(n);
+                }
+                j
+            }).collect::<Vec<_>>(),
         })
     }
 }
