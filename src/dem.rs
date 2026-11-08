@@ -11,6 +11,7 @@ use crate::geo::{P, lonlat};
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::{Arc, Mutex};
 
 const URL: &str = "https://tiles.mapterhorn.com";
@@ -18,8 +19,38 @@ pub const NL_DEM: &str = "https://public.hikeratlas.com/nl-dem/nl-dem.pmtiles";
 const NL_ZOOMS: std::ops::RangeInclusive<u8> = 10..=13;
 const TILE: usize = 512;
 const MAX_TILES: usize = 1000; // decoded tiles kept in memory, 1 MB each
+// Downloads at once per park in prefetch(); curate runs a park per core.
+const PREFETCH_THREADS: usize = 8;
+
+// For the log (stats()): what the DEM cost a run.
+static PREFETCHED: AtomicU64 = AtomicU64::new(0);
+static PREFETCH_MS: AtomicU64 = AtomicU64::new(0);
+static DOWNLOADED: AtomicU64 = AtomicU64::new(0);
+static DOWNLOAD_BYTES: AtomicU64 = AtomicU64::new(0);
+static CACHE_HITS: AtomicU64 = AtomicU64::new(0);
+
+/// What the DEM cost this run: tiles read from the cache, prefetched, and
+/// downloaded while curating (by a curate thread, which waits for it).
+pub fn stats() -> String {
+    let (p, d) = (PREFETCHED.load(Relaxed), DOWNLOADED.load(Relaxed));
+    format!(
+        "DEM: {} tiles from the cache, {} prefetched ({:.0}s wall, summed over parks), {} downloaded while curating; {:.2} GB downloaded",
+        CACHE_HITS.load(Relaxed),
+        p,
+        PREFETCH_MS.load(Relaxed) as f64 / 1e3,
+        d - p.min(d),
+        DOWNLOAD_BYTES.load(Relaxed) as f64 / 1e9
+    )
+}
 
 type Grid = Arc<Vec<f32>>;
+
+/// Sets a file's modification time, if it can.
+pub fn touch(p: &std::path::Path, t: std::time::SystemTime) {
+    if let Ok(f) = std::fs::File::options().write(true).open(p) {
+        let _ = f.set_modified(t);
+    }
+}
 
 pub struct Dem {
     z: u8,
@@ -77,42 +108,26 @@ impl Dem {
         a.get(z, x, y).unwrap_or_else(|e| panic!("nl-dem {z}/{x}/{y}: {e}"))
     }
 
+    fn path(&self, z: u8, x: u32, y: u32) -> Option<PathBuf> {
+        self.cache
+            .as_ref()
+            .map(|c| c.join("mapterhorn").join(format!("{z}-{x}-{y}.webp")))
+    }
+
     /// A tile's bytes, or None if it doesn't exist. Cached on disk (a 404 as
     /// an empty file) under mapterhorn/, apart from older Terrarium caches.
+    /// A cached tile's modification time is set to now when it's read, so a
+    /// cache kept between runs can be pruned to the tiles a run used.
     fn fetch(&self, z: u8, x: u32, y: u32) -> Option<Vec<u8>> {
-        let path = self
-            .cache
-            .as_ref()
-            .map(|c| c.join("mapterhorn").join(format!("{z}-{x}-{y}.webp")));
+        let path = self.path(z, x, y);
         let bytes = match path.as_ref().and_then(|p| std::fs::read(p).ok()) {
-            Some(b) => b,
+            Some(b) => {
+                touch(path.as_ref().unwrap(), std::time::SystemTime::now());
+                CACHE_HITS.fetch_add(1, Relaxed);
+                b
+            }
             None => {
-                // Retry a failed request, and a connection dropped while
-                // reading the body: one reset mid-download (basemap run
-                // 42134348228) panicked a whole shard.
-                let mut tries = 0;
-                let b = loop {
-                    let got = match self.agent.get(&format!("{URL}/{z}/{x}/{y}.webp")).call() {
-                        Ok(r) => {
-                            let mut b = Vec::new();
-                            r.into_reader()
-                                .read_to_end(&mut b)
-                                .map(|_| b)
-                                .map_err(|e| e.to_string())
-                        }
-                        Err(ureq::Error::Status(404, _)) => Ok(Vec::new()),
-                        Err(e) => Err(e.to_string()),
-                    };
-                    match got {
-                        Ok(b) => break b,
-                        Err(e) if tries < 6 => {
-                            tries += 1;
-                            eprintln!("DEM {z}/{x}/{y}: {e}, retrying");
-                            std::thread::sleep(std::time::Duration::from_millis(500 << tries));
-                        }
-                        Err(e) => panic!("DEM {z}/{x}/{y}: {e}"),
-                    }
-                };
+                let b = self.download(z, x, y);
                 if let Some(p) = &path {
                     let _ = std::fs::create_dir_all(p.parent().unwrap());
                     let _ = std::fs::write(p, &b);
@@ -121,6 +136,96 @@ impl Dem {
             }
         };
         if bytes.is_empty() { None } else { Some(bytes) }
+    }
+
+    /// A tile from Mapterhorn: its bytes, or empty if it doesn't exist.
+    fn download(&self, z: u8, x: u32, y: u32) -> Vec<u8> {
+        // Retry a failed request, and a connection dropped while reading the
+        // body: one reset mid-download (basemap run 42134348228) panicked a
+        // whole shard.
+        let mut tries = 0;
+        loop {
+            let got = match self.agent.get(&format!("{URL}/{z}/{x}/{y}.webp")).call() {
+                Ok(r) => {
+                    let mut b = Vec::new();
+                    r.into_reader()
+                        .read_to_end(&mut b)
+                        .map(|_| b)
+                        .map_err(|e| e.to_string())
+                }
+                Err(ureq::Error::Status(404, _)) => Ok(Vec::new()),
+                Err(e) => Err(e.to_string()),
+            };
+            match got {
+                Ok(b) => {
+                    DOWNLOADED.fetch_add(1, Relaxed);
+                    DOWNLOAD_BYTES.fetch_add(b.len() as u64, Relaxed);
+                    return b;
+                }
+                Err(e) if tries < 6 => {
+                    tries += 1;
+                    eprintln!("DEM {z}/{x}/{y}: {e}, retrying");
+                    std::thread::sleep(std::time::Duration::from_millis(500 << tries));
+                }
+                Err(e) => panic!("DEM {z}/{x}/{y}: {e}"),
+            }
+        }
+    }
+
+    /// Downloads, PREFETCH_THREADS at a time, the tiles at this DEM's zoom
+    /// under any of `pts` (world units): a park's graph nodes, which the
+    /// routes it evaluates follow. Otherwise each curate thread fetched its
+    /// tiles one at a time as it evaluated, and on north-america the CPUs
+    /// sat ~40% idle (routes#86).
+    ///
+    /// Only for a park with none of its tiles cached yet: once a cache is
+    /// kept between runs (pruned to the tiles a run read), the rest come from
+    /// there, and refetching what was pruned would only load Mapterhorn. The
+    /// tiles are written with an old modification time, so a prune drops any
+    /// that no route read. Needs a --dem-cache.
+    pub fn prefetch(&self, pts: impl Iterator<Item = P>) {
+        if self.cache.is_none() {
+            return;
+        }
+        let shift = 26 - self.z as u32; // world units are z14 x 4096 = 2^26
+        let mut tiles: Vec<(u32, u32)> = pts
+            .map(|p| ((p.0 as u32) >> shift, (p.1 as u32) >> shift))
+            .collect();
+        tiles.sort_unstable();
+        tiles.dedup();
+        // nl-dem's tiles come first where it has them (see tile()).
+        if let Some(nl) = &self.nl {
+            let n = (1u64 << self.z) as f64;
+            let [w, s, e, nn] = nl.bounds;
+            tiles.retain(|&(x, y)| {
+                let (lon, lat) = lonlat(((x as f64 + 0.5) / n * crate::geo::WORLD, (y as f64 + 0.5) / n * crate::geo::WORLD));
+                !(lon >= w && lon <= e && lat >= s && lat <= nn)
+            });
+        }
+        if tiles.iter().any(|&(x, y)| self.path(self.z, x, y).is_some_and(|p| p.exists())) {
+            return;
+        }
+        let t0 = std::time::Instant::now();
+        PREFETCHED.fetch_add(tiles.len() as u64, Relaxed);
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let old = std::time::UNIX_EPOCH + std::time::Duration::from_secs(86400);
+        std::thread::scope(|sc| {
+            for _ in 0..PREFETCH_THREADS.min(tiles.len()) {
+                sc.spawn(|| {
+                    loop {
+                        let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(&(x, y)) = tiles.get(i) else { break };
+                        let p = self.path(self.z, x, y).unwrap();
+                        let b = self.download(self.z, x, y);
+                        let _ = std::fs::create_dir_all(p.parent().unwrap());
+                        if std::fs::write(&p, &b).is_ok() {
+                            touch(&p, old);
+                        }
+                    }
+                });
+            }
+        });
+        PREFETCH_MS.fetch_add(t0.elapsed().as_millis() as u64, Relaxed);
     }
 
     fn tile(&self, z: u8, x: u32, y: u32) -> Option<Grid> {

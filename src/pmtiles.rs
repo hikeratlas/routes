@@ -222,6 +222,9 @@ impl PmTiles {
             .map(|c| c.join(format!("{z}/{x}/{y}.mvt")));
         if let Some(p) = &cached {
             if let Ok(b) = std::fs::read(p) {
+                // Read now: a cache kept between runs is pruned to the
+                // tiles a run read (as dem.rs's).
+                crate::dem::touch(p, std::time::SystemTime::now());
                 return Ok(if b.is_empty() { None } else { Some(b) });
             }
         }
