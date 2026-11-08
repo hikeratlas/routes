@@ -1482,6 +1482,10 @@ fn stop_name(name: &str) -> String {
     out.trim().to_lowercase()
 }
 
+/// A base camp's hike with this share of its edges on the walk in goes back
+/// the way you came (#61).
+const BASE_BACKTRACK_MAX: f64 = 0.5;
+
 /// Stops (#70): a viewpoint, peak or waterfall a short walk (STOP_MAX_M)
 /// from where a car can get to, which a day hike can't be, as those start
 /// 1.5 km or more away. Terra Nova's Ochre Hill Fire Tower is 100 m from the
@@ -1684,9 +1688,24 @@ pub fn curate(
             if approach.bike > MAX_BIKE {
                 return None;
             }
-            let hikes = ctx.candidates(cnode, &c.name, &targets, 1000.0, 8000.0);
+            // A hike that goes back along the walk in is one from the
+            // trailhead, not from camp: Gros Morne's Snug Harbour offered
+            // Jerrys Pond, 4.7 km back towards the trailhead it's 1 km
+            // from (#61).
+            let walk_in = edge_set(&path);
+            let hikes: Vec<Cand> = ctx
+                .candidates(cnode, &c.name, &targets, 1000.0, 8000.0)
+                .into_iter()
+                .filter(|h| {
+                    let back = h.edges.intersection(&walk_in).count();
+                    (back as f64) < BASE_BACKTRACK_MAX * h.edges.len().max(1) as f64
+                })
+                .collect();
             let picks = select(&hikes, 4, false);
-            if picks.len() < 2 {
+            // One good hike from camp is still a trip (an overnight to
+            // Gros Morne's North Rim via Snug Harbour, too far for a day
+            // hike): base camps with more rank higher (score, below).
+            if picks.is_empty() {
                 return None;
             }
             let score = picks.iter().map(|h| h.score).sum::<f64>() / picks.len() as f64
