@@ -578,7 +578,11 @@ impl<'a> Ctx<'a> {
                 via.push(n.clone());
             }
         }
-        let max_sac = ways.iter().map(|&w| g.ways[w as usize].sac).max().unwrap_or(0);
+        let max_sac = ways
+            .iter()
+            .map(|&w| g.ways[w as usize].sac)
+            .max()
+            .unwrap_or(0);
         Eval {
             one_way,
             total,
@@ -881,7 +885,10 @@ fn runs_past_known(line: &[P], known: &[P]) -> bool {
     let mut acc = 0.0;
     for i in (1..line.len()).rev() {
         acc += metres(line[i], line[i - 1]);
-        if others.iter().any(|&p| metres(p, line[i - 1]) <= PASS_KNOWN_M) {
+        if others
+            .iter()
+            .any(|&p| metres(p, line[i - 1]) <= PASS_KNOWN_M)
+        {
             return acc >= PAST_KNOWN_M;
         }
     }
@@ -1515,7 +1522,9 @@ fn stops(ctx: &Ctx, starts: &[Start], targets: &[(usize, Vec<u32>)]) -> Vec<Cand
         let n = n as u32;
         // A road's end: one road edge, whatever paths also meet it there
         // (Ochre Hill's turning circle is where its lookout loop starts).
-        let mut roads = adj.iter().filter(|e| g.ways[e.way as usize].class == Class::Road);
+        let mut roads = adj
+            .iter()
+            .filter(|e| g.ways[e.way as usize].class == Class::Road);
         let (Some(e), None) = (roads.next(), roads.next()) else {
             continue;
         };
@@ -1523,7 +1532,14 @@ fn stops(ctx: &Ctx, starts: &[Start], targets: &[(usize, Vec<u32>)]) -> Vec<Cand
             continue;
         }
         let road = &g.ways[e.way as usize].name;
-        cars.push((n, if road.is_empty() { "Road's end".into() } else { format!("End of {road}") }));
+        cars.push((
+            n,
+            if road.is_empty() {
+                "Road's end".into()
+            } else {
+                format!("End of {road}")
+            },
+        ));
     }
     let cands: Vec<Cand> = cars
         .par_iter()
@@ -1534,12 +1550,19 @@ fn stops(ctx: &Ctx, starts: &[Start], targets: &[(usize, Vec<u32>)]) -> Vec<Cand
     // Per sight, the shortest walk; then by appeal and how well known.
     let mut best: HashMap<&str, &Cand> = HashMap::default();
     for c in &cands {
-        if best.get(c.dest.as_str()).is_none_or(|b| c.ev.one_way < b.ev.one_way) {
+        if best
+            .get(c.dest.as_str())
+            .is_none_or(|b| c.ev.one_way < b.ev.one_way)
+        {
             best.insert(&c.dest, c);
         }
     }
     let worth = |c: &Cand| {
-        c.parts.iter().filter(|(k, _)| matches!(*k, "appeal" | "popularity")).map(|(_, v)| v).sum::<f64>()
+        c.parts
+            .iter()
+            .filter(|(k, _)| matches!(*k, "appeal" | "popularity"))
+            .map(|(_, v)| v)
+            .sum::<f64>()
     };
     let mut v: Vec<&Cand> = best.into_values().collect();
     // Ties (most viewpoints have the same appeal and no popularity) go to the
@@ -1561,7 +1584,9 @@ fn stops(ctx: &Ctx, starts: &[Start], targets: &[(usize, Vec<u32>)]) -> Vec<Cand
         }
         // ...and so is one with the same name but for a note in brackets
         // (Joshua Tree's "Keys View (accessible)", 550 m from Keys View).
-        if out.iter().all(|o| metres(o.dest_pt, c.dest_pt) > STOP_SAME_M && stop_name(&o.dest) != stop_name(&c.dest)) {
+        if out.iter().all(|o| {
+            metres(o.dest_pt, c.dest_pt) > STOP_SAME_M && stop_name(&o.dest) != stop_name(&c.dest)
+        }) {
             out.push(c.clone());
         }
     }
@@ -1659,7 +1684,11 @@ pub fn curate(
     let day = select(&cands, n_day, true);
     stats += &format!("; day {:.1}s", t.elapsed().as_secs_f64());
 
-    let stops = if late() { vec![] } else { stops(&ctx, &starts, &targets) };
+    let stops = if late() {
+        vec![]
+    } else {
+        stops(&ctx, &starts, &targets)
+    };
 
     // base camps: campsites in the park, reached from the nearest trailhead,
     // with day hikes from them
@@ -2139,7 +2168,10 @@ mod tests {
     #[test]
     fn stop_names() {
         assert_eq!(stop_name("Keys View (accessible)"), stop_name("Keys View"));
-        assert_eq!(stop_name("Peyto Lake - Viewpoint"), "peyto lake - viewpoint");
+        assert_eq!(
+            stop_name("Peyto Lake - Viewpoint"),
+            "peyto lake - viewpoint"
+        );
         assert_ne!(stop_name("Lower Falls"), stop_name("Upper Falls"));
     }
 

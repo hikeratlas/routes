@@ -34,7 +34,10 @@ pub struct Dem {
 fn decode(bytes: &[u8]) -> Vec<f32> {
     let mut dec = image_webp::WebPDecoder::new(std::io::Cursor::new(bytes)).expect("DEM webp");
     let (w, h) = dec.dimensions();
-    assert!(w as usize == TILE && h as usize == TILE, "DEM tile is {w}x{h}, not {TILE}");
+    assert!(
+        w as usize == TILE && h as usize == TILE,
+        "DEM tile is {w}x{h}, not {TILE}"
+    );
     let ch = if dec.has_alpha() { 4 } else { 3 };
     let mut buf = vec![0; dec.output_buffer_size().expect("DEM webp size")];
     dec.read_image(&mut buf).expect("DEM webp");
@@ -57,7 +60,13 @@ impl Dem {
                 None
             }
         });
-        Dem { z, cache, tiles: Mutex::new(HashMap::new()), agent: ureq::AgentBuilder::new().build(), nl }
+        Dem {
+            z,
+            cache,
+            tiles: Mutex::new(HashMap::new()),
+            agent: ureq::AgentBuilder::new().build(),
+            nl,
+        }
     }
 
     /// nl-dem's tile, if it has one (the reader caches tiles under nl-dem/).
@@ -66,7 +75,8 @@ impl Dem {
         if !NL_ZOOMS.contains(&z) {
             return None;
         }
-        a.get(z, x, y).unwrap_or_else(|e| panic!("nl-dem {z}/{x}/{y}: {e}"))
+        a.get(z, x, y)
+            .unwrap_or_else(|e| panic!("nl-dem {z}/{x}/{y}: {e}"))
     }
 
     /// A tile's bytes, or None if it doesn't exist. Cached on disk (a 404 as
@@ -122,11 +132,18 @@ impl Dem {
         // Past nl-dem's max zoom, where it covers: none here, so the point is
         // sampled from nl-dem's tile, not Mapterhorn's blurrier one.
         let nl_max = *NL_ZOOMS.end();
-        if z > nl_max && self.fetch_nl(nl_max, x >> (z - nl_max), y >> (z - nl_max)).is_some() {
+        if z > nl_max
+            && self
+                .fetch_nl(nl_max, x >> (z - nl_max), y >> (z - nl_max))
+                .is_some()
+        {
             self.tiles.lock().unwrap().insert((z, x, y), None);
             return None;
         }
-        let t = self.fetch_nl(z, x, y).or_else(|| self.fetch(z, x, y)).map(|b| Arc::new(decode(&b)));
+        let t = self
+            .fetch_nl(z, x, y)
+            .or_else(|| self.fetch(z, x, y))
+            .map(|b| Arc::new(decode(&b)));
         let mut m = self.tiles.lock().unwrap();
         if m.len() >= MAX_TILES {
             // Crude eviction: drop about half.
@@ -145,7 +162,10 @@ impl Dem {
         pts.iter()
             .map(|&p| {
                 self.sample(p, &mut |z, x, y| {
-                    local.entry((z, x, y)).or_insert_with(|| self.tile(z, x, y)).clone()
+                    local
+                        .entry((z, x, y))
+                        .or_insert_with(|| self.tile(z, x, y))
+                        .clone()
                 })
             })
             .collect()
@@ -224,7 +244,8 @@ mod tests {
         let dem = Dem::new(13, None, None);
         let (lon, lat) = (-116.2, 51.42);
         let wx = (lon + 180.0) / 360.0 * crate::geo::WORLD;
-        let wy = (1.0 - f64::to_radians(lat).tan().asinh() / std::f64::consts::PI) / 2.0 * crate::geo::WORLD;
+        let wy = (1.0 - f64::to_radians(lat).tan().asinh() / std::f64::consts::PI) / 2.0
+            * crate::geo::WORLD;
         let p: P = (wx, wy);
         let parent = Arc::new(vec![1234.0f32; TILE * TILE]);
         let mut asked = Vec::new();

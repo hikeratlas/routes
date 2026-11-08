@@ -312,7 +312,11 @@ fn along(line: &[P], p: P) -> (f64, f64) {
     for w in line.windows(2) {
         let (dx, dy) = (w[1].0 - w[0].0, w[1].1 - w[0].1);
         let l2 = dx * dx + dy * dy;
-        let t = if l2 == 0.0 { 0.0 } else { (((p.0 - w[0].0) * dx + (p.1 - w[0].1) * dy) / l2).clamp(0.0, 1.0) };
+        let t = if l2 == 0.0 {
+            0.0
+        } else {
+            (((p.0 - w[0].0) * dx + (p.1 - w[0].1) * dy) / l2).clamp(0.0, 1.0)
+        };
         let q = (w[0].0 + t * dx, w[0].1 + t * dy);
         let d = metres(p, q);
         if d < best {
@@ -344,7 +348,11 @@ fn runs_against(is_loop: bool, line: &[P], segs: &[(P, P)]) -> bool {
             continue;
         }
         on += 1;
-        let d = if is_loop { (at_b - at_a).rem_euclid(len) } else { at_b - at_a };
+        let d = if is_loop {
+            (at_b - at_a).rem_euclid(len)
+        } else {
+            at_b - at_a
+        };
         if d == 0.0 {
             continue;
         }
@@ -688,7 +696,11 @@ mod order_tests {
 
     // A square loop ~2 km a side, clockwise on the map (y grows south).
     fn square() -> Vec<P> {
-        let (x, y, d) = (0.25 * geo::WORLD, 0.35 * geo::WORLD, 2000.0 / mpu(0.35 * geo::WORLD));
+        let (x, y, d) = (
+            0.25 * geo::WORLD,
+            0.35 * geo::WORLD,
+            2000.0 / mpu(0.35 * geo::WORLD),
+        );
         vec![(x, y), (x + d, y), (x + d, y + d), (x, y + d), (x, y)]
     }
 
@@ -702,7 +714,10 @@ mod order_tests {
         for w in line.windows(2) {
             for i in 0..n {
                 let t = i as f64 / n as f64;
-                out.push((w[0].0 + (w[1].0 - w[0].0) * t, w[0].1 + (w[1].1 - w[0].1) * t));
+                out.push((
+                    w[0].0 + (w[1].0 - w[0].0) * t,
+                    w[0].1 + (w[1].1 - w[0].1) * t,
+                ));
             }
         }
         out
@@ -730,7 +745,10 @@ mod order_tests {
         assert!(!runs_against(false, &line, &segs));
         assert!(runs_against(false, &rev, &segs));
         // A relation elsewhere says nothing.
-        let far: Vec<(P, P)> = segs.iter().map(|&(a, b)| ((a.0 + 1e5, a.1), (b.0 + 1e5, b.1))).collect();
+        let far: Vec<(P, P)> = segs
+            .iter()
+            .map(|&(a, b)| ((a.0 + 1e5, a.1), (b.0 + 1e5, b.1)))
+            .collect();
         assert!(!runs_against(false, &rev, &far));
     }
 
