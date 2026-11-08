@@ -46,6 +46,10 @@ pub struct Ctx<'a> {
     /// Edges (ekey) along an OSM hiking route: the scoring bump for
     /// following one (W_KNOWN), unless switched off (KNOWN_BONUS).
     on_known: HashSet<u64>,
+    /// The fewest metres per world unit anywhere in the graph (at its
+    /// poleward edge): straight-line units times this undercuts any walk, for
+    /// search_to's A*.
+    mpu_min: f64,
 }
 
 /// Whether routes get a bump for following an OSM hiking route (routes
@@ -279,6 +283,12 @@ impl<'a> Ctx<'a> {
             dest_near: vec![],
             in_park: vec![],
             on_known: HashSet::default(),
+            mpu_min: area
+                .graph
+                .pts
+                .iter()
+                .map(|p| mpu(p.1))
+                .fold(f64::INFINITY, f64::min),
         };
         if KNOWN_BONUS.load(Relaxed) && !area.known.is_empty() {
             ctx.on_known = on_known_edges(area);
@@ -419,10 +429,26 @@ impl<'a> Ctx<'a> {
         sc.stamp[src as usize] = sc.epoch;
         sc.dist[src as usize] = 0.0;
         sc.metres[src as usize] = 0.0;
+        // Searching to a target is an A*: queued by cost so far plus the
+        // straight line to the target (at mpu_min), which no walk there
+        // undercuts (an edge costs at least its metres; a zero-cost join is
+        // under 2 m, and a node reached more cheaply later is queued again),
+        // so the target
+        // is settled at the same cost as by Dijkstra, having settled far
+        // fewer nodes. Without a target, h is 0: Dijkstra.
+        let tp = target.map(|t| g.pts[t as usize]);
+        let k = self.mpu_min * (1.0 - 1e-6);
+        let h = |v: u32| {
+            tp.map_or(0.0, |t| {
+                let p = g.pts[v as usize];
+                (p.0 - t.0).hypot(p.1 - t.1) * k
+            })
+        };
         let mut pq = BinaryHeap::new();
-        pq.push(Q(0.0, src));
-        while let Some(Q(d, u)) = pq.pop() {
-            if d > sc.dist[u as usize] {
+        pq.push(Q(h(src), src));
+        while let Some(Q(f, u)) = pq.pop() {
+            let d = sc.dist[u as usize];
+            if f > d + h(u) {
                 continue;
             }
             if target == Some(u) {
@@ -452,7 +478,7 @@ impl<'a> Ctx<'a> {
                     sc.dist[v] = nd;
                     sc.metres[v] = mu + e.m as f64;
                     sc.prev[v] = (u, e.way);
-                    pq.push(Q(nd, e.to));
+                    pq.push(Q(nd + h(e.to), e.to));
                 }
             }
         }
