@@ -413,7 +413,6 @@ fn main() {
                 return None;
             }
             let mut area = Area::load(&archives, &p.id, &tiles);
-            dem.prefetch(area.graph.pts.iter().copied());
             if let Some(q) = &qrank {
                 let q = q.lock().unwrap();
                 for d in &mut area.dests {

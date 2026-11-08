@@ -19,26 +19,18 @@ pub const NL_DEM: &str = "https://public.hikeratlas.com/nl-dem/nl-dem.pmtiles";
 const NL_ZOOMS: std::ops::RangeInclusive<u8> = 10..=13;
 const TILE: usize = 512;
 const MAX_TILES: usize = 1000; // decoded tiles kept in memory, 1 MB each
-// Downloads at once per park in prefetch(); curate runs a park per core.
-const PREFETCH_THREADS: usize = 8;
-
 // For the log (stats()): what the DEM cost a run.
-static PREFETCHED: AtomicU64 = AtomicU64::new(0);
-static PREFETCH_MS: AtomicU64 = AtomicU64::new(0);
 static DOWNLOADED: AtomicU64 = AtomicU64::new(0);
 static DOWNLOAD_BYTES: AtomicU64 = AtomicU64::new(0);
 static CACHE_HITS: AtomicU64 = AtomicU64::new(0);
 
-/// What the DEM cost this run: tiles read from the cache, prefetched, and
-/// downloaded while curating (by a curate thread, which waits for it).
+/// What the DEM cost this run: tiles read from the cache, and downloaded
+/// while curating (by a curate thread, which waits for it).
 pub fn stats() -> String {
-    let (p, d) = (PREFETCHED.load(Relaxed), DOWNLOADED.load(Relaxed));
     format!(
-        "DEM: {} tiles from the cache, {} prefetched ({:.0}s wall, summed over parks), {} downloaded while curating; {:.2} GB downloaded",
+        "DEM: {} tiles from the cache, {} downloaded while curating ({:.2} GB)",
         CACHE_HITS.load(Relaxed),
-        p,
-        PREFETCH_MS.load(Relaxed) as f64 / 1e3,
-        d - p.min(d),
+        DOWNLOADED.load(Relaxed),
         DOWNLOAD_BYTES.load(Relaxed) as f64 / 1e9
     )
 }
@@ -170,62 +162,6 @@ impl Dem {
                 Err(e) => panic!("DEM {z}/{x}/{y}: {e}"),
             }
         }
-    }
-
-    /// Downloads, PREFETCH_THREADS at a time, the tiles at this DEM's zoom
-    /// under any of `pts` (world units): a park's graph nodes, which the
-    /// routes it evaluates follow. Otherwise each curate thread fetched its
-    /// tiles one at a time as it evaluated, and on north-america the CPUs
-    /// sat ~40% idle (routes#86).
-    ///
-    /// Only for a park with none of its tiles cached yet: once a cache is
-    /// kept between runs (pruned to the tiles a run read), the rest come from
-    /// there, and refetching what was pruned would only load Mapterhorn. The
-    /// tiles are written with an old modification time, so a prune drops any
-    /// that no route read. Needs a --dem-cache.
-    pub fn prefetch(&self, pts: impl Iterator<Item = P>) {
-        if self.cache.is_none() {
-            return;
-        }
-        let shift = 26 - self.z as u32; // world units are z14 x 4096 = 2^26
-        let mut tiles: Vec<(u32, u32)> = pts
-            .map(|p| ((p.0 as u32) >> shift, (p.1 as u32) >> shift))
-            .collect();
-        tiles.sort_unstable();
-        tiles.dedup();
-        // nl-dem's tiles come first where it has them (see tile()).
-        if let Some(nl) = &self.nl {
-            let n = (1u64 << self.z) as f64;
-            let [w, s, e, nn] = nl.bounds;
-            tiles.retain(|&(x, y)| {
-                let (lon, lat) = lonlat(((x as f64 + 0.5) / n * crate::geo::WORLD, (y as f64 + 0.5) / n * crate::geo::WORLD));
-                !(lon >= w && lon <= e && lat >= s && lat <= nn)
-            });
-        }
-        if tiles.iter().any(|&(x, y)| self.path(self.z, x, y).is_some_and(|p| p.exists())) {
-            return;
-        }
-        let t0 = std::time::Instant::now();
-        PREFETCHED.fetch_add(tiles.len() as u64, Relaxed);
-        let next = std::sync::atomic::AtomicUsize::new(0);
-        let old = std::time::UNIX_EPOCH + std::time::Duration::from_secs(86400);
-        std::thread::scope(|sc| {
-            for _ in 0..PREFETCH_THREADS.min(tiles.len()) {
-                sc.spawn(|| {
-                    loop {
-                        let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let Some(&(x, y)) = tiles.get(i) else { break };
-                        let p = self.path(self.z, x, y).unwrap();
-                        let b = self.download(self.z, x, y);
-                        let _ = std::fs::create_dir_all(p.parent().unwrap());
-                        if std::fs::write(&p, &b).is_ok() {
-                            touch(&p, old);
-                        }
-                    }
-                });
-            }
-        });
-        PREFETCH_MS.fetch_add(t0.elapsed().as_millis() as u64, Relaxed);
     }
 
     fn tile(&self, z: u8, x: u32, y: u32) -> Option<Grid> {
