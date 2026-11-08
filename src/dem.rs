@@ -57,7 +57,15 @@ impl Dem {
                 None
             }
         });
-        Dem { z, cache, tiles: Mutex::new(HashMap::new()), agent: ureq::AgentBuilder::new().build(), nl }
+        // Timeouts, so a stalled download fails and is retried rather than
+        // holding a curate thread: with none, Hubbel Pond WMA (110 tiles,
+        // 0.0 s with its DEM cached) took 482 s in basemap run 42428077515,
+        // past --park-timeout, which isn't checked while a tile downloads.
+        let agent = ureq::AgentBuilder::new()
+            .timeout_connect(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
+            .build();
+        Dem { z, cache, tiles: Mutex::new(HashMap::new()), agent, nl }
     }
 
     /// nl-dem's tile, if it has one (the reader caches tiles under nl-dem/).
