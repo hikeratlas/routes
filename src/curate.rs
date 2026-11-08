@@ -1462,6 +1462,25 @@ const STOP_MAX_M: f64 = 1000.0;
 const STOP_ROADSIDE_M: f64 = 200.0;
 /// Sights this close together are one stop.
 const STOP_SAME_M: f64 = 200.0;
+/// At most this many stops a park: they're quick to take in, so a park can
+/// list plenty (#72).
+const STOP_MAX_N: usize = 12;
+
+/// A stop's name without notes in brackets, for telling two names for one
+/// sight apart: "Keys View (accessible)" is Keys View.
+fn stop_name(name: &str) -> String {
+    let mut out = String::new();
+    let mut depth = 0;
+    for ch in name.chars() {
+        match ch {
+            '(' => depth += 1,
+            ')' if depth > 0 => depth -= 1,
+            _ if depth == 0 => out.push(ch),
+            _ => {}
+        }
+    }
+    out.trim().to_lowercase()
+}
 
 /// A base camp's hike with this share of its edges on the walk in goes back
 /// the way you came (#61).
@@ -1474,8 +1493,9 @@ const BASE_BACKTRACK_MAX: f64 = 0.5;
 /// from the Bow Summit lot. Cars get to the trailheads and parking lots
 /// (starts) and the ends of roads open to them (a turning circle often has
 /// no lot mapped). One stop per sight, from the nearest of those; the most
-/// appealing and best known first, a third of the day-hike budget (2 to 5).
-fn stops(ctx: &Ctx, starts: &[Start], targets: &[(usize, Vec<u32>)], n_day: usize) -> Vec<Cand> {
+/// appealing and best known first (ties to the better stop overall), up to
+/// STOP_MAX_N.
+fn stops(ctx: &Ctx, starts: &[Start], targets: &[(usize, Vec<u32>)]) -> Vec<Cand> {
     let g = &ctx.area.graph;
     let sights: Vec<(usize, Vec<u32>)> = targets
         .iter()
@@ -1522,15 +1542,26 @@ fn stops(ctx: &Ctx, starts: &[Start], targets: &[(usize, Vec<u32>)], n_day: usiz
         c.parts.iter().filter(|(k, _)| matches!(*k, "appeal" | "popularity")).map(|(_, v)| v).sum::<f64>()
     };
     let mut v: Vec<&Cand> = best.into_values().collect();
-    v.sort_by(|a, b| worth(b).partial_cmp(&worth(a)).unwrap().then_with(|| a.dest.cmp(&b.dest)));
+    // Ties (most viewpoints have the same appeal and no popularity) go to the
+    // better stop overall: open views, lakes in sight, little road walking.
+    // By name, Banff's Pedestrian Bridge beat Peyto Lake (#72).
+    v.sort_by(|a, b| {
+        worth(b)
+            .partial_cmp(&worth(a))
+            .unwrap()
+            .then_with(|| b.score.partial_cmp(&a.score).unwrap())
+            .then_with(|| a.dest.cmp(&b.dest))
+    });
     // A sight beside one already chosen is the same stop (Ochre Hill's fire
     // tower and the lookout platform 30 m from it).
     let mut out: Vec<Cand> = vec![];
     for c in v {
-        if out.len() >= (n_day / 3).clamp(2, 5) {
+        if out.len() >= STOP_MAX_N {
             break;
         }
-        if out.iter().all(|o| metres(o.dest_pt, c.dest_pt) > STOP_SAME_M) {
+        // ...and so is one with the same name but for a note in brackets
+        // (Joshua Tree's "Keys View (accessible)", 550 m from Keys View).
+        if out.iter().all(|o| metres(o.dest_pt, c.dest_pt) > STOP_SAME_M && stop_name(&o.dest) != stop_name(&c.dest)) {
             out.push(c.clone());
         }
     }
@@ -1628,7 +1659,7 @@ pub fn curate(
     let day = select(&cands, n_day, true);
     stats += &format!("; day {:.1}s", t.elapsed().as_secs_f64());
 
-    let stops = if late() { vec![] } else { stops(&ctx, &starts, &targets, n_day) };
+    let stops = if late() { vec![] } else { stops(&ctx, &starts, &targets) };
 
     // base camps: campsites in the park, reached from the nearest trailhead,
     // with day hikes from them
@@ -2105,6 +2136,13 @@ impl Curated {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stop_names() {
+        assert_eq!(stop_name("Keys View (accessible)"), stop_name("Keys View"));
+        assert_eq!(stop_name("Peyto Lake - Viewpoint"), "peyto lake - viewpoint");
+        assert_ne!(stop_name("Lower Falls"), stop_name("Upper Falls"));
+    }
+
     use super::*;
 
     // A line along y, 100 m a step (see geo::metres), as a route's points.
