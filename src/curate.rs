@@ -441,7 +441,10 @@ impl<'a> Ctx<'a> {
         let h = |v: u32| {
             tp.map_or(0.0, |t| {
                 let p = g.pts[v as usize];
-                (p.0 - t.0).hypot(p.1 - t.1) * k
+                // Not hypot: it guards against overflow that world units
+                // (under 2^26) can't reach, and was 13% of curating's CPU.
+                let (dx, dy) = (p.0 - t.0, p.1 - t.1);
+                (dx * dx + dy * dy).sqrt() * k
             })
         };
         let mut pq = BinaryHeap::new();
