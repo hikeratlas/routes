@@ -135,7 +135,11 @@ impl PmTiles {
         let backend = if src.starts_with("http://") || src.starts_with("https://") {
             Backend::Http {
                 url: src.to_string(),
-                agent: ureq::AgentBuilder::new().build(),
+                // As the DEM's (dem.rs): a stalled request fails, not hangs.
+                agent: ureq::AgentBuilder::new()
+                    .timeout_connect(std::time::Duration::from_secs(10))
+                    .timeout(std::time::Duration::from_secs(60))
+                    .build(),
             }
         } else {
             Backend::File(File::open(src)?)
