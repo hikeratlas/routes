@@ -50,6 +50,12 @@ pub struct Ctx<'a> {
     /// poleward edge): straight-line units times this undercuts any walk, for
     /// search_to's A*.
     mpu_min: f64,
+    /// The graph's edges in one array, node by node: node u's are
+    /// adj_e[adj_off[u]..adj_off[u + 1]]. Searches walk these rather than
+    /// Graph::adj's one allocation per node, which cost a cache miss per
+    /// node settled (reading edges was ~18% of search's time).
+    adj_off: Vec<u32>,
+    adj_e: Vec<crate::area::Edge>,
 }
 
 /// Whether routes get a bump for following an OSM hiking route (routes
@@ -59,12 +65,23 @@ pub static KNOWN_BONUS: std::sync::atomic::AtomicBool = std::sync::atomic::Atomi
 /// An edge whose midpoint is this close to an OSM hiking route is on it.
 const ON_KNOWN_M: f64 = 30.0;
 
-#[derive(PartialEq)]
-struct Q(f64, u32);
-impl Eq for Q {}
+/// A priority queue entry, smallest key first. The key is a non-negative
+/// cost, kept as its bits: those order like the numbers for non-negative
+/// floats, and compare as integers, cheaper than f64's partial_cmp.
+#[derive(PartialEq, Eq)]
+struct Q(u64, u32);
+impl Q {
+    fn new(key: f64, node: u32) -> Q {
+        debug_assert!(key >= 0.0);
+        Q(key.to_bits(), node)
+    }
+    fn key(&self) -> f64 {
+        f64::from_bits(self.0)
+    }
+}
 impl Ord for Q {
     fn cmp(&self, o: &Self) -> Ordering {
-        o.0.partial_cmp(&self.0).unwrap_or(Ordering::Equal)
+        o.0.cmp(&self.0)
     }
 }
 impl PartialOrd for Q {
@@ -289,6 +306,13 @@ impl<'a> Ctx<'a> {
                 .iter()
                 .map(|p| mpu(p.1))
                 .fold(f64::INFINITY, f64::min),
+            adj_off: std::iter::once(0)
+                .chain(g.adj.iter().scan(0u32, |n, es| {
+                    *n += es.len() as u32;
+                    Some(*n)
+                }))
+                .collect(),
+            adj_e: g.adj.iter().flatten().copied().collect(),
         };
         if KNOWN_BONUS.load(Relaxed) && !area.known.is_empty() {
             ctx.on_known = on_known_edges(area);
@@ -448,8 +472,9 @@ impl<'a> Ctx<'a> {
             })
         };
         let mut pq = BinaryHeap::new();
-        pq.push(Q(h(src), src));
-        while let Some(Q(f, u)) = pq.pop() {
+        pq.push(Q::new(h(src), src));
+        while let Some(q) = pq.pop() {
+            let (f, u) = (q.key(), q.1);
             let d = sc.dist[u as usize];
             if f > d + h(u) {
                 continue;
@@ -462,7 +487,8 @@ impl<'a> Ctx<'a> {
                 continue;
             }
             order.push(u);
-            for e in &g.adj[u as usize] {
+            let es = &self.adj_e[self.adj_off[u as usize] as usize..self.adj_off[u as usize + 1] as usize];
+            for e in es {
                 let mut c = e.cost as f64;
                 if penal.is_some_and(|p| p.contains(&ekey(u, e.to))) {
                     c *= 8.0;
@@ -481,7 +507,7 @@ impl<'a> Ctx<'a> {
                     sc.dist[v] = nd;
                     sc.metres[v] = mu + e.m as f64;
                     sc.prev[v] = (u, e.way);
-                    pq.push(Q(nd + h(e.to), e.to));
+                    pq.push(Q::new(nd + h(e.to), e.to));
                 }
             }
         }
@@ -1004,8 +1030,9 @@ impl<'a> Ctx<'a> {
                         let mut prev: HashMap<u32, (u32, u32)> = HashMap::default();
                         let mut pq = BinaryHeap::new();
                         dist.insert(from, 0.0);
-                        pq.push(Q(0.0, from));
-                        while let Some(Q(d, u)) = pq.pop() {
+                        pq.push(Q::new(0.0, from));
+                        while let Some(q) = pq.pop() {
+                            let (d, u) = (q.key(), q.1);
                             if d > dist[&u] {
                                 continue;
                             }
@@ -1014,7 +1041,7 @@ impl<'a> Ctx<'a> {
                                 if nd < *dist.get(&v).unwrap_or(&f64::MAX) {
                                     dist.insert(v, nd);
                                     prev.insert(v, (u, w));
-                                    pq.push(Q(nd, v));
+                                    pq.push(Q::new(nd, v));
                                 }
                             }
                         }
