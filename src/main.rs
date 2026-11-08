@@ -50,12 +50,15 @@ const USAGE: &str = "usage: routes --tiles FILE|URL [--tiles ...] --out DIR
                          route (to measure the proposer on its own)
   [--park-timeout SECS]  stop starting new searches in a park after this
                          long, keeping what was found, and report it
-  [--shard K/N]          curate only shard K (0-based) of N, balanced by tile
-                         count, and write each park's routes to DIR/raw/ for
-                         a later --merge, instead of the outputs below
+  [--shard K/N]          curate only shard K (0-based) of N, and write each
+                         park's routes to DIR/raw/ for a later --merge,
+                         instead of the outputs below
+  [--shard-costs FILE]   balance --shard by these seconds per park (a
+                         --merge's timings.json) instead of by tile count
 
    or: routes --merge DIR [--merge DIR...] --out DIR
-  merge --shard runs' DIR/raw/ into the outputs below";
+  merge --shard runs' DIR/raw/ into the outputs below, and DIR/timings.json:
+  each park's curate seconds, for a later --shard-costs";
 
 struct Args {
     tiles: Vec<String>,
@@ -71,6 +74,7 @@ struct Args {
     dem_zoom: u8,
     nl_dem: Option<String>,
     shard: Option<(usize, usize)>,
+    shard_costs: Option<PathBuf>,
     merge: Vec<PathBuf>,
     park_timeout: Option<f64>,
 }
@@ -90,6 +94,7 @@ fn args() -> Args {
         dem_zoom: 12,
         nl_dem: Some(dem::NL_DEM.to_string()),
         shard: None,
+        shard_costs: None,
         merge: vec![],
         park_timeout: None,
     };
@@ -136,6 +141,7 @@ fn args() -> Args {
                 }
                 a.shard = Some((k, n));
             }
+            "--shard-costs" => a.shard_costs = Some(val.into()),
             "--merge" => a.merge.push(val.into()),
             "--park-timeout" => a.park_timeout = Some(val.parse().unwrap_or_else(|_| die())),
             _ => die(),
@@ -277,6 +283,7 @@ fn main() {
                     .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
                 docs.push(Curated {
                     area: v["area"].as_f64().unwrap(),
+                    secs: v["secs"].as_f64().unwrap_or(0.0),
                     doc: v["doc"].clone(),
                 });
             }
@@ -288,6 +295,7 @@ fn main() {
                 .then_with(|| park_id(&x.doc).cmp(park_id(&y.doc)))
         });
         eprintln!("merging {} parks from {} shards", docs.len(), a.merge.len());
+        write_timings(&a.out, &docs);
         write_outputs(&a.out, docs);
         eprintln!("done in {:.1}s", t0.elapsed().as_secs_f64());
         return;
@@ -306,11 +314,18 @@ fn main() {
         t0.elapsed().as_secs_f64()
     );
     if let Some((k, n)) = a.shard {
-        parks = shard(parks, k, n);
+        let costs = a.shard_costs.as_ref().map(|f| read_costs(f));
+        let (mine, load) = shard(parks, k, n, costs.as_ref());
+        parks = mine;
         eprintln!(
-            "shard {k}/{n}: {} parks, {} tiles",
+            "shard {k}/{n}: {} parks, {} tiles, {}",
             parks.len(),
-            parks.iter().map(|p| p.tiles().len()).sum::<usize>()
+            parks.iter().map(|p| p.tiles().len()).sum::<usize>(),
+            if costs.is_some() {
+                format!("expected {load:.0}s of curating")
+            } else {
+                "balanced by tiles".to_string()
+            }
         );
     }
     let dem = dem::Dem::new(a.dem_zoom, a.dem_cache.clone(), a.nl_dem.as_deref());
@@ -324,9 +339,7 @@ fn main() {
     let timed_out: Mutex<Vec<String>> = Mutex::new(vec![]);
     // Curate parks in parallel (biggest first), then write them out in order,
     // dropping routes a bigger park that overlaps this one already has.
-    let docs: Vec<Curated> = parks
-        .par_iter()
-        .filter_map(|p| {
+    let curate_park = |p: &Park| -> Option<Curated> {
             let t = Instant::now();
             let tiles = p.tiles();
             // A giant park (e.g. Wrangell-St. Elias) would need all its tiles
@@ -396,9 +409,16 @@ fn main() {
             recall::name_routes(&area, &mut doc);
             recall::name_loops(&mut doc);
             recall::drop_redundant_from(&mut doc);
-            Some(Curated { area: p.area, doc })
-        })
-        .collect();
+            Some(Curated { area: p.area, secs: t.elapsed().as_secs_f64(), doc })
+    };
+    // A shard takes its parks costliest first, from a queue (par_iter splits
+    // the list between threads, so a slow park could start last); its order
+    // doesn't matter, as --merge sorts.
+    let docs: Vec<Curated> = if a.shard.is_some() {
+        parks.iter().par_bridge().filter_map(curate_park).collect()
+    } else {
+        parks.par_iter().filter_map(curate_park).collect()
+    };
 
     if a.shard.is_some() {
         let raw = a.out.join("raw");
@@ -406,7 +426,7 @@ fn main() {
         for c in &docs {
             std::fs::write(
                 raw.join(format!("{}.json", park_id(&c.doc))),
-                serde_json::to_vec(&json!({"area": c.area, "doc": c.doc})).unwrap(),
+                serde_json::to_vec(&json!({"area": c.area, "secs": c.secs, "doc": c.doc})).unwrap(),
             )
             .unwrap();
         }
@@ -429,6 +449,8 @@ fn main() {
 /// A park's curated routes, before routes other parks have are dropped.
 struct Curated {
     area: f64,
+    /// Seconds it took to curate (for --merge's timings.json).
+    secs: f64,
     doc: serde_json::Value,
 }
 
@@ -436,22 +458,54 @@ fn park_id(doc: &serde_json::Value) -> &str {
     doc["park"]["id"].as_str().unwrap()
 }
 
-/// Shard k of n: parks dealt out biggest (by tiles) first, each to the shard
-/// with the fewest tiles so far, so the shards take about as long. Every shard
-/// computes the same deal, from the same park list.
-fn shard(parks: Vec<Park>, k: usize, n: usize) -> Vec<Park> {
-    let mut order: Vec<(usize, &Park)> = parks.iter().map(|p| (p.tiles().len(), p)).collect();
-    order.sort_by(|x, y| y.0.cmp(&x.0).then_with(|| x.1.id.cmp(&y.1.id)));
-    let mut load = vec![0usize; n];
-    let mut mine: std::collections::HashSet<String> = std::collections::HashSet::new();
+/// Shard k of n, and its expected seconds (with costs): parks dealt out
+/// costliest first, each to the shard with the least so far, so the shards
+/// take about as long. Every shard computes the same deal, from the same park
+/// list. A park's cost is its seconds in `costs` (an earlier build's
+/// timings.json): tile counts predicted poorly, a shard of big empty northern
+/// parks taking 143 s and another 1,509 s (routes#81). Parks `costs` lacks
+/// (new, or skipped last time) cost the mean of those it has. Without costs,
+/// a park costs its tile count.
+///
+/// The shard's parks come back costliest first, so a slow park starts early
+/// rather than holding up the shard's end.
+fn shard(parks: Vec<Park>, k: usize, n: usize, costs: Option<&HashMap<String, f64>>) -> (Vec<Park>, f64) {
+    let mean = costs
+        .filter(|c| !c.is_empty())
+        .map(|c| c.values().sum::<f64>() / c.len() as f64)
+        .unwrap_or(1.0);
+    let cost = |p: &Park| -> f64 {
+        match costs {
+            Some(c) => c.get(&p.id).copied().unwrap_or(mean).max(1e-3),
+            None => p.tiles().len().max(1) as f64,
+        }
+    };
+    let mut order: Vec<(f64, Park)> = parks.into_iter().map(|p| (cost(&p), p)).collect();
+    order.sort_by(|x, y| y.0.total_cmp(&x.0).then_with(|| x.1.id.cmp(&y.1.id)));
+    let mut load = vec![0f64; n];
+    let mut mine = vec![];
     for (w, p) in order {
-        let s = (0..n).min_by_key(|&i| (load[i], i)).unwrap();
-        load[s] += w.max(1);
+        let s = (0..n).min_by(|&i, &j| load[i].total_cmp(&load[j]).then(i.cmp(&j))).unwrap();
+        load[s] += w;
         if s == k {
-            mine.insert(p.id.clone());
+            mine.push(p);
         }
     }
-    parks.into_iter().filter(|p| mine.contains(&p.id)).collect()
+    (mine, load[k])
+}
+
+/// A timings.json: park id to curate seconds.
+fn read_costs(path: &std::path::Path) -> HashMap<String, f64> {
+    let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    serde_json::from_slice(&bytes).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+}
+
+/// DIR/timings.json: each merged park's curate seconds, for --shard-costs.
+fn write_timings(out: &std::path::Path, docs: &[Curated]) {
+    std::fs::create_dir_all(out).unwrap();
+    let t: std::collections::BTreeMap<&str, f64> =
+        docs.iter().map(|c| (park_id(&c.doc), (c.secs * 10.0).round() / 10.0)).collect();
+    std::fs::write(out.join("timings.json"), serde_json::to_vec(&t).unwrap()).unwrap();
 }
 
 /// Write DIR/routes.geojsonl and DIR/parks/, biggest park first, dropping
@@ -768,6 +822,28 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
 mod tests {
     use super::*;
 
+    fn shard_park(id: &str) -> Park {
+        Park { id: id.to_string(), name: id.to_string(), area: 1.0, trail_area: false, min: (0.0, 0.0), max: (0.0, 0.0) }
+    }
+
+    // Parks go costliest first to the least-loaded shard; every shard computes
+    // the same deal, so they split the parks between them (routes#81).
+    #[test]
+    fn shard_by_costs() {
+        let ids = ["a", "b", "c", "d", "e", "new"];
+        let costs: HashMap<String, f64> =
+            [("a", 100.0), ("b", 60.0), ("c", 50.0), ("d", 10.0), ("e", 0.0)].iter().map(|(k, v)| (k.to_string(), *v)).collect();
+        let deal = |k| {
+            let (mine, load) = shard(ids.iter().map(|i| shard_park(i)).collect(), k, 2, Some(&costs));
+            (mine.into_iter().map(|p| p.id).collect::<Vec<_>>(), load)
+        };
+        // a (100) | b (60) + c (50) = 110 | new (the mean, 44) to a: 144 |
+        // d (10) to b+c: 120 | e to b+c.
+        assert_eq!(deal(0), (vec!["a".to_string(), "new".to_string()], 144.0));
+        assert_eq!(deal(1).0, ["b", "c", "d", "e"]);
+        assert!((deal(1).1 - 120.0).abs() < 0.01);
+    }
+
     fn trip(from: &str, to: &str, camps: &[(&str, f64)]) -> Value {
         json!({"from": from, "to": to, "kind": "point-to-point", "route": {
             "km": 1.0, "gain": 0.0, "line": [[0.0, 0.0], [1.0, 1.0]],
@@ -778,6 +854,7 @@ mod tests {
     fn park(id: &str, area: f64, day: &[&str], multi: Vec<Value>) -> Curated {
         Curated {
             area,
+            secs: 0.0,
             doc: json!({
                 "park": {"id": id, "name": id},
                 "day_hikes": day.iter().map(|d| json!({"from": "T", "dest": d, "kind": "out-and-back",
