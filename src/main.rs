@@ -36,7 +36,8 @@ use std::time::Instant;
 const USAGE: &str = "usage: routes --tiles FILE|URL [--tiles ...] --out DIR
   [--park NAME]          only parks whose name contains NAME
   [--park-id ID]         only the park (or trail area) with this osm_id
-  [--bbox W,S,E,N]       only parks in this box (default: the tiles' bounds)
+  [--bbox W,S,E,N]       only parks in this box (default: the bounds of the
+                         archives with parks or trail areas)
   [--min-area KM2]       smallest park to curate (default 5)
   [--max-tiles N]        skip parks needing more z14 tiles than this (default 50000)
   [--qrank qrank.db]     Wikidata popularity (hikeratlas/qrank)
@@ -209,6 +210,12 @@ fn write_region(path: &std::path::Path, parks: &[Park], max_tiles: usize) {
     eprintln!("{} parks' tiles written to {}", boxes.len(), path.display());
 }
 
+/// Whether an archive may have parks or trail areas (one without metadata
+/// may have anything).
+fn has_parks(ar: &PmTiles) -> bool {
+    ar.layers.is_empty() || ar.layers.iter().any(|l| l == "park" || l == "trail_area")
+}
+
 /// Parks, from the z8 tiles' park layer (which has every park over ~0.5 km²).
 fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> Vec<Park> {
     let z = 8u8;
@@ -228,7 +235,7 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> Vec<Park> {
     // needn't be read (nor fetched, for a --write-region extract).
     let listing: Vec<&PmTiles> = archives
         .iter()
-        .filter(|ar| ar.layers.is_empty() || ar.layers.iter().any(|l| l == "park" || l == "trail_area"))
+        .filter(|ar| has_parks(ar))
         .collect();
     tiles.par_iter().for_each(|&(x, y)| {
         for ar in &listing {
@@ -342,7 +349,17 @@ fn main() {
         .iter()
         .map(|t| PmTiles::open(t, a.tile_cache.clone()).unwrap_or_else(|e| panic!("{t}: {e}")))
         .collect();
-    let bbox = a.bbox.unwrap_or(archives[0].bounds);
+    // By default, the bounds of the archives with parks, which are the ones
+    // listed: so a --write-region run with just those picks the same parks
+    // as the curate run that has every layer.
+    let bbox = a.bbox.unwrap_or_else(|| {
+        archives
+            .iter()
+            .filter(|ar| has_parks(ar))
+            .map(|ar| ar.bounds)
+            .reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])])
+            .unwrap_or(archives[0].bounds)
+    });
     let mut parks = parks(&archives, bbox, &a);
     eprintln!(
         "{} parks over {} km² ({:.1}s)",
