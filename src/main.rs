@@ -411,14 +411,11 @@ fn main() {
             recall::drop_redundant_from(&mut doc);
             Some(Curated { area: p.area, secs: t.elapsed().as_secs_f64(), doc })
     };
-    // A shard takes its parks costliest first, from a queue (par_iter splits
-    // the list between threads, so a slow park could start last); its order
-    // doesn't matter, as --merge sorts.
-    let docs: Vec<Curated> = if a.shard.is_some() {
-        parks.iter().par_bridge().filter_map(curate_park).collect()
-    } else {
-        parks.par_iter().filter_map(curate_park).collect()
-    };
+    // Not par_bridge, though it would start a shard's costliest parks first:
+    // with each park's own searches in parallel inside it, a shard's CPU fell
+    // from 58% to 22% busy and its parks took 2.4x as long (basemap run
+    // 42454961538, routes#81).
+    let docs: Vec<Curated> = parks.par_iter().filter_map(curate_park).collect();
 
     if a.shard.is_some() {
         let raw = a.out.join("raw");
@@ -467,8 +464,7 @@ fn park_id(doc: &serde_json::Value) -> &str {
 /// (new, or skipped last time) cost the mean of those it has. Without costs,
 /// a park costs its tile count.
 ///
-/// The shard's parks come back costliest first, so a slow park starts early
-/// rather than holding up the shard's end.
+/// The shard's parks come back costliest first.
 fn shard(parks: Vec<Park>, k: usize, n: usize, costs: Option<&HashMap<String, f64>>) -> (Vec<Park>, f64) {
     let mean = costs
         .filter(|c| !c.is_empty())
