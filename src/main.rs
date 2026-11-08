@@ -55,6 +55,9 @@ const USAGE: &str = "usage: routes --tiles FILE|URL [--tiles ...] --out DIR
                          instead of the outputs below
   [--shard-costs FILE]   balance --shard by these seconds per park (a
                          --merge's timings.json) instead of by tile count
+  [--write-region FILE]  write the z14 tiles the parks (of --shard) need as
+                         a GeoJSON MultiPolygon, and exit: for `pmtiles
+                         extract --region`, so a shard can fetch just those
 
    or: routes --merge DIR [--merge DIR...] --out DIR
   merge --shard runs' DIR/raw/ into the outputs below, and DIR/timings.json:
@@ -77,6 +80,7 @@ struct Args {
     shard_costs: Option<PathBuf>,
     merge: Vec<PathBuf>,
     park_timeout: Option<f64>,
+    write_region: Option<PathBuf>,
 }
 
 fn args() -> Args {
@@ -97,6 +101,7 @@ fn args() -> Args {
         shard_costs: None,
         merge: vec![],
         park_timeout: None,
+        write_region: None,
     };
     let v: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
@@ -127,6 +132,7 @@ fn args() -> Args {
             "--max-tiles" => a.max_tiles = val.parse().unwrap_or_else(|_| die()),
             "--qrank" => a.qrank = Some(val),
             "--tile-cache" => a.tile_cache = Some(val.into()),
+            "--write-region" => a.write_region = Some(val.into()),
             "--dem-cache" => a.dem_cache = Some(val.into()),
             "--dem-zoom" => a.dem_zoom = val.parse().unwrap_or_else(|_| die()),
             "--nl-dem" => a.nl_dem = if val == "none" { None } else { Some(val) },
@@ -178,6 +184,31 @@ impl Park {
     }
 }
 
+/// The z14 tiles PARKS need (Park::tiles; parks over MAX_TILES are skipped
+/// when curating, so they're left out), as a GeoJSON MultiPolygon of one
+/// box per park. Each box is pulled in a little from its tiles' edges, so a
+/// tile cover of it (pmtiles extract) doesn't take in the neighbours.
+fn write_region(path: &std::path::Path, parks: &[Park], max_tiles: usize) {
+    let edge = |x: u32, y: u32| geo::lonlat((x as f64 * geo::EXT, y as f64 * geo::EXT));
+    let inset = 1e-6;
+    let mut boxes = vec![];
+    for p in parks {
+        let tiles = p.tiles();
+        if tiles.is_empty() || tiles.len() > max_tiles {
+            continue;
+        }
+        let (x0, y0) = tiles.iter().fold((u32::MAX, u32::MAX), |m, t| (m.0.min(t.0), m.1.min(t.1)));
+        let (x1, y1) = tiles.iter().fold((0, 0), |m, t| (m.0.max(t.0), m.1.max(t.1)));
+        let (w, n) = edge(x0, y0);
+        let (e, s) = edge(x1 + 1, y1 + 1);
+        let (w, s, e, n) = (w + inset, s + inset, e - inset, n - inset);
+        boxes.push(json!([[[w, s], [e, s], [e, n], [w, n], [w, s]]]));
+    }
+    let doc = json!({"type": "MultiPolygon", "coordinates": boxes});
+    std::fs::write(path, doc.to_string()).expect("writing --write-region");
+    eprintln!("{} parks' tiles written to {}", boxes.len(), path.display());
+}
+
 /// Parks, from the z8 tiles' park layer (which has every park over ~0.5 km²).
 fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> Vec<Park> {
     let z = 8u8;
@@ -193,8 +224,14 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> Vec<Park> {
         .collect();
     let found: Mutex<HashMap<String, Park>> = Mutex::new(HashMap::new());
     let scale = geo::EXT * 64.0; // world units per z8 tile
+    // Only the archives with parks or trail areas: the others' z8 tiles
+    // needn't be read (nor fetched, for a --write-region extract).
+    let listing: Vec<&PmTiles> = archives
+        .iter()
+        .filter(|ar| ar.layers.is_empty() || ar.layers.iter().any(|l| l == "park" || l == "trail_area"))
+        .collect();
     tiles.par_iter().for_each(|&(x, y)| {
-        for ar in archives {
+        for ar in &listing {
             let Some(b) = ar.get(z, x, y).expect("reading tile") else {
                 continue;
             };
@@ -327,6 +364,10 @@ fn main() {
                 "balanced by tiles".to_string()
             }
         );
+    }
+    if let Some(path) = &a.write_region {
+        write_region(path, &parks, a.max_tiles);
+        return;
     }
     let dem = dem::Dem::new(a.dem_zoom, a.dem_cache.clone(), a.nl_dem.as_deref());
     let qrank = a.qrank.as_ref().map(|p| {
