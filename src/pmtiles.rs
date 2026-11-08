@@ -28,6 +28,8 @@ pub struct PmTiles {
     root: Vec<Entry>,
     /// min lon, min lat, max lon, max lat
     pub bounds: [f64; 4],
+    /// The archive's vector layers, from its metadata (empty if it has none).
+    pub layers: Vec<String>,
     leaves: Mutex<HashMap<u64, Arc<Vec<Entry>>>>,
     // For a URL: tiles are cached here, so reruns don't refetch them.
     cache: Option<PathBuf>,
@@ -152,6 +154,7 @@ impl PmTiles {
             data_offset: 0,
             root: vec![],
             bounds: [0.0; 4],
+            layers: vec![],
             leaves: Mutex::new(HashMap::new()),
             cache: if src.starts_with("http") { cache } else { None },
         };
@@ -175,6 +178,18 @@ impl PmTiles {
             t.read(ro as u64, rl)?
         };
         t.root = parse_dir(&decompress(root, t.internal_compression)?);
+        let (mo, ml) = (u(24), u(32) as usize);
+        if ml > 0 {
+            let meta = decompress(t.read(mo, ml)?, t.internal_compression)?;
+            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&meta) {
+                t.layers = v["vector_layers"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|l| l["id"].as_str().map(String::from))
+                    .collect();
+            }
+        }
         Ok(t)
     }
 
