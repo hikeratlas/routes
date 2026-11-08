@@ -322,7 +322,7 @@ fn main() {
             parks.len(),
             parks.iter().map(|p| p.tiles().len()).sum::<usize>(),
             if costs.is_some() {
-                format!("expected {:.0}s of curating", load)
+                format!("expected {load:.0}s of curating")
             } else {
                 "balanced by tiles".to_string()
             }
@@ -340,80 +340,76 @@ fn main() {
     // Curate parks in parallel (biggest first), then write them out in order,
     // dropping routes a bigger park that overlaps this one already has.
     let curate_park = |p: &Park| -> Option<Curated> {
-        let t = Instant::now();
-        let tiles = p.tiles();
-        // A giant park (e.g. Wrangell-St. Elias) would need all its tiles
-        // in memory at once; skip it, for now.
-        if tiles.len() > a.max_tiles {
+            let t = Instant::now();
+            let tiles = p.tiles();
+            // A giant park (e.g. Wrangell-St. Elias) would need all its tiles
+            // in memory at once; skip it, for now.
+            if tiles.len() > a.max_tiles {
+                eprintln!(
+                    "{} ({}): skipped, {} tiles is over --max-tiles {}",
+                    p.name,
+                    p.id,
+                    tiles.len(),
+                    a.max_tiles
+                );
+                return None;
+            }
+            let mut area = Area::load(&archives, &p.id, &tiles);
+            if let Some(q) = &qrank {
+                let q = q.lock().unwrap();
+                for d in &mut area.dests {
+                    if let Some(id) = d
+                        .wikidata
+                        .strip_prefix('Q')
+                        .and_then(|s| s.parse::<i64>().ok())
+                    {
+                        d.qrank = q
+                            .query_row("SELECT qrank FROM qrank WHERE id = ?", [id], |r| {
+                                r.get::<_, f64>(0)
+                            })
+                            .unwrap_or(1.0);
+                    }
+                }
+            }
+            // Day hikes: by the park's size, or by how much trail it has if
+            // that's more (#38). Small parks with dense networks got 3:
+            // Letchworth, 149 km of trail and 12 OSM hiking routes, found 1.
+            // On the oracle sample, recall rose from 28.9% to 41.9% (tune)
+            // and 23.6% to 45.0% (holdout); day hikes from 501 to 971.
+            let by_area = ((p.area / 1e6).sqrt() / 2.0) as usize;
+            let by_trail =
+                (DAY_HIKES_PER_SQRT_TRAIL_KM * area.trail_km_in_park().sqrt()).round() as usize;
+            let n_day = by_area.max(by_trail).clamp(3, 15);
+            let deadline = a
+                .park_timeout
+                .map(|secs| t + std::time::Duration::from_secs_f64(secs));
+            let c = curate::curate(&area, &dem, n_day, p.trail_area, deadline);
+            if c.timed_out {
+                timed_out
+                    .lock()
+                    .unwrap()
+                    .push(format!("{} ({})", p.name, p.id));
+            }
             eprintln!(
-                "{} ({}): skipped, {} tiles is over --max-tiles {}",
+                "{} ({}): {} tiles, {}: {} day hikes, {} base camps, {} point-to-points ({:.1}s)",
                 p.name,
                 p.id,
                 tiles.len(),
-                a.max_tiles
+                c.stats,
+                c.day.len(),
+                c.bases.len(),
+                c.through.len(),
+                t.elapsed().as_secs_f64()
             );
-            return None;
-        }
-        let mut area = Area::load(&archives, &p.id, &tiles);
-        if let Some(q) = &qrank {
-            let q = q.lock().unwrap();
-            for d in &mut area.dests {
-                if let Some(id) = d
-                    .wikidata
-                    .strip_prefix('Q')
-                    .and_then(|s| s.parse::<i64>().ok())
-                {
-                    d.qrank = q
-                        .query_row("SELECT qrank FROM qrank WHERE id = ?", [id], |r| {
-                            r.get::<_, f64>(0)
-                        })
-                        .unwrap_or(1.0);
-                }
-            }
-        }
-        // Day hikes: by the park's size, or by how much trail it has if
-        // that's more (#38). Small parks with dense networks got 3:
-        // Letchworth, 149 km of trail and 12 OSM hiking routes, found 1.
-        // On the oracle sample, recall rose from 28.9% to 41.9% (tune)
-        // and 23.6% to 45.0% (holdout); day hikes from 501 to 971.
-        let by_area = ((p.area / 1e6).sqrt() / 2.0) as usize;
-        let by_trail =
-            (DAY_HIKES_PER_SQRT_TRAIL_KM * area.trail_km_in_park().sqrt()).round() as usize;
-        let n_day = by_area.max(by_trail).clamp(3, 15);
-        let deadline = a
-            .park_timeout
-            .map(|secs| t + std::time::Duration::from_secs_f64(secs));
-        let c = curate::curate(&area, &dem, n_day, p.trail_area, deadline);
-        if c.timed_out {
-            timed_out
-                .lock()
-                .unwrap()
-                .push(format!("{} ({})", p.name, p.id));
-        }
-        eprintln!(
-            "{} ({}): {} tiles, {}: {} day hikes, {} base camps, {} point-to-points ({:.1}s)",
-            p.name,
-            p.id,
-            tiles.len(),
-            c.stats,
-            c.day.len(),
-            c.bases.len(),
-            c.through.len(),
-            t.elapsed().as_secs_f64()
-        );
-        let mut doc = c.to_json();
-        doc["park"] = json!({"id": p.id, "name": p.name});
-        // Kept apart from the park's routes (write_outputs moves it to
-        // known.jsonl), so the website's files don't grow.
-        doc["known"] = json!(recall::check(&area, &doc));
-        recall::name_routes(&area, &mut doc);
-        recall::name_loops(&mut doc);
-        recall::drop_redundant_from(&mut doc);
-        Some(Curated {
-            area: p.area,
-            secs: t.elapsed().as_secs_f64(),
-            doc,
-        })
+            let mut doc = c.to_json();
+            doc["park"] = json!({"id": p.id, "name": p.name});
+            // Kept apart from the park's routes (write_outputs moves it to
+            // known.jsonl), so the website's files don't grow.
+            doc["known"] = json!(recall::check(&area, &doc));
+            recall::name_routes(&area, &mut doc);
+            recall::name_loops(&mut doc);
+            recall::drop_redundant_from(&mut doc);
+            Some(Curated { area: p.area, secs: t.elapsed().as_secs_f64(), doc })
     };
     // A shard takes its parks costliest first, from a queue (par_iter splits
     // the list between threads, so a slow park could start last); its order
@@ -473,12 +469,7 @@ fn park_id(doc: &serde_json::Value) -> &str {
 ///
 /// The shard's parks come back costliest first, so a slow park starts early
 /// rather than holding up the shard's end.
-fn shard(
-    parks: Vec<Park>,
-    k: usize,
-    n: usize,
-    costs: Option<&HashMap<String, f64>>,
-) -> (Vec<Park>, f64) {
+fn shard(parks: Vec<Park>, k: usize, n: usize, costs: Option<&HashMap<String, f64>>) -> (Vec<Park>, f64) {
     let mean = costs
         .filter(|c| !c.is_empty())
         .map(|c| c.values().sum::<f64>() / c.len() as f64)
@@ -494,9 +485,7 @@ fn shard(
     let mut load = vec![0f64; n];
     let mut mine = vec![];
     for (w, p) in order {
-        let s = (0..n)
-            .min_by(|&i, &j| load[i].total_cmp(&load[j]).then(i.cmp(&j)))
-            .unwrap();
+        let s = (0..n).min_by(|&i, &j| load[i].total_cmp(&load[j]).then(i.cmp(&j))).unwrap();
         load[s] += w;
         if s == k {
             mine.push(p);
@@ -507,20 +496,15 @@ fn shard(
 
 /// A timings.json: park id to curate seconds.
 fn read_costs(path: &std::path::Path) -> HashMap<String, f64> {
-    let v: HashMap<String, f64> = serde_json::from_slice(
-        &std::fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display())),
-    )
-    .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    v
+    let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    serde_json::from_slice(&bytes).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
 /// DIR/timings.json: each merged park's curate seconds, for --shard-costs.
 fn write_timings(out: &std::path::Path, docs: &[Curated]) {
     std::fs::create_dir_all(out).unwrap();
-    let t: std::collections::BTreeMap<&str, f64> = docs
-        .iter()
-        .map(|c| (park_id(&c.doc), (c.secs * 10.0).round() / 10.0))
-        .collect();
+    let t: std::collections::BTreeMap<&str, f64> =
+        docs.iter().map(|c| (park_id(&c.doc), (c.secs * 10.0).round() / 10.0)).collect();
     std::fs::write(out.join("timings.json"), serde_json::to_vec(&t).unwrap()).unwrap();
 }
 
@@ -839,14 +823,7 @@ mod tests {
     use super::*;
 
     fn shard_park(id: &str) -> Park {
-        Park {
-            id: id.to_string(),
-            name: id.to_string(),
-            area: 1.0,
-            trail_area: false,
-            min: (0.0, 0.0),
-            max: (0.0, 0.0),
-        }
+        Park { id: id.to_string(), name: id.to_string(), area: 1.0, trail_area: false, min: (0.0, 0.0), max: (0.0, 0.0) }
     }
 
     // Parks go costliest first to the least-loaded shard; every shard computes
@@ -854,23 +831,10 @@ mod tests {
     #[test]
     fn shard_by_costs() {
         let ids = ["a", "b", "c", "d", "e", "new"];
-        let costs: HashMap<String, f64> = [
-            ("a", 100.0),
-            ("b", 60.0),
-            ("c", 50.0),
-            ("d", 10.0),
-            ("e", 0.0),
-        ]
-        .iter()
-        .map(|(k, v)| (k.to_string(), *v))
-        .collect();
+        let costs: HashMap<String, f64> =
+            [("a", 100.0), ("b", 60.0), ("c", 50.0), ("d", 10.0), ("e", 0.0)].iter().map(|(k, v)| (k.to_string(), *v)).collect();
         let deal = |k| {
-            let (mine, load) = shard(
-                ids.iter().map(|i| shard_park(i)).collect(),
-                k,
-                2,
-                Some(&costs),
-            );
+            let (mine, load) = shard(ids.iter().map(|i| shard_park(i)).collect(), k, 2, Some(&costs));
             (mine.into_iter().map(|p| p.id).collect::<Vec<_>>(), load)
         };
         // a (100) | b (60) + c (50) = 110 | new (the mean, 44) to a: 144 |
@@ -917,21 +881,12 @@ mod tests {
     // logging road; its West Coast Trail Unit, trailhead to trailhead.
     #[test]
     fn same_trip_between_other_ends_goes_to_the_smaller_park() {
-        let camps = [
-            ("Tsusiat Falls", -124.9),
-            ("Cribs Creek", -124.7),
-            ("Walbran Creek", -124.6),
-        ];
+        let camps = [("Tsusiat Falls", -124.9), ("Cribs Creek", -124.7), ("Walbran Creek", -124.6)];
         let dir = tmp("smaller");
         write_outputs(
             &dir,
             vec![
-                park(
-                    "reserve",
-                    2.0,
-                    &["Long Beach"],
-                    vec![trip("WCT", "F-0100 trailhead", &camps)],
-                ),
+                park("reserve", 2.0, &["Long Beach"], vec![trip("WCT", "F-0100 trailhead", &camps)]),
                 park("unit", 1.0, &[], vec![trip("WCT", "WCT", &camps)]),
             ],
         );
@@ -959,13 +914,7 @@ mod tests {
                 park("small", 1.0, &["Lake"], vec![trip("X", "Y", &camps)]),
             ],
         );
-        assert_eq!(
-            written(&dir, "big").unwrap()["point_to_points"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1
-        );
+        assert_eq!(written(&dir, "big").unwrap()["point_to_points"].as_array().unwrap().len(), 1);
         assert!(written(&dir, "small").is_none());
     }
 
@@ -976,41 +925,11 @@ mod tests {
         write_outputs(
             &dir,
             vec![
-                park(
-                    "a",
-                    2.0,
-                    &[],
-                    vec![trip(
-                        "X",
-                        "Y",
-                        &[("Campsite 1", -60.0), ("Campsite 2", -60.1)],
-                    )],
-                ),
-                park(
-                    "b",
-                    1.0,
-                    &[],
-                    vec![trip(
-                        "P",
-                        "Q",
-                        &[("Campsite 1", -120.0), ("Campsite 2", -120.1)],
-                    )],
-                ),
+                park("a", 2.0, &[], vec![trip("X", "Y", &[("Campsite 1", -60.0), ("Campsite 2", -60.1)])]),
+                park("b", 1.0, &[], vec![trip("P", "Q", &[("Campsite 1", -120.0), ("Campsite 2", -120.1)])]),
             ],
         );
-        assert_eq!(
-            written(&dir, "a").unwrap()["point_to_points"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1
-        );
-        assert_eq!(
-            written(&dir, "b").unwrap()["point_to_points"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1
-        );
+        assert_eq!(written(&dir, "a").unwrap()["point_to_points"].as_array().unwrap().len(), 1);
+        assert_eq!(written(&dir, "b").unwrap()["point_to_points"].as_array().unwrap().len(), 1);
     }
 }

@@ -631,11 +631,7 @@ impl Area {
     /// glacier's toe or along its edge stays. A graded path (T1-T4) is
     /// trusted: glaciers shrink, and their outlines lag.
     fn drop_glacier_trails(&mut self) {
-        if !self
-            .tiles
-            .values()
-            .any(|t| t.land.iter().any(|(c, _)| *c == 0))
-        {
+        if !self.tiles.values().any(|t| t.land.iter().any(|(c, _)| *c == 0)) {
             return;
         }
         let g = &self.graph;
@@ -653,8 +649,7 @@ impl Area {
                 }
                 let (a, b) = (g.pts[u as usize], g.pts[e.to as usize]);
                 let on = |n: u32, ice: &mut HashMap<u32, bool>| {
-                    *ice.entry(n)
-                        .or_insert_with(|| self.on_glacier(g.pts[n as usize]))
+                    *ice.entry(n).or_insert_with(|| self.on_glacier(g.pts[n as usize]))
                 };
                 if on(u, &mut ice)
                     && on(e.to, &mut ice)
