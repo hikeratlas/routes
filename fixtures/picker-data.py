@@ -10,6 +10,9 @@
 # TILES_DIR holds the park's ways.pmtiles and water.pmtiles (extract.py), for
 # the map: its paths, roads and lakes, as routes sees them.
 #
+# Also the multi-day routes and base camps' hikes the park offers (not
+# among the day-hike candidates), from its parks/<id>.json.
+#
 # Writes {"park", "park_id", "entries": [{id, name, km, why, source, issue,
 # trail (the OSM trail's lines), candidates: [GeoJSON features]}],
 # "paths", "roads", "lakes"}, coordinates rounded to ~1 m.
@@ -92,6 +95,22 @@ for f in ('candidates.geojsonl', '*/candidates.geojsonl'):
             c = json.loads(line)
             if str(c['properties'].get('park_id')) == park_id:
                 cands.append(c)
+# Multi-day routes and base camps' hikes aren't among the day-hike
+# candidates: add the ones offered, from the park's document.
+for p in glob.glob(os.path.join(out, 'parks', f'{park_id}.json')) + \
+        glob.glob(os.path.join(out, '*', 'parks', f'{park_id}.json')):
+    doc = json.load(open(p))
+    offered = [(r, 'multi-day', r.get('from'), r.get('to')) for r in doc.get('point_to_points', [])]
+    for b in doc.get('base_camps', []):
+        offered += [(r, 'from ' + b.get('camp', 'camp'), b.get('camp'), r.get('dest')) for r in b.get('hikes', [])]
+    for r, kind, frm, to in offered:
+        route = dict(r['route'])
+        line = route.pop('line', [])
+        cands.append({'type': 'Feature', 'geometry': {'type': 'LineString', 'coordinates': line},
+                      'properties': {'from': frm or '', 'dest': to or '', 'kind': f"{kind} {r.get('kind', '')}".strip(),
+                                     'score': r.get('score', 0), 'picked': True, 'route': route,
+                                     'name': r.get('name')}})
+    break
 if not cands:
     sys.exit(f'picker-data: no candidates for park {park_id} in {out} (run routes with --candidates)')
 
@@ -128,6 +147,7 @@ for i, e in enumerate(entries):
         pr = c['properties']
         feats.append({'type': 'Feature', 'geometry': rounded(g), 'properties': {
             'from': pr['from'], 'dest': pr['dest'], 'kind': pr['kind'], 'km': pr['route']['km'],
+            'name': pr.get('name'),
             'score': pr['score'], 'picked': pr.get('picked', False), 'on_trail': round(share, 2),
             'via': pr['route'].get('via', [])[:6]}})
     result['entries'].append({
