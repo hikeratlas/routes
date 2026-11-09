@@ -13,8 +13,9 @@
 //                             {"<osm_id>": [offset, length]}}), so a build
 //                             uploads 2 files, not one per park
 //   DIR/listed.jsonl          every park found in the area and what became of
-//                             it (written, a twin, no routes, under
-//                             --min-area, over --max-tiles), so a check of a
+//                             it (written, a twin, inside a bigger park,
+//                             no routes, under --min-area, over
+//                             --max-tiles), so a check of a
 //                             park's routes can tell one that isn't curated
 //                             from one outside the area (fixtures/expect.py)
 //
@@ -193,11 +194,64 @@ struct Park {
     operator: String,
     area: f64,
     trail_area: bool,
+    /// Curated only as notable, under --min-area (see notable()).
+    small_notable: bool,
     min: geo::P,
     max: geo::P,
+    /// Its outline in the z8 park layer, piece by piece (each tile's), for
+    /// whether a small park is inside it.
+    rings: Vec<Vec<geo::P>>,
 }
 
+/// A small notable park is another's when that one is at least this many
+/// times bigger and has it inside: more than a twin (the same outline,
+/// mapped twice, as Cape Split is).
+const INSIDE_RATIO: f64 = 2.0;
+/// How near a unit named for a bigger park (see Park::has_inside) must be.
+const UNIT_NEAR_M: f64 = 10_000.0;
+
 impl Park {
+    /// Whether park q is inside this one: its box's centre, at least half of
+    /// its outline's points (an irregular unit's centre can fall outside
+    /// it), or it's a nearby unit named for this one.
+    fn has_inside(&self, q: &Park) -> bool {
+        let c = ((q.min.0 + q.max.0) / 2.0, (q.min.1 + q.max.1) / 2.0);
+        if self.contains(c) {
+            return true;
+        }
+        // A unit named for it, nearby though outside its outline:
+        // "Patapsco Valley State Park Rockhaven Area" is a piece of the
+        // state park that OSM maps apart from its main relation.
+        let near = UNIT_NEAR_M / geo::mpu(c.1);
+        if q.name.starts_with(&format!("{} ", self.name))
+            && c.0 > self.min.0 - near
+            && c.0 < self.max.0 + near
+            && c.1 > self.min.1 - near
+            && c.1 < self.max.1 + near
+        {
+            return true;
+        }
+        let pts: Vec<geo::P> = q.rings.iter().flatten().copied().collect();
+        !pts.is_empty() && 2 * pts.iter().filter(|&&p| self.contains(p)).count() >= pts.len()
+    }
+
+    /// Whether p is inside the park's outline (even-odd over its pieces).
+    fn contains(&self, p: geo::P) -> bool {
+        if p.0 < self.min.0 || p.0 > self.max.0 || p.1 < self.min.1 || p.1 > self.max.1 {
+            return false;
+        }
+        let mut inside = false;
+        for r in &self.rings {
+            for k in 0..r.len() {
+                let (a, b) = (r[k], r[(k + 1) % r.len()]);
+                if (a.1 > p.1) != (b.1 > p.1) && p.0 < a.0 + (p.1 - a.1) / (b.1 - a.1) * (b.0 - a.0) {
+                    inside = !inside;
+                }
+            }
+        }
+        inside
+    }
+
     /// The park's z14 tiles, plus 5 km around it for trailheads outside.
     fn tiles(&self) -> Vec<(u32, u32)> {
         let r = 5000.0 / geo::mpu((self.min.1 + self.max.1) / 2.0);
@@ -318,6 +372,7 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> (Vec<Park>, Vec<Valu
                     }
                     let rank = l.get(f, "rank").map(|v| v.as_f64()).unwrap_or(1.0);
                     let floor = if notable(name, rank) { a.min_area_notable } else { a.min_area };
+                    let small_notable = !trail_area && area < a.min_area * 1e6;
                     if !trail_area && area < floor * 1e6 {
                         small
                             .lock()
@@ -335,10 +390,13 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> (Vec<Park>, Vec<Valu
                             operator: String::new(),
                             area,
                             trail_area,
+                            small_notable,
                             min: (f64::MAX, f64::MAX),
                             max: (f64::MIN, f64::MIN),
+                            rings: vec![],
                         });
                     for ring in f.geometry() {
+                        let mut r = vec![];
                         for (px, py) in ring {
                             let w = (
                                 x as f64 * scale + px as f64 * scale / l.extent as f64,
@@ -346,7 +404,9 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> (Vec<Park>, Vec<Valu
                             );
                             p.min = (p.min.0.min(w.0), p.min.1.min(w.1));
                             p.max = (p.max.0.max(w.0), p.max.1.max(w.1));
+                            r.push(w);
                         }
+                        p.rings.push(r);
                     }
                 }
             }
@@ -370,6 +430,29 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> (Vec<Park>, Vec<Valu
         .unwrap()
         .into_iter()
         .map(|(id, (name, area))| listed(&id, &name, area, "under --min-area"))
+        .collect();
+    // A small notable park inside a bigger one is that park's to offer:
+    // Patapsco Valley State Park's units (McKeldin Area, 1.6 km²) are each
+    // named a state park, and would repeat its hikes.
+    let inside: Vec<(usize, usize)> = (0..v.len())
+        .filter(|&i| v[i].small_notable)
+        .filter_map(|i| {
+            (0..v.len())
+                .find(|&j| j != i && v[j].area > INSIDE_RATIO * v[i].area && v[j].has_inside(&v[i]))
+                .map(|j| (i, j))
+        })
+        .collect();
+    for &(i, j) in &inside {
+        let mut l = listed(&v[i].id, &v[i].name, v[i].area, "inside");
+        l["in"] = json!(v[j].id);
+        small.push(l);
+    }
+    let drop: std::collections::HashSet<usize> = inside.iter().map(|&(i, _)| i).collect();
+    let v: Vec<Park> = v
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| !drop.contains(i))
+        .map(|(_, p)| p)
         .collect();
     small.sort_by(|x, y| x["id"].as_str().cmp(&y["id"].as_str()));
     (v, small)
@@ -1046,9 +1129,50 @@ mod tests {
             operator: String::new(),
             area: 1.0,
             trail_area: false,
+            small_notable: false,
             min: (0.0, 0.0),
             max: (0.0, 0.0),
+            rings: vec![],
         }
+    }
+
+    // A park's outline, in pieces as the z8 tiles cut it: an L of two
+    // squares. A point in the L is inside; one in its box but not the L isn't.
+    #[test]
+    fn a_park_contains_what_its_outline_does() {
+        let mut p = shard_park("big");
+        let sq = |x: f64, y: f64| vec![(x, y), (x + 1.0, y), (x + 1.0, y + 1.0), (x, y + 1.0)];
+        p.rings = vec![sq(0.0, 0.0), sq(1.0, 0.0), sq(0.0, 1.0)];
+        (p.min, p.max) = ((0.0, 0.0), (2.0, 2.0));
+        assert!(p.contains((0.5, 0.5)));
+        assert!(p.contains((1.5, 0.5)));
+        assert!(p.contains((0.5, 1.5)));
+        assert!(!p.contains((1.5, 1.5))); // the L's notch, in its box
+        assert!(!p.contains((2.5, 0.5)));
+    }
+
+    // A small unit named for a bigger park, nearby but outside its outline,
+    // is the bigger park's (Patapsco's Rockhaven Area); a far one isn't.
+    #[test]
+    fn a_unit_named_for_a_park_is_inside_it() {
+        let mut big = shard_park("big");
+        big.name = "Patapsco Valley State Park".into();
+        let sq = |x: f64, y: f64, d: f64| vec![(x, y), (x + d, y), (x + d, y + d), (x, y + d)];
+        let d = 5000.0 / geo::mpu(0.0); // 5 km
+        big.rings = vec![sq(0.0, 0.0, d)];
+        (big.min, big.max) = ((0.0, 0.0), (d, d));
+        let unit = |x: f64| {
+            let mut u = shard_park("unit");
+            u.name = "Patapsco Valley State Park Rockhaven Area".into();
+            u.rings = vec![sq(x, 0.0, d / 10.0)];
+            (u.min, u.max) = ((x, 0.0), (x + d / 10.0, d / 10.0));
+            u
+        };
+        assert!(big.has_inside(&unit(1.2 * d))); // 1 km past its edge
+        assert!(!big.has_inside(&unit(4.0 * d))); // 15 km past it
+        let mut other = unit(1.2 * d);
+        other.name = "Rockhaven Park".into();
+        assert!(!big.has_inside(&other));
     }
 
     // Parks go costliest first to the least-loaded shard; every shard computes
