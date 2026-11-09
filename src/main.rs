@@ -49,6 +49,9 @@ const USAGE: &str = "usage: routes --tiles FILE|URL [--tiles ...] --out DIR
                          archive; none for Mapterhorn alone)
   [--no-known-bonus]     don't score up routes that follow an OSM hiking
                          route (to measure the proposer on its own)
+  [--trails]             also write DIR/trails.jsonl: each park's named
+                         trails and the hikes walking each, for the named
+                         regressions (fixtures/expect.py); off by default
   [--park-timeout SECS]  stop starting new searches in a park after this
                          long, keeping what was found, and report it
   [--shard K/N]          curate only shard K (0-based) of N, and write each
@@ -113,6 +116,11 @@ fn args() -> Args {
     while i < v.len() {
         if v[i] == "--no-known-bonus" {
             curate::KNOWN_BONUS.store(false, std::sync::atomic::Ordering::Relaxed);
+            i += 1;
+            continue;
+        }
+        if v[i] == "--trails" {
+            recall::TRAILS.store(true, std::sync::atomic::Ordering::Relaxed);
             i += 1;
             continue;
         }
@@ -503,6 +511,12 @@ fn main() {
             recall::name_routes(&area, &mut doc);
             recall::name_loops(&mut doc);
             recall::drop_redundant_from(&mut doc);
+            // After naming, so it reports the names hikes are offered under;
+            // moved to trails.jsonl like "known". Only with --trails: it's
+            // for testing, and a build's production files don't need it.
+            if recall::TRAILS.load(std::sync::atomic::Ordering::Relaxed) {
+                doc["trails"] = json!(recall::trails(&area, &doc));
+            }
             Some(Curated { area: p.area, secs: t.elapsed().as_secs_f64(), doc })
     };
     // Not par_bridge, though it would start a shard's costliest parks first:
@@ -607,6 +621,8 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
         std::io::BufWriter::new(std::fs::File::create(out.join("routes.geojsonl")).unwrap());
     let mut known =
         std::io::BufWriter::new(std::fs::File::create(out.join("known.jsonl")).unwrap());
+    // Only when the parks have trails (--trails, routes#95).
+    let mut trails: Option<std::io::BufWriter<std::fs::File>> = None;
     let mut bundle =
         std::io::BufWriter::new(std::fs::File::create(out.join("routes.bin")).unwrap());
     let mut index = serde_json::Map::new();
@@ -694,6 +710,16 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
                 k["park_id"] = json!(p_id);
                 k["park"] = json!(p_name);
                 writeln!(known, "{k}").unwrap();
+            }
+        }
+        if let Some(Value::Array(ts)) = doc.as_object_mut().and_then(|o| o.remove("trails")) {
+            let w = trails.get_or_insert_with(|| {
+                std::io::BufWriter::new(std::fs::File::create(out.join("trails.jsonl")).unwrap())
+            });
+            for mut t in ts {
+                t["park_id"] = json!(p_id);
+                t["park"] = json!(p_name);
+                writeln!(w, "{t}").unwrap();
             }
         }
         // Documents from before stops (#70) have none.
@@ -891,6 +917,9 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
     eprintln!("{written} parks with routes");
     lines.flush().unwrap();
     known.flush().unwrap();
+    if let Some(mut w) = trails {
+        w.flush().unwrap();
+    }
     bundle.flush().unwrap();
     std::fs::write(
         out.join("index.json"),
