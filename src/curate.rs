@@ -1433,34 +1433,21 @@ impl<'a> Ctx<'a> {
 }
 
 /// Coverage first (each start's best), then greedily by score x novelty.
-/// Each destination is only ever reached by its best route by score: novelty
-/// decides which destinations are shown, not how they're reached. Otherwise
-/// a destination on the way to one already shown went to a long detour that
-/// covered new trail, or to a far trailhead whose own best hike it was: the
-/// Crack's viewpoint by a 17.9 km approach, not its own 7.6 km trail
-/// (routes#80).
 pub fn select(cands: &[Cand], n: usize, by_start: bool) -> Vec<Cand> {
     let mut chosen: Vec<Cand> = vec![];
     let mut covered: HashSet<u64> = HashSet::default();
     let novelty = |c: &Cand, covered: &HashSet<u64>| {
         c.edges.difference(covered).count() as f64 / c.edges.len().max(1) as f64
     };
-    let mut best_to: HashMap<&str, &Cand> = HashMap::default();
-    for c in cands {
-        if best_to.get(c.dest.as_str()).is_none_or(|b| c.score > b.score) {
-            best_to.insert(&c.dest, c);
-        }
-    }
-    let is_best = |c: &Cand| best_to.get(c.dest.as_str()).is_some_and(|b| std::ptr::eq(*b, c));
     if by_start {
         let mut best: HashMap<&str, &Cand> = HashMap::default();
-        for c in cands.iter().filter(|c| is_best(c)) {
+        for c in cands {
             if best.get(c.from.as_str()).is_none_or(|b| c.score > b.score) {
                 best.insert(&c.from, c);
             }
         }
         let mut v: Vec<&Cand> = best.into_values().collect();
-        v.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap().then_with(|| a.dest.cmp(&b.dest)));
+        v.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
         for c in v {
             if chosen.len() < n
                 && novelty(c, &covered) > 0.5
@@ -1475,11 +1462,11 @@ pub fn select(cands: &[Cand], n: usize, by_start: bool) -> Vec<Cand> {
     // A route to a destination we don't have yet is worth showing even if it
     // shares trail with one we do (Garibaldi Lake on the way to the Black Tusk).
     while chosen.len() < n {
-        let pick = best_to
-            .values()
+        let pick = cands
+            .iter()
             .filter(|c| !done.contains(&c.dest))
-            .map(|&c| (c.score * novelty(c, &covered).max(0.6).powf(1.5), c))
-            .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap().then_with(|| b.1.dest.cmp(&a.1.dest)));
+            .map(|c| (c.score * novelty(c, &covered).max(0.6).powf(1.5), c))
+            .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
         let Some((_, c)) = pick else { break };
         covered.extend(c.edges.iter().copied());
         done.insert(c.dest.clone());

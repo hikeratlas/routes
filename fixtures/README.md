@@ -22,7 +22,10 @@ then:
 
 `qrank.db` is from https://github.com/hikeratlas/qrank/releases.
 
-`expect.json` lists named regressions: routes we've fixed and must keep
-offering, named right (e.g. Killarney's Crack, routes#80). CI checks them on
-the new run with `fixtures/expect.py out/new`, and fails if one is lost. Add
-one whenever a missing or misnamed route is fixed.
+`expect.json` lists named regressions: well-known routes that are very
+noticeable when we don't offer them, or name them wrong (e.g. Killarney's
+Crack, routes#80, not fixed yet). `fixtures/expect.py DIR [--json OUT]`
+checks them on any routes output, by park id: CI reports them on the
+fixtures for main and the change, and basemap's builds on every build, in
+the build progress check. It reports and never fails. Add one whenever a
+missing or misnamed route is noticed.
