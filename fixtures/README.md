@@ -69,6 +69,11 @@ checks the hike's own line, so it needs no `trails.jsonl` and works on
 basemap's builds too. When nothing under the name follows the trace, the
 report names the offered hikes that do.
 
+To find the hike that's meant, `routes --candidates` writes every day hike
+each park considered, `picked` or not, to `candidates.geojsonl` (one
+GeoJSON feature per line, with its park, trailhead, destination, km and
+score), for a trace picked from them.
+
 To add a park's list, write it as
 `[{"park_id", "region", "name", "km", "source"}, ...]` (by hand, or from its
 page any other way), run routes over the park with `--trails`, and

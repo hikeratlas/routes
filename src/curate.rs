@@ -62,6 +62,9 @@ pub struct Ctx<'a> {
 /// --no-known-bonus turns it off). With it, the known-hikes check partly
 /// measures the bump itself, so the fixture CI reports recall both ways.
 pub static KNOWN_BONUS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+/// Whether to keep every day-hike candidate, not just those picked (routes
+/// --candidates), for the named regressions' candidate picker.
+pub static CANDIDATES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// An edge whose midpoint is this close to an OSM hiking route is on it.
 const ON_KNOWN_M: f64 = 30.0;
 
@@ -1765,6 +1768,9 @@ pub struct Curated {
     /// Whether the deadline passed, so some trailheads or campsites were
     /// skipped: the routes are what was found by then.
     pub timed_out: bool,
+    /// Every day-hike candidate, each marked `picked` or not: only with
+    /// --candidates (CANDIDATES), else empty.
+    pub candidates: Vec<Value>,
 }
 
 const MULTI_STARTS_PER_CAMP: usize = 6;
@@ -1978,6 +1984,18 @@ pub fn curate(
         cands.extend(named);
     }
     let day = select(&cands, n_day, true);
+    let candidates: Vec<Value> = if CANDIDATES.load(Relaxed) {
+        cands
+            .iter()
+            .map(|c| {
+                let mut j = cand_json(c);
+                j["picked"] = json!(day.iter().any(|d| d.from == c.from && d.edges == c.edges));
+                j
+            })
+            .collect()
+    } else {
+        vec![]
+    };
     stats += &format!("; day {:.1}s", t.elapsed().as_secs_f64());
 
     let stops = if late() { vec![] } else { stops(&ctx, &starts, &targets) };
@@ -2296,6 +2314,7 @@ pub fn curate(
         through,
         stats,
         timed_out,
+        candidates,
     }
 }
 
