@@ -265,18 +265,10 @@ fn offered(doc: &Value) -> Vec<(Value, Vec<P>)> {
     out
 }
 
-/// Each named trail in the area loaded for the park (its path and track ways
-/// of one name, e.g. Killarney's "Granite Ridge Trail"), its share inside the
-/// park, and the offered hikes that walk at least PARTIAL of it, best first.
-/// Trails outside count too: a park's own list of its trails can cross its
-/// boundary (Killarney's Lake of The Woods Trail is in the neighbouring
-/// Killarney Lakelands park). For checking well-known trails by name and
-/// length as well as by where they go (fixtures/expect.py, routes#95): only
-/// reported, never used to pick or name routes. Ways of the same name in
-/// different places are one trail. Only with --trails (TRAILS).
-pub fn trails(area: &Area, doc: &Value) -> Vec<Value> {
+/// The named trails in the area loaded for a park: each name's path and
+/// track ways, as (segments, metres, metres inside the park).
+fn named_trails(area: &Area) -> HashMap<&str, (Vec<(P, P)>, f64, f64)> {
     let g = &area.graph;
-    // name -> (segments, metres, metres inside the park)
     let mut by_name: HashMap<&str, (Vec<(P, P)>, f64, f64)> = HashMap::default();
     for (a, es) in g.adj.iter().enumerate() {
         for e in es {
@@ -298,6 +290,120 @@ pub fn trails(area: &Area, doc: &Value) -> Vec<Value> {
             }
         }
     }
+    by_name
+}
+
+/// The named trail a route walks, if any: it covers NAME_RELATION of the
+/// trail, and NAME_ROUTE of the route is on it; the best by both.
+fn trail_walked<'t>(trails: &[(&'t str, Vec<P>, Vec<(P, P)>, [f64; 4])], line: &[P]) -> Option<&'t str> {
+    let route_pts = sample(line);
+    let rb = bounds(line);
+    let pad = COVER_M / mpu(rb[1]);
+    trails
+        .iter()
+        .filter(|(_, _, _, tb)| {
+            tb[0] <= rb[2] + pad && rb[0] <= tb[2] + pad && tb[1] <= rb[3] + pad && rb[1] <= tb[3] + pad
+        })
+        .map(|(n, tp, segs, _)| (*n, coverage(tp, line), coverage_segs(&route_pts, segs)))
+        .filter(|&(_, trail, route)| trail >= NAME_RELATION && route >= NAME_ROUTE)
+        .max_by(|a, b| (a.1 * a.2).partial_cmp(&(b.1 * b.2)).unwrap())
+        .map(|(n, _, _)| n)
+}
+
+/// Name each loop that isn't named yet after the named trail it walks, as
+/// name_routes does after an OSM hiking route (and with its thresholds: the
+/// route covers NAME_RELATION of the trail, and NAME_ROUTE of the route is on
+/// it): Killarney's Lake of The Woods Trail, a loop with no relation, was
+/// offered as "Lake of the Woods from Turbid Lake/Lake of The Woods Trail"
+/// (#104). Relations name first; this only fills in.
+pub fn name_trails(area: &Area, doc: &mut Value) {
+    let by_name = named_trails(area);
+    let trails: Vec<(&str, Vec<P>, Vec<(P, P)>, [f64; 4])> = by_name
+        .into_iter()
+        .filter(|(_, (_, m, _))| *m >= TRAIL_MIN_M)
+        .map(|(n, (segs, _, _))| {
+            let pts: Vec<P> = segs.iter().flat_map(|&(a, b)| sample(&[a, b])).collect();
+            let b = bounds(&pts);
+            (n, pts, segs, b)
+        })
+        .collect();
+    if trails.is_empty() {
+        return;
+    }
+    // A trail another route is already named for, or walks for itself (its
+    // destination), stays that route's: Wetland Trail out and back keeps the
+    // name, and the loop past it to River Overlook doesn't take it.
+    let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut note = |r: &Value| {
+        for k in ["name", "dest"] {
+            if let Some(n) = r[k].as_str() {
+                taken.insert(n.trim().to_lowercase());
+            }
+        }
+    };
+    for h in doc["day_hikes"].as_array().into_iter().flatten() {
+        note(h);
+    }
+    for b in doc["base_camps"].as_array().into_iter().flatten() {
+        for h in b["hikes"].as_array().into_iter().flatten() {
+            note(h);
+        }
+    }
+    for t in doc["point_to_points"].as_array().into_iter().flatten() {
+        note(t);
+    }
+    let trails: Vec<_> = trails
+        .into_iter()
+        .filter(|t| !taken.contains(&t.0.trim().to_lowercase()))
+        .collect();
+    let name = |r: &mut Value| {
+        // Loops only: an out-and-back is named for where it goes ("Wapta
+        // Falls", not "Wapta Falls Trail"; "Summit Lake", not the "Old
+        // Highway 1A" it walks), but a loop's destination is only where it
+        // turns.
+        if r["name"].is_string() || r["kind"].as_str() != Some("loop") {
+            return;
+        }
+        let line: Vec<P> = r["route"]["line"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|c| Some(world(c[0].as_f64()?, c[1].as_f64()?)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if line.len() < 2 {
+            return;
+        }
+        if let Some(n) = trail_walked(&trails, &line) {
+            r["name"] = json!(n);
+        }
+    };
+    for h in doc["day_hikes"].as_array_mut().into_iter().flatten() {
+        name(h);
+    }
+    for b in doc["base_camps"].as_array_mut().into_iter().flatten() {
+        for h in b["hikes"].as_array_mut().into_iter().flatten() {
+            name(h);
+        }
+    }
+    for t in doc["point_to_points"].as_array_mut().into_iter().flatten() {
+        name(t);
+    }
+    disambiguate(doc);
+}
+
+/// Each named trail in the area loaded for the park (its path and track ways
+/// of one name, e.g. Killarney's "Granite Ridge Trail"), its share inside the
+/// park, and the offered hikes that walk at least PARTIAL of it, best first.
+/// Trails outside count too: a park's own list of its trails can cross its
+/// boundary (Killarney's Lake of The Woods Trail is in the neighbouring
+/// Killarney Lakelands park). For checking well-known trails by name and
+/// length as well as by where they go (fixtures/expect.py, routes#95): only
+/// reported, never used to pick or name routes. Ways of the same name in
+/// different places are one trail. Only with --trails (TRAILS).
+pub fn trails(area: &Area, doc: &Value) -> Vec<Value> {
+    let by_name = named_trails(area);
     let hikes: Vec<(Value, Near, [f64; 4])> = offered(doc)
         .into_iter()
         .filter(|(_, l)| l.len() > 1)
@@ -830,6 +936,35 @@ mod tests {
                 None
             ]
         );
+    }
+
+    // A route takes a named trail's name when it walks the trail and stays
+    // on it (#104): a loop round the trail does; a longer hike that only
+    // passes along it doesn't, nor one that walks a bit of a long trail.
+    #[test]
+    fn a_route_is_named_for_the_trail_it_walks() {
+        let u = 1.0 / mpu(world(0.0, 45.0).1);
+        let o = world(0.0, 45.0);
+        let at = |e: f64, n: f64| (o.0 + e * u, o.1 - n * u);
+        let ring = vec![at(0.0, 0.0), at(1000.0, 0.0), at(1000.0, 1000.0), at(0.0, 1000.0), at(0.0, 0.0)];
+        let segs = |l: &[P]| l.windows(2).map(|w| (w[0], w[1])).collect::<Vec<_>>();
+        let trail = |n: &'static str, l: &[P]| {
+            let pts: Vec<P> = segs(l).iter().flat_map(|&(a, b)| sample(&[a, b])).collect();
+            let b = bounds(&pts);
+            (n, pts, segs(l), b)
+        };
+        let trails = vec![trail("Lake of The Woods Trail", &ring)];
+        // The loop, with 50 m from the lot.
+        let mut lp = vec![at(0.0, -50.0)];
+        lp.extend(ring.iter().copied());
+        lp.push(at(0.0, -50.0));
+        assert_eq!(trail_walked(&trails, &lp), Some("Lake of The Woods Trail"));
+        // Round the loop, then 3 km on elsewhere: mostly not on the trail.
+        let mut long = ring.clone();
+        long.push(at(0.0, -3000.0));
+        assert_eq!(trail_walked(&trails, &long), None);
+        // Half the loop: not enough of the trail.
+        assert_eq!(trail_walked(&trails, &ring[..3]), None);
     }
 
     #[test]

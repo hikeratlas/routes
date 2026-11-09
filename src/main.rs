@@ -665,6 +665,7 @@ fn main() {
             // known.jsonl), so the website's files don't grow.
             doc["known"] = json!(recall::check(&area, &doc));
             recall::name_routes(&area, &mut doc);
+            recall::name_trails(&area, &mut doc);
             recall::name_loops(&mut doc);
             recall::drop_redundant_from(&mut doc);
             // After naming, so it reports the names hikes are offered under;
