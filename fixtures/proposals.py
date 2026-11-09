@@ -9,7 +9,8 @@
 # ("open", "accepted" or "rejected"), and optionally quote (the park's words),
 # km_basis ("return", "one-way-doubled", "loop", "point-to-point" or
 # "unclear"), why, hours, elev_m, issue, park_bbox [W, S, E, N], osm_trail
-# (the OSM trail of its name, if one matched), osm_km, suggest_km and
+# (the OSM trail of its name, if one matched, spelled as in OSM), osm_bbox (the
+# box of its ways, for the website to read them from the tiles), osm_km, suggest_km and
 # suggest_why (a length to consider instead, and why), note.
 import glob, json, os
 
