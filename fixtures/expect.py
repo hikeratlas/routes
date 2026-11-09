@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # expect.py ROUTES_OUT [--json OUT.json] > summary.md
 #
-# Named regressions (fixtures/expect.json): well-known routes that are very
-# noticeable when they're missing or misnamed. Two kinds:
+# Named regressions (fixtures/expect/<region>-<park>.jsonl, one file per
+# park, one entry per line; see expectations.py): well-known routes that are
+# very noticeable when they're missing or misnamed. Two kinds:
 #
 # "dest" (the default): in park `park_id`, a route to `dest` that starts
 # within `start_within_m` of `start` and is at most `max_km` long, named
@@ -18,12 +19,16 @@
 #
 # ROUTES_OUT is any routes output: one run's (parks/<id>.json, trails.jsonl)
 # or the fixtures' (<fixture>/parks/<id>.json, <fixture>/trails.jsonl); a
-# park it doesn't have is skipped. It reports and never fails: some of these
-# aren't fixed yet, and a build shouldn't stop over one. --json writes the
-# results for basemap's build progress check: {"regressions": [{name, park,
-# park_id, issue, kind, status ("ok", "failing" or "skipped"), problems,
-# checks}], "failing": n, "checked": n}.
+# park it doesn't have is skipped. It reports and never fails on what it
+# finds: some of these aren't fixed yet, and a build shouldn't stop over one.
+# It does fail (exit 1) on a malformed or misnamed expectations file. --json
+# writes the results for basemap's build progress check: {"regressions":
+# [{name, park, park_id, file, issue, kind, status ("ok", "failing" or
+# "skipped"), problems, checks}], "failing": n, "checked": n}.
 import glob, json, math, os, re, sys
+from functools import lru_cache
+
+from expectations import load, norm
 
 WALKS = 0.7
 
@@ -34,8 +39,7 @@ if '--json' in args:
     out_json = args[i + 1]
     del args[i:i + 2]
 root = args[0]
-here = os.path.dirname(os.path.abspath(__file__))
-expects = json.load(open(os.path.join(here, 'expect.json')))
+expects = load()
 
 
 def metres(a, b):
@@ -43,12 +47,7 @@ def metres(a, b):
     return math.hypot(dx, (b[1] - a[1]) * 110570)
 
 
-def norm(s):
-    """A name to compare: 'The "Crack" Trail' and 'the crack' are the same."""
-    words = re.sub(r'[^0-9a-z]+', ' ', (s or '').lower()).split()
-    return ' '.join(w for w in words if w not in ('the', 'trail'))
-
-
+@lru_cache(maxsize=None)
 def park_routes(park_id):
     """The park's offered routes (day hikes, multi-day routes, base camps'
     hikes; not their approaches), each with the `from` and `dest` that
@@ -71,7 +70,7 @@ _trails = None
 
 def park_trails(park_id):
     """The park's named trails from trails.jsonl, by norm(name), or None if
-    this output has no trails.jsonl. Only the parks expect.json names are
+    this output has no trails.jsonl. Only the parks with trail entries are
     parsed: a full build's file is large."""
     global _trails
     if not trail_files:
@@ -157,20 +156,35 @@ for e in expects:
         else:
             problems, checks = check_dest(e, rs)
     status = 'skipped' if rs is None else 'failing' if problems else 'ok'
-    results.append({k: e[k] for k in ('name', 'park', 'park_id', 'issue')}
+    results.append({k: e[k] for k in ('name', 'park', 'park_id', 'file', 'issue')}
                    | {'kind': kind, 'status': status, 'problems': problems}
                    | ({'checks': checks} if checks else {}))
 
 checked = [r for r in results if r['status'] != 'skipped']
 failing = [r for r in checked if r['status'] == 'failing']
-print(f"### Named regressions: {len(failing)} of {len(checked)} failing\n")
 mark = {'ok': '✅', 'failing': '❌', 'skipped': '➖'}
 tick = {True: '✓', False: '✗', None: '–'}
-for r in sorted(results, key=lambda r: (r['park'], r['kind'], r['name'])):
-    detail = ''
-    if r.get('checks'):
-        detail = ' (' + ', '.join(f"{k} {tick[v]}" for k, v in r['checks'].items()) + ')'
-    print(f"- {mark[r['status']]} **{r['name']}** ({r['park']}, {r['issue']}): {r['status']}{detail}"
-          + ''.join(f"\n  - {p}" for p in r['problems']))
+by_file = {}
+for r in results:
+    by_file.setdefault(r['file'], []).append(r)
+skipped = [f for f, rs in by_file.items() if all(r['status'] == 'skipped' for r in rs)]
+print(f"### Named regressions: {len(failing)} of {len(checked)} failing"
+      f" ({len(by_file) - len(skipped)} of {len(by_file)} parks in this output)\n")
+# Parks with failures first, then by file name.
+order = sorted((f for f in by_file if f not in skipped),
+               key=lambda f: (not any(r['status'] == 'failing' for r in by_file[f]), f))
+for f in order:
+    rs = by_file[f]
+    n_fail = sum(r['status'] == 'failing' for r in rs)
+    print(f"#### {rs[0]['park']} ({f}): {n_fail} of {len(rs)} failing\n")
+    for r in sorted(rs, key=lambda r: (r['status'] != 'failing', r['kind'], r['name'])):
+        detail = ''
+        if r.get('checks'):
+            detail = ' (' + ', '.join(f"{k} {tick[v]}" for k, v in r['checks'].items()) + ')'
+        print(f"- {mark[r['status']]} **{r['name']}** ({r['issue']}): {r['status']}{detail}"
+              + ''.join(f"\n  - {p}" for p in r['problems']))
+    print()
+if skipped:
+    print(f"➖ Not in this output: {', '.join(sorted(skipped))}")
 if out_json:
     json.dump({'regressions': results, 'failing': len(failing), 'checked': len(checked)}, open(out_json, 'w'), indent=1)

@@ -287,7 +287,7 @@ jobs:
           python3 new/fixtures/compare.py prev/base out/new/new | tee -a "$GITHUB_STEP_SUMMARY"
 
       # Well-known routes that are very noticeable when missing or misnamed
-      # (fixtures/expect.json), on main and with this change. Information:
+      # (fixtures/expect/), on main and with this change. Information:
       # it never fails the job (some aren't fixed yet).
       - name: Named regressions
         if: github.event_name == 'pull_request'
