@@ -85,6 +85,15 @@ is meant, or draw the hike along the trails, then copy the picks;
 `fixtures/apply-picks.py picks.json` writes each as its entry's `trace`,
 simplified to at most 20 points.
 
+`proposals/` holds the trails parks list that aren't entries yet: one
+file per park, named as `expect/`'s are, one trail per line as the park
+lists it (its name, the whole hike's length, the park's own words and where
+they are), with a `status`: `open`, `accepted` (it's an entry now) or
+`rejected`. They wait for a person to promote them, with a trace of the
+hike meant, or reject them. `expect.py` fails on a malformed one, as on a
+malformed entry. The first 390, for 28 Canadian national and provincial
+parks, came from the parks' websites (routes#95).
+
 To add a park's list, write it as
 `[{"park_id", "region", "name", "km", "source"}, ...]` (by hand, or from its
 page any other way), run routes over the park with `--trails`, and
