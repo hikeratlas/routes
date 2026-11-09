@@ -54,19 +54,22 @@ pub struct Dem {
 }
 
 /// Terrarium heights from a WebP tile: h = R * 256 + G + B / 256 - 32768.
-fn decode(bytes: &[u8]) -> Vec<f32> {
-    let mut dec = image_webp::WebPDecoder::new(std::io::Cursor::new(bytes)).expect("DEM webp");
+/// An error for bytes that aren't such a tile (e.g. a truncated download).
+fn decode(bytes: &[u8]) -> Result<Vec<f32>, String> {
+    let mut dec = image_webp::WebPDecoder::new(std::io::Cursor::new(bytes)).map_err(|e| format!("webp: {e:?}"))?;
     let (w, h) = dec.dimensions();
-    assert!(w as usize == TILE && h as usize == TILE, "DEM tile is {w}x{h}, not {TILE}");
+    if w as usize != TILE || h as usize != TILE {
+        return Err(format!("tile is {w}x{h}, not {TILE}"));
+    }
     let ch = if dec.has_alpha() { 4 } else { 3 };
-    let mut buf = vec![0; dec.output_buffer_size().expect("DEM webp size")];
-    dec.read_image(&mut buf).expect("DEM webp");
-    (0..TILE * TILE)
+    let mut buf = vec![0; dec.output_buffer_size().ok_or("webp: no buffer size")?];
+    dec.read_image(&mut buf).map_err(|e| format!("webp: {e:?}"))?;
+    Ok((0..TILE * TILE)
         .map(|i| {
             let p = &buf[i * ch..];
             p[0] as f32 * 256.0 + p[1] as f32 + p[2] as f32 / 256.0 - 32768.0
         })
-        .collect()
+        .collect())
 }
 
 impl Dem {
@@ -107,28 +110,54 @@ impl Dem {
             .map(|c| c.join("mapterhorn").join(format!("{z}-{x}-{y}.webp")))
     }
 
-    /// A tile's bytes, or None if it doesn't exist. Cached on disk (a 404 as
-    /// an empty file) under mapterhorn/, apart from older Terrarium caches.
-    /// A cached tile's modification time is set to now when it's read, so a
-    /// cache kept between runs can be pruned to the tiles a run used.
-    fn fetch(&self, z: u8, x: u32, y: u32) -> Option<Vec<u8>> {
+    /// A Mapterhorn tile's heights, or None if it doesn't exist. Cached on
+    /// disk (a 404 as an empty file) under mapterhorn/, apart from older
+    /// Terrarium caches. A cached tile's modification time is set to now when
+    /// it's read, so a cache kept between runs can be pruned to the tiles a
+    /// run used.
+    ///
+    /// A tile is only cached once it decodes, and one that doesn't is
+    /// downloaded again: a corrupt download (Cuyamaca Rancho in fixtures run
+    /// 42582061988) panicked its park, and once cached, every run after.
+    fn fetch(&self, z: u8, x: u32, y: u32) -> Option<Vec<f32>> {
         let path = self.path(z, x, y);
-        let bytes = match path.as_ref().and_then(|p| std::fs::read(p).ok()) {
-            Some(b) => {
-                touch(path.as_ref().unwrap(), std::time::SystemTime::now());
-                CACHE_HITS.fetch_add(1, Relaxed);
-                b
-            }
-            None => {
-                let b = self.download(z, x, y);
-                if let Some(p) = &path {
-                    let _ = std::fs::create_dir_all(p.parent().unwrap());
-                    let _ = std::fs::write(p, &b);
+        if let Some(p) = &path {
+            if let Ok(b) = std::fs::read(p) {
+                if b.is_empty() {
+                    touch(p, std::time::SystemTime::now());
+                    CACHE_HITS.fetch_add(1, Relaxed);
+                    return None;
                 }
-                b
+                match decode(&b) {
+                    Ok(g) => {
+                        touch(p, std::time::SystemTime::now());
+                        CACHE_HITS.fetch_add(1, Relaxed);
+                        return Some(g);
+                    }
+                    Err(e) => eprintln!("DEM {z}/{x}/{y}: cached tile doesn't decode ({e}), downloading it again"),
+                }
             }
-        };
-        if bytes.is_empty() { None } else { Some(bytes) }
+        }
+        let mut tries = 0;
+        loop {
+            let b = self.download(z, x, y);
+            let g = if b.is_empty() { Ok(None) } else { decode(&b).map(Some) };
+            match g {
+                Ok(g) => {
+                    if let Some(p) = &path {
+                        let _ = std::fs::create_dir_all(p.parent().unwrap());
+                        let _ = std::fs::write(p, &b);
+                    }
+                    return g;
+                }
+                Err(e) if tries < 3 => {
+                    tries += 1;
+                    eprintln!("DEM {z}/{x}/{y}: download doesn't decode ({e}, {} bytes), retrying", b.len());
+                    std::thread::sleep(std::time::Duration::from_millis(500 << tries));
+                }
+                Err(e) => panic!("DEM {z}/{x}/{y}: download doesn't decode ({e}, {} bytes)", b.len()),
+            }
+        }
     }
 
     /// A tile from Mapterhorn: its bytes, or empty if it doesn't exist.
@@ -176,7 +205,11 @@ impl Dem {
             self.tiles.lock().unwrap().insert((z, x, y), None);
             return None;
         }
-        let t = self.fetch_nl(z, x, y).or_else(|| self.fetch(z, x, y)).map(|b| Arc::new(decode(&b)));
+        let t = match self.fetch_nl(z, x, y) {
+            Some(b) => Some(decode(&b).unwrap_or_else(|e| panic!("nl-dem {z}/{x}/{y}: {e}"))),
+            None => self.fetch(z, x, y),
+        }
+        .map(Arc::new);
         let mut m = self.tiles.lock().unwrap();
         if m.len() >= MAX_TILES {
             // Crude eviction: drop about half.
@@ -262,10 +295,19 @@ mod tests {
 
     #[test]
     fn decodes_terrarium_webp() {
-        let h = decode(&terrarium_webp(|x, y| x as f32 * 0.5 + y as f32 - 20.25));
+        let h = decode(&terrarium_webp(|x, y| x as f32 * 0.5 + y as f32 - 20.25)).unwrap();
         assert_eq!(h.len(), TILE * TILE);
         assert!((h[0] - -20.25).abs() < 1.0 / 256.0);
         assert!((h[3 * TILE + 10] - (5.0 + 3.0 - 20.25)).abs() < 1.0 / 256.0);
+    }
+
+    // A truncated tile is an error (for fetch to download it again), not
+    // a panic.
+    #[test]
+    fn truncated_tile_is_an_error() {
+        let b = terrarium_webp(|_, _| 100.0);
+        assert!(decode(&b[..b.len() / 2]).is_err());
+        assert!(decode(b"not a webp").is_err());
     }
 
     // A point whose tile 404s at the DEM's zoom is sampled from its parent.

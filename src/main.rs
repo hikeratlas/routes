@@ -175,6 +175,10 @@ fn args() -> Args {
 struct Park {
     id: String,
     name: String,
+    /// Its official website and operator ("Ontario Parks"), from its label
+    /// in the basemap's park_name layer (hikeratlas/website#72), if any.
+    website: String,
+    operator: String,
     area: f64,
     trail_area: bool,
     min: geo::P,
@@ -238,6 +242,8 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> Vec<Park> {
         .flat_map(|x| (ty(bbox[3])..=ty(bbox[1])).map(move |y| (x, y)))
         .collect();
     let found: Mutex<HashMap<String, Park>> = Mutex::new(HashMap::new());
+    // Each park's label: its website and operator, by osm_id.
+    let labels: Mutex<HashMap<String, (String, String)>> = Mutex::new(HashMap::new());
     let scale = geo::EXT * 64.0; // world units per z8 tile
     // Only the archives with parks or trail areas: the others' z8 tiles
     // needn't be read (nor fetched, for a --write-region extract).
@@ -254,6 +260,16 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> Vec<Park> {
                 // Parks, and trail areas: trail networks outside parks that the
                 // basemap picked out (bin/trail-areas.py), e.g. the Skerwink
                 // Trail. Those are already filtered, so skip --min-area for them.
+                if l.name == "park_name" {
+                    let mut m = labels.lock().unwrap();
+                    for f in &l.features {
+                        let (w, o) = (l.str(f, "website"), l.str(f, "operator"));
+                        if !w.is_empty() || !o.is_empty() {
+                            m.insert(l.str(f, "osm_id").to_string(), (w.to_string(), o.to_string()));
+                        }
+                    }
+                    continue;
+                }
                 let trail_area = l.name == "trail_area";
                 if l.name != "park" && !trail_area {
                     continue;
@@ -292,6 +308,8 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> Vec<Park> {
                         .or_insert_with(|| Park {
                             id: l.str(f, "osm_id").to_string(),
                             name: name.to_string(),
+                            website: String::new(),
+                            operator: String::new(),
                             area,
                             trail_area,
                             min: (f64::MAX, f64::MAX),
@@ -311,7 +329,18 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> Vec<Park> {
             }
         }
     });
-    let mut v: Vec<Park> = found.into_inner().unwrap().into_values().collect();
+    let labels = labels.into_inner().unwrap();
+    let mut v: Vec<Park> = found
+        .into_inner()
+        .unwrap()
+        .into_values()
+        .map(|mut p| {
+            if let Some((w, o)) = labels.get(&p.id) {
+                (p.website, p.operator) = (w.clone(), o.clone());
+            }
+            p
+        })
+        .collect();
     v.sort_by(|a, b| b.area.partial_cmp(&a.area).unwrap());
     v
 }
@@ -469,6 +498,13 @@ fn main() {
             );
             let mut doc = c.to_json();
             doc["park"] = json!({"id": p.id, "name": p.name});
+            // For the park panel (hikeratlas/website#72), when the park has them.
+            if !p.website.is_empty() {
+                doc["park"]["website"] = json!(p.website);
+            }
+            if !p.operator.is_empty() {
+                doc["park"]["operator"] = json!(p.operator);
+            }
             // Kept apart from the park's routes (write_outputs moves it to
             // known.jsonl), so the website's files don't grow.
             doc["known"] = json!(recall::check(&area, &doc));
@@ -907,7 +943,16 @@ mod tests {
     use super::*;
 
     fn shard_park(id: &str) -> Park {
-        Park { id: id.to_string(), name: id.to_string(), area: 1.0, trail_area: false, min: (0.0, 0.0), max: (0.0, 0.0) }
+        Park {
+            id: id.to_string(),
+            name: id.to_string(),
+            website: String::new(),
+            operator: String::new(),
+            area: 1.0,
+            trail_area: false,
+            min: (0.0, 0.0),
+            max: (0.0, 0.0),
+        }
     }
 
     // Parks go costliest first to the least-loaded shard; every shard computes

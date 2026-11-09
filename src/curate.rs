@@ -138,6 +138,10 @@ pub struct Search {
     touched: Vec<u32>, // nodes given a distance, in that order
     pub src: u32,
     order: Vec<u32>, // nodes in the order they were settled
+    // Costs under this are exact: the cost of the first node the search
+    // left unexpanded (past its limit), as every cheaper node was reached
+    // through expanded ones. Infinite if none (or a search to a target).
+    exact_below: f64,
 }
 
 impl Drop for Search {
@@ -162,6 +166,20 @@ impl Search {
         self.touched
             .iter()
             .map(move |&n| (n, sc.metres[n as usize]))
+    }
+    /// A lower bound on the cost of the cheapest walk between the source and
+    /// n, by any costs at least the ones this search used (edge costs are the
+    /// same both ways): its cost where that's exact, else at least
+    /// exact_below. None: no bound beyond what the caller has.
+    fn cost_bound(&self, n: u32) -> Option<f64> {
+        let sc = self.sc();
+        if sc.has(n) && sc.dist[n as usize] < self.exact_below {
+            Some(sc.dist[n as usize])
+        } else if self.exact_below.is_finite() {
+            Some(self.exact_below)
+        } else {
+            None
+        }
     }
     /// The node before n on the way from the source, and the way between.
     fn prev(&self, n: u32) -> (u32, u32) {
@@ -411,7 +429,7 @@ impl<'a> Ctx<'a> {
 
     /// Dijkstra by cost, out to `limit` metres. `penal` edges cost 8x.
     pub fn search(&self, src: u32, limit: f64, penal: Option<&HashSet<u64>>) -> Search {
-        self.search_until(src, limit, penal, None, 1.0)
+        self.search_until(src, limit, penal, None, 1.0, None)
     }
 
     /// As search, but stops once `target` is settled, when only it is wanted:
@@ -425,7 +443,21 @@ impl<'a> Ctx<'a> {
         penal: Option<&HashSet<u64>>,
         target: u32,
     ) -> Search {
-        self.search_until(src, limit, penal, Some(target), 1.0)
+        self.search_until(src, limit, penal, Some(target), 1.0, None)
+    }
+
+    /// As search_to, back to `target` = `back.src` from a node `back` (a
+    /// full search, without `penal`) reached: `back` bounds each node's cost
+    /// to the target from below, a far closer estimate for the A* than the
+    /// straight line, so it settles far fewer nodes, at the same cost.
+    pub fn search_back(
+        &self,
+        src: u32,
+        limit: f64,
+        penal: Option<&HashSet<u64>>,
+        back: &Search,
+    ) -> Search {
+        self.search_until(src, limit, penal, Some(back.src), 1.0, Some(back))
     }
 
     /// As search, with roads ROAD_X_MULTI times their cost, for multi-day
@@ -433,7 +465,7 @@ impl<'a> Ctx<'a> {
     /// around (Jasper's Tonquin Valley trailheads are 17.5 km apart by road,
     /// 43 km through the valley), but a multi-day hike is the trail.
     pub fn search_trails(&self, src: u32, limit: f64) -> Search {
-        self.search_until(src, limit, None, None, ROAD_X_MULTI)
+        self.search_until(src, limit, None, None, ROAD_X_MULTI, None)
     }
 
     fn search_until(
@@ -443,6 +475,7 @@ impl<'a> Ctx<'a> {
         penal: Option<&HashSet<u64>>,
         target: Option<u32>,
         road_x: f64,
+        hint: Option<&Search>,
     ) -> Search {
         let _t = Tm(&T_SEARCH, std::time::Instant::now());
         N_SEARCH.fetch_add(1, Relaxed);
@@ -468,9 +501,14 @@ impl<'a> Ctx<'a> {
                 // Not hypot: it guards against overflow that world units
                 // (under 2^26) can't reach, and was 13% of curating's CPU.
                 let (dx, dy) = (p.0 - t.0, p.1 - t.1);
-                (dx * dx + dy * dy).sqrt() * k
+                let line = (dx * dx + dy * dy).sqrt() * k;
+                // Shaved like k, for rounding: hint summed its costs in
+                // another order.
+                hint.and_then(|b| b.cost_bound(v))
+                    .map_or(line, |c| line.max(c * (1.0 - 1e-9)))
             })
         };
+        let mut exact_below = f64::INFINITY;
         let mut pq = BinaryHeap::new();
         pq.push(Q::new(h(src), src));
         while let Some(q) = pq.pop() {
@@ -484,6 +522,9 @@ impl<'a> Ctx<'a> {
             }
             let mu = sc.metres[u as usize];
             if mu > limit {
+                if target.is_none() && exact_below.is_infinite() {
+                    exact_below = d;
+                }
                 continue;
             }
             order.push(u);
@@ -516,6 +557,7 @@ impl<'a> Ctx<'a> {
             touched,
             src,
             order,
+            exact_below,
         };
         N_SETTLED.fetch_add(s.order.len() as u64, Relaxed);
         s
@@ -1242,6 +1284,8 @@ impl<'a> Ctx<'a> {
         out
     }
 
+    /// Day hikes from src to the targets it reaches between min_m and max_m:
+    /// out-and-backs, and with `loops`, loops back by another way.
     pub fn candidates(
         &self,
         src: u32,
@@ -1249,6 +1293,7 @@ impl<'a> Ctx<'a> {
         targets: &[(usize, Vec<u32>)],
         min_m: f64,
         max_m: f64,
+        loops: bool,
     ) -> Vec<Cand> {
         let s = self.search(src, max_m, None);
         let mut best: HashMap<&str, (usize, f64, u32)> = HashMap::default();
@@ -1290,8 +1335,11 @@ impl<'a> Ctx<'a> {
             if ev.bike <= MAX_BIKE && ev.road <= MAX_ROAD {
                 out.push(mk("out-and-back", sc, parts, pen.clone(), ev));
             }
+            if !loops {
+                continue;
+            }
             // a loop: back by a different way, if there's a good one
-            let b = self.search_to(node, m * 1.7, Some(&pen), src);
+            let b = self.search_back(node, m * 1.7, Some(&pen), &s);
             if let Some(bm) = b.reached(src) {
                 let (back, bways) = b.path(src);
                 let be = edge_set(&back);
@@ -1583,7 +1631,7 @@ fn stops(ctx: &Ctx, starts: &[Start], targets: &[(usize, Vec<u32>)]) -> Vec<Cand
     }
     let cands: Vec<Cand> = cars
         .par_iter()
-        .flat_map(|(n, name)| ctx.candidates(*n, name, &sights, 0.0, STOP_MAX_M))
+        .flat_map(|(n, name)| ctx.candidates(*n, name, &sights, 0.0, STOP_MAX_M, false))
         .filter(|c| c.kind == "out-and-back" && c.ev.bike <= MAX_BIKE)
         .filter(|c| c.ev.one_way < STOP_ROADSIDE_M || c.ev.road <= MAX_ROAD)
         .collect();
@@ -1691,7 +1739,7 @@ pub fn curate(
             if late() {
                 return vec![];
             }
-            ctx.candidates(s.node, &s.name, &targets, 1500.0, 15000.0)
+            ctx.candidates(s.node, &s.name, &targets, 1500.0, 15000.0, true)
         })
         .collect();
     let mut cands = cands;
@@ -1750,7 +1798,7 @@ pub fn curate(
             // from (#61).
             let walk_in = edge_set(&path);
             let hikes: Vec<Cand> = ctx
-                .candidates(cnode, &c.name, &targets, 1000.0, 8000.0)
+                .candidates(cnode, &c.name, &targets, 1000.0, 8000.0, true)
                 .into_iter()
                 .filter(|h| {
                     let back = h.edges.intersection(&walk_in).count();
