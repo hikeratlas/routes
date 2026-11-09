@@ -60,6 +60,31 @@ routes writes each park's named trails, and the hikes walking each one, to
 basemap's builds, which don't need the extra files) only name and length
 are checked.
 
+Where OSM splits, forks or under-maps a trail, that last check compares
+against the wrong ways. Give the entry a `trace` instead: a rough line of
+the hike that's meant, `[[lon, lat], ...]`, a dozen points on it spread
+along its length. The named hike of the right length must then pass within
+50 m (`trace_within_m`) of at least 70% (`trace_cover`) of those points; it
+checks the hike's own line, so it needs no `trails.jsonl` and works on
+basemap's builds too. When nothing under the name follows the trace, the
+report names the offered hikes that do.
+
+To find the hike that's meant, `routes --candidates` writes every day hike
+each park considered, `picked` or not, to `candidates.geojsonl` (one
+GeoJSON feature per line, with its park, trailhead, destination, km and
+score), for a trace picked from them:
+
+    routes ... --park-id ID --candidates --trails --out /tmp/cands
+    fixtures/picker-data.py fixtures/expect/<file>.jsonl /tmp/cands TILES/<key> > picker.json
+
+`picker.json` is, for each of the file's `trail` entries, the candidates
+near the OSM trail of its name (by how much of it they walk), with the
+park's paths, roads and lakes from its tiles for a map. Open it in
+https://www.hikeratlas.com/dev/trace (website#76) to pick which candidate
+is meant, or draw the hike along the trails, then copy the picks;
+`fixtures/apply-picks.py picks.json` writes each as its entry's `trace`,
+simplified to at most 20 points.
+
 To add a park's list, write it as
 `[{"park_id", "region", "name", "km", "source"}, ...]` (by hand, or from its
 page any other way), run routes over the park with `--trails`, and

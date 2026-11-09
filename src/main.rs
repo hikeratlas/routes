@@ -62,6 +62,9 @@ const USAGE: &str = "usage: routes --tiles FILE|URL [--tiles ...] --out DIR
   [--trails]             also write DIR/trails.jsonl: each park's named
                          trails and the hikes walking each, for the named
                          regressions (fixtures/expect.py); off by default
+  [--candidates]         also write DIR/candidates.geojsonl: every day hike
+                         each park considered, `picked` or not, for the
+                         named regressions' candidate picker; off by default
   [--park-timeout SECS]  stop starting new searches in a park after this
                          long, keeping what was found, and report it
   [--shard K/N]          curate only shard K (0-based) of N, and write each
@@ -128,6 +131,11 @@ fn args() -> Args {
     while i < v.len() {
         if v[i] == "--no-known-bonus" {
             curate::KNOWN_BONUS.store(false, std::sync::atomic::Ordering::Relaxed);
+            i += 1;
+            continue;
+        }
+        if v[i] == "--candidates" {
+            curate::CANDIDATES.store(true, std::sync::atomic::Ordering::Relaxed);
             i += 1;
             continue;
         }
@@ -653,6 +661,10 @@ fn main() {
                 t.elapsed().as_secs_f64()
             );
             let mut doc = c.to_json();
+            // Moved to candidates.geojsonl, like "trails" (--candidates).
+            if !c.candidates.is_empty() {
+                doc["candidates"] = json!(c.candidates);
+            }
             doc["park"] = json!({"id": p.id, "name": p.name});
             // For the park panel (hikeratlas/website#72), when the park has them.
             if !p.website.is_empty() {
@@ -797,6 +809,8 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>, skipped: Vec<Value>)
         std::io::BufWriter::new(std::fs::File::create(out.join("known.jsonl")).unwrap());
     // Only when the parks have trails (--trails, routes#95).
     let mut trails: Option<std::io::BufWriter<std::fs::File>> = None;
+    // Only with --candidates.
+    let mut cands: Option<std::io::BufWriter<std::fs::File>> = None;
     let mut bundle =
         std::io::BufWriter::new(std::fs::File::create(out.join("routes.bin")).unwrap());
     let mut index = serde_json::Map::new();
@@ -884,6 +898,19 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>, skipped: Vec<Value>)
                 k["park_id"] = json!(p_id);
                 k["park"] = json!(p_name);
                 writeln!(known, "{k}").unwrap();
+            }
+        }
+        if let Some(Value::Array(cs)) = doc.as_object_mut().and_then(|o| o.remove("candidates")) {
+            let w = cands.get_or_insert_with(|| {
+                std::io::BufWriter::new(std::fs::File::create(out.join("candidates.geojsonl")).unwrap())
+            });
+            for mut c in cs {
+                let line = c["route"].as_object_mut().and_then(|r| r.remove("line")).unwrap_or(json!([]));
+                c["park_id"] = json!(p_id);
+                c["park"] = json!(p_name);
+                let f = json!({"type": "Feature", "properties": c,
+                               "geometry": {"type": "LineString", "coordinates": line}});
+                writeln!(w, "{f}").unwrap();
             }
         }
         if let Some(Value::Array(ts)) = doc.as_object_mut().and_then(|o| o.remove("trails")) {
@@ -1098,6 +1125,9 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>, skipped: Vec<Value>)
     known.flush().unwrap();
     listing.flush().unwrap();
     if let Some(mut w) = trails {
+        w.flush().unwrap();
+    }
+    if let Some(mut w) = cands {
         w.flush().unwrap();
     }
     bundle.flush().unwrap();

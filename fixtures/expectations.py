@@ -46,6 +46,15 @@ def load(d=DIR):
             if missing:
                 errors.append(f"{where}: no {', '.join(missing)}")
                 continue
+            t = e.get('trace')
+            if t is not None and not (isinstance(t, list) and len(t) >= 2 and all(
+                    isinstance(q, list) and len(q) == 2 and all(isinstance(v, (int, float)) for v in q)
+                    and -180 <= q[0] <= 180 and -90 <= q[1] <= 90 for q in t)):
+                errors.append(f"{where}: trace must be [[lon, lat], ...], at least two points")
+                continue
+            if t is not None and e.get('kind', 'dest') != 'trail':
+                errors.append(f"{where}: trace is for trail entries")
+                continue
             e['park_id'] = str(e['park_id'])
             ids.add(e['park_id'])
             p = slug(e['park'])
