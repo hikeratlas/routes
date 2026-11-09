@@ -35,9 +35,11 @@ it: to a destination, from a trailhead, under a name. A `trail` entry is a
 trail the park itself lists, e.g. on its website (routes#95): its name there
 and its length there (`km`). It checks that one hike is offered under that
 name, within 30% of that length (`km_tolerance`), and walks at least 70% of
-the OSM trail of that name (`trail`, if OSM's name differs). routes writes
-each park's named trails, and the hikes walking each one, to `trails.jsonl`
-for that last check; older outputs check name and length only.
+the OSM trail of that name (`trail`, if OSM's name differs). With `--trails`,
+routes writes each park's named trails, and the hikes walking each one, to
+`trails.jsonl` for that last check; `run.sh` passes it. Without it (e.g.
+basemap's builds, which don't need the extra files) only name and length
+are checked.
 
 To add a park's list, write it as `[{"park_id", "name", "km", "source"}, ...]`
 (by hand, or from its page any other way) and draft the entries with

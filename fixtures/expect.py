@@ -13,8 +13,8 @@
 # hike: one is offered under that name (or `trail`, or one of `aka`;
 # ignoring case, punctuation, "the" and "trail"); it is within `km_tolerance` (default 0.3)
 # of `km`; and it walks at least 70% of the OSM trail `trail` (default:
-# `name`), from routes' trails.jsonl. Builds without trails.jsonl (before
-# routes#95) check the first two only.
+# `name`), from routes' trails.jsonl (routes --trails). Outputs without
+# trails.jsonl check the first two only.
 #
 # ROUTES_OUT is any routes output: one run's (parks/<id>.json, trails.jsonl)
 # or the fixtures' (<fixture>/parks/<id>.json, <fixture>/trails.jsonl); a

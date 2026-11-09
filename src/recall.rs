@@ -218,6 +218,9 @@ impl Near {
     }
 }
 
+/// Whether to report each park's named trails (`trails`): --trails.
+pub static TRAILS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// A named trail is reported when it has at least this much length.
 const TRAIL_MIN_M: f64 = 200.0;
 
@@ -270,7 +273,7 @@ fn offered(doc: &Value) -> Vec<(Value, Vec<P>)> {
 /// Killarney Lakelands park). For checking well-known trails by name and
 /// length as well as by where they go (fixtures/expect.py, routes#95): only
 /// reported, never used to pick or name routes. Ways of the same name in
-/// different places are one trail.
+/// different places are one trail. Only with --trails (TRAILS).
 pub fn trails(area: &Area, doc: &Value) -> Vec<Value> {
     let g = &area.graph;
     // name -> (segments, metres, metres inside the park)
