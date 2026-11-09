@@ -310,7 +310,7 @@ fn trail_walked<'t>(trails: &[(&'t str, Vec<P>, Vec<(P, P)>, [f64; 4])], line: &
         .map(|(n, _, _)| n)
 }
 
-/// Name each route that isn't named yet after the named trail it walks, as
+/// Name each loop that isn't named yet after the named trail it walks, as
 /// name_routes does after an OSM hiking route (and with its thresholds: the
 /// route covers NAME_RELATION of the trail, and NAME_ROUTE of the route is on
 /// it): Killarney's Lake of The Woods Trail, a loop with no relation, was
@@ -330,8 +330,38 @@ pub fn name_trails(area: &Area, doc: &mut Value) {
     if trails.is_empty() {
         return;
     }
+    // A trail another route is already named for, or walks for itself (its
+    // destination), stays that route's: Wetland Trail out and back keeps the
+    // name, and the loop past it to River Overlook doesn't take it.
+    let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut note = |r: &Value| {
+        for k in ["name", "dest"] {
+            if let Some(n) = r[k].as_str() {
+                taken.insert(n.trim().to_lowercase());
+            }
+        }
+    };
+    for h in doc["day_hikes"].as_array().into_iter().flatten() {
+        note(h);
+    }
+    for b in doc["base_camps"].as_array().into_iter().flatten() {
+        for h in b["hikes"].as_array().into_iter().flatten() {
+            note(h);
+        }
+    }
+    for t in doc["point_to_points"].as_array().into_iter().flatten() {
+        note(t);
+    }
+    let trails: Vec<_> = trails
+        .into_iter()
+        .filter(|t| !taken.contains(&t.0.trim().to_lowercase()))
+        .collect();
     let name = |r: &mut Value| {
-        if r["name"].is_string() {
+        // Loops only: an out-and-back is named for where it goes ("Wapta
+        // Falls", not "Wapta Falls Trail"; "Summit Lake", not the "Old
+        // Highway 1A" it walks), but a loop's destination is only where it
+        // turns.
+        if r["name"].is_string() || r["kind"].as_str() != Some("loop") {
             return;
         }
         let line: Vec<P> = r["route"]["line"]
