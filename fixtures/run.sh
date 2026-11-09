@@ -7,7 +7,8 @@
 # stopped after LIMIT_SECS (default 600). An entry with "id" picks its park by
 # osm_id (names aren't unique); otherwise by "park", a name. ROUTES_ARGS, if
 # set, is passed on to routes (e.g. --no-known-bonus); so is --trails, for
-# fixtures/expect.py, if the build has it.
+# fixtures/expect.py, if the build has it. ONLY, if set, runs just those
+# fixtures (keys, space-separated), e.g. ONLY="cape-split killarney".
 set -uo pipefail
 bin=$1 tiles=$2 out=$3 qrank=$4 dem=$5 limit=${6:-600}
 here=$(dirname "$(readlink -f "$0")")
@@ -22,7 +23,12 @@ done
 # Each park's named trails, for the named regressions (expect.py), where the
 # build has them (routes#95).
 if grep -q -- "--trails" <<< "$usage"; then extra+=(--trails); fi
-for key in $(jq -r '.[].key' "$list"); do
+keys=$(jq -r '.[].key' "$list")
+for k in ${ONLY:-}; do
+  grep -qx -- "$k" <<< "$keys" || { echo "run.sh: no fixture $k in $list" >&2; exit 2; }
+done
+for key in $keys; do
+  if [ -n "${ONLY:-}" ] && [[ " $ONLY " != *" $key "* ]]; then continue; fi
   id=$(jq -r --arg k "$key" '.[] | select(.key == $k) | .id // ""' "$list")
   if [ -n "$id" ]; then
     pick=(--park-id "$id")

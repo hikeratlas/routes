@@ -56,7 +56,8 @@ jobs:
       # (basemap's build-area.yml fixtures job; fixtures/latest.json), so
       # every pull request compares on the same tiles, and none is read while
       # a build rewrites them. A change to parks.json needs tiles the
-      # snapshot doesn't have: those are extracted from the live layers.
+      # snapshot doesn't have: fetch.py extracts just those from the live
+      # layers, on top of the snapshot.
       - name: Pick the fixture tiles
         id: snap
         run: |
@@ -137,10 +138,12 @@ jobs:
           if [ -n "$URL" ]; then
             curl -sf --retry 4 "$URL" | tar xz
           else
+            # The snapshot, and from the live layers only the parks it lacks
+            # or whose bbox changed (fetch.py): a park added to parks.json
+            # costs its own tiles, not every fixture's.
             python3 -m venv "$RUNNER_TEMP/venv"
             "$RUNNER_TEMP/venv/bin/pip" install -q pmtiles requests
-            "$RUNNER_TEMP/venv/bin/python" new/fixtures/extract.py https://public.hikeratlas.com/layers/north-america tiles
-            "$RUNNER_TEMP/venv/bin/python" new/fixtures/extract.py --parks new/fixtures/oracle.json https://public.hikeratlas.com/layers/north-america tiles/oracle
+            "$RUNNER_TEMP/venv/bin/python" new/fixtures/fetch.py tiles
           fi
           du -sh tiles
 
