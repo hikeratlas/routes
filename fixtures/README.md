@@ -22,13 +22,19 @@ then:
 
 `qrank.db` is from https://github.com/hikeratlas/qrank/releases.
 
-`expect.json` lists named regressions: well-known routes that are very
+`expect/` holds the named regressions: well-known routes that are very
 noticeable when we don't offer them, or name them wrong (e.g. Killarney's
-Crack, routes#80, not fixed yet). `fixtures/expect.py DIR [--json OUT]`
-checks them on any routes output, by park id: CI reports them on the
-fixtures for main and the change, and basemap's builds on every build, in
-the build progress check. It reports and never fails. Add one whenever a
-missing or misnamed route is noticed.
+Crack, routes#80, not fixed yet). There is one file per park, named for its
+province or state and its name, slugged:
+`expect/ontario-killarney-provincial-park.jsonl`. Each line is one whole
+entry, `park` and `park_id` included, with the `issue` that tracks it.
+`fixtures/expect.py DIR [--json OUT]` checks them on any routes output, by
+park id: CI reports them on the fixtures for main and the change, and
+basemap's builds on every build, in the build progress check. It reports
+and never fails on what it finds, but does fail on a malformed file (bad
+JSON, a missing field, two parks in one file, or a file not named
+`<region>-<park>.jsonl`). Add one whenever a missing or misnamed route is
+noticed.
 
 There are two kinds. A `dest` entry (the default) is one route as we expect
 it: to a destination, from a trailhead, under a name. A `trail` entry is a
@@ -41,12 +47,15 @@ routes writes each park's named trails, and the hikes walking each one, to
 basemap's builds, which don't need the extra files) only name and length
 are checked.
 
-To add a park's list, write it as `[{"park_id", "name", "km", "source"}, ...]`
-(by hand, or from its page any other way) and draft the entries with
+To add a park's list, write it as
+`[{"park_id", "region", "name", "km", "source"}, ...]` (by hand, or from its
+page any other way), run routes over the park with `--trails`, and
 
-    fixtures/trail-candidates.py list.json OUT_DIR > entries.json
+    fixtures/trail-candidates.py list.json OUT_DIR --write
 
-on a routes run over the park. It matches each name to an OSM trail and says
-on stderr what to review: fuzzy matches, lengths far from OSM's, trails
-outside the park, and names with no OSM trail at all (gaps in the map, not
-in routes, so not drafted).
+It matches each name to an OSM trail, appends the drafts to each park's file
+(made if need be; names a file already has are left out, so it can be run
+again as the list grows), and says on stderr what to review: fuzzy matches,
+lengths far from OSM's, trails outside the park, and names with no OSM trail
+at all (gaps in the map, not in routes, so not drafted). Without `--write`
+it prints the drafts.
