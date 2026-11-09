@@ -12,8 +12,8 @@ name: Fixtures
 # pull request.
 #
 # Jobs: build (the binaries, and the tiles and QRank into the cache), then
-# the fixtures and the oracle sample's runs side by side, each on its own
-# runner, then compare.
+# the fixtures and (when this change can change it) the oracle sample's runs
+# side by side, each on its own runner, then compare.
 on:
   pull_request:
   push:
@@ -35,6 +35,10 @@ jobs:
       # Whether the base's results came from the cache (else the run jobs
       # curate the base too)
       prev-hit: ${{ steps.prevcache.outputs.cache-hit == 'true' }}
+      # The run jobs' sets of runs (the matrix), and whether the oracle
+      # sample's is one of them
+      legs: ${{ steps.legs.outputs.legs }}
+      oracle: ${{ steps.legs.outputs.oracle }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,6 +49,30 @@ jobs:
         with:
           ref: ${{ github.base_ref }}
           path: base
+
+      # Known-hike recall on the oracle sample: ~160 parks with OSM hiking
+      # routes, in a tuning half and a held-out half (see fixtures/oracle.py),
+      # as routes ships (with the bump for following one). Run on main, and
+      # on a pull request that changes what it measures: routes' code and
+      # dependencies, or the oracle's own fixtures.
+      - name: Which runs
+        id: legs
+        run: |
+          oracle=true
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            oracle=false
+            for p in src Cargo.toml Cargo.lock fixtures/oracle.json fixtures/oracle.py fixtures/run.sh; do
+              if ! diff -rq "new/$p" "base/$p" > /dev/null 2>&1; then oracle=true; echo "changed: $p"; fi
+            done
+          fi
+          legs='[{"leg":"fixtures","title":"Curate","tiles":"tiles","limit":"","parks":"","args":"","base":"base"}'
+          if [ "$oracle" = true ]; then
+            legs+=',{"leg":"oracle-new-bonus","title":"Oracle sample","tiles":"tiles/oracle","limit":"120","parks":"new/fixtures/oracle.json","args":"","base":"oracle-base-bonus"}'
+          fi
+          legs+=']'
+          echo "oracle=$oracle" >> "$GITHUB_OUTPUT"
+          echo "legs=$legs" >> "$GITHUB_OUTPUT"
+          echo "Oracle sample: $oracle" | tee -a "$GITHUB_STEP_SUMMARY"
 
       # Saved only from main, where every pull request can restore it.
       - uses: Swatinem/rust-cache@v2
@@ -166,35 +194,10 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
+      # The fixtures, and the oracle sample when it can change (see build's
+      # "Which runs")
       matrix:
-        include:
-          - leg: fixtures
-            title: Curate
-            tiles: tiles
-            limit: ''
-            parks: ''
-            args: ''
-            base: base
-          # Known-hike recall on the oracle sample: ~160 parks with OSM
-          # hiking routes, in a tuning half and a held-out half (see
-          # fixtures/oracle.py). Without the bump for following an OSM
-          # hiking route (--no-known-bonus) it measures the route proposer
-          # alone; with it, what ships, which the bump partly earns by
-          # itself. Each is compared with the base's run of the same kind.
-          - leg: oracle-new
-            title: Oracle sample, no bump for known routes
-            tiles: tiles/oracle
-            limit: 120
-            parks: new/fixtures/oracle.json
-            args: --no-known-bonus
-            base: oracle-base
-          - leg: oracle-new-bonus
-            title: Oracle sample, as it ships
-            tiles: tiles/oracle
-            limit: 120
-            parks: new/fixtures/oracle.json
-            args: ''
-            base: oracle-base-bonus
+        include: ${{ fromJSON(needs.build.outputs.legs) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -303,9 +306,11 @@ jobs:
       - name: Compare on the oracle sample
         if: github.event_name == 'pull_request'
         run: |
-          python3 new/fixtures/oracle.py --title "Known hikes on the oracle sample: the route proposer (no bump for known routes)" \
-            prev/oracle-base out/new/oracle-new new/fixtures/oracle.json | tee -a "$GITHUB_STEP_SUMMARY"
-          python3 new/fixtures/oracle.py --title "Known hikes on the oracle sample: as it ships (with the bump)" \
+          if [ "${{ needs.build.outputs.oracle }}" != true ]; then
+            echo "Oracle sample: not run, as this change can't change it (nothing in src/, Cargo.*, or the oracle's fixtures)." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          python3 new/fixtures/oracle.py --title "Known hikes on the oracle sample" \
             prev/oracle-base-bonus out/new/oracle-new-bonus new/fixtures/oracle.json | tee -a "$GITHUB_STEP_SUMMARY"
 
       # On main, this run is the base for pull requests on this commit.
@@ -313,12 +318,13 @@ jobs:
         if: github.event_name != 'pull_request'
         run: |
           cp -r out/new/new prev/base
-          cp -r out/new/oracle-new prev/oracle-base
           cp -r out/new/oracle-new-bonus prev/oracle-base-bonus
 
-      # From a pull request, for its next push on the same base.
+      # From a pull request, for its next push on the same base; not when
+      # the oracle sample didn't run, as the base's oracle results would be
+      # missing for a later pull request that needs them.
       - name: Save the base's results
-        if: github.event_name != 'pull_request' || needs.build.outputs.prev-hit != 'true'
+        if: (github.event_name != 'pull_request' || needs.build.outputs.prev-hit != 'true') && needs.build.outputs.oracle == 'true'
         uses: actions/cache/save@v4
         with:
           path: prev/
