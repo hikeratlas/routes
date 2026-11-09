@@ -36,6 +36,15 @@ JSON, a missing field, two parks in one file, or a file not named
 `<region>-<park>.jsonl`). Add one whenever a missing or misnamed route is
 noticed.
 
+A park the output doesn't have is checked by routes' `listed.jsonl`, every
+park it found in its area and what became of it. If routes found the park
+but didn't curate it (under `--min-area`, over `--max-tiles`, or nothing to
+offer), its entries fail: nothing is offered there (Cape Split, routes#109).
+If the park is the same park mapped twice, its entries are checked on the
+twin's routes. Only a park routes didn't find at all is skipped, as outside
+the output's area (Killarney in a Nova Scotia build). A park with entries
+should be a fixture too (`parks.json`), so CI always runs it.
+
 There are two kinds. A `dest` entry (the default) is one route as we expect
 it: to a destination, from a trailhead, under a name. A `trail` entry is a
 trail the park itself lists, e.g. on its website (routes#95): its name there

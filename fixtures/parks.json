@@ -108,5 +108,17 @@
       -122.931,
       49.496
     ]
+  },
+  {
+    "key": "cape-split",
+    "id": "6078134",
+    "park": "Cape Split Provincial Park",
+    "why": "routes#109: one of Nova Scotia's best-known hikes, to the Cape Split Lookoff, and nothing offered: the park (4.46 km²) is under --min-area, and no destination at the tip",
+    "bbox": [
+      -64.58,
+      45.25,
+      -64.34,
+      45.4
+    ]
   }
 ]

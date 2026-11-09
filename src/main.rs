@@ -12,6 +12,11 @@
 //                             one is ({"bundle": "routes.bin", "parks":
 //                             {"<osm_id>": [offset, length]}}), so a build
 //                             uploads 2 files, not one per park
+//   DIR/listed.jsonl          every park found in the area and what became of
+//                             it (written, a twin, no routes, under
+//                             --min-area, over --max-tiles), so a check of a
+//                             park's routes can tell one that isn't curated
+//                             from one outside the area (fixtures/expect.py)
 //
 // A big area can be curated on several machines: each runs with --shard K/N,
 // and then one runs --merge over their output directories.
@@ -228,8 +233,9 @@ fn has_parks(ar: &PmTiles) -> bool {
     ar.layers.is_empty() || ar.layers.iter().any(|l| l == "park" || l == "trail_area")
 }
 
-/// Parks, from the z8 tiles' park layer (which has every park over ~0.5 km²).
-fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> Vec<Park> {
+/// Parks, from the z8 tiles' park layer (which has every park over ~0.5 km²),
+/// and those left out for being under --min-area, as listed.jsonl entries.
+fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> (Vec<Park>, Vec<Value>) {
     let z = 8u8;
     let n = (1u32 << z) as f64;
     let tx = |lon: f64| ((lon + 180.0) / 360.0 * n).floor().clamp(0.0, n - 1.0) as u32;
@@ -242,6 +248,8 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> Vec<Park> {
         .flat_map(|x| (ty(bbox[3])..=ty(bbox[1])).map(move |y| (x, y)))
         .collect();
     let found: Mutex<HashMap<String, Park>> = Mutex::new(HashMap::new());
+    // Parks under --min-area: id -> (name, area).
+    let small: Mutex<HashMap<String, (String, f64)>> = Mutex::new(HashMap::new());
     // Each park's label: its website and operator, by osm_id.
     let labels: Mutex<HashMap<String, (String, String)>> = Mutex::new(HashMap::new());
     let scale = geo::EXT * 64.0; // world units per z8 tile
@@ -291,8 +299,7 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> Vec<Park> {
                     }
                     let area = l.get(f, "area").map(|v| v.as_f64()).unwrap_or(0.0);
                     let name = l.str(f, "name");
-                    if (!trail_area && area < a.min_area * 1e6)
-                        || name.is_empty()
+                    if name.is_empty()
                         || a.park
                             .as_ref()
                             .is_some_and(|p| !name.to_lowercase().contains(p))
@@ -300,6 +307,13 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> Vec<Park> {
                             .as_ref()
                             .is_some_and(|id| l.str(f, "osm_id") != id)
                     {
+                        continue;
+                    }
+                    if !trail_area && area < a.min_area * 1e6 {
+                        small
+                            .lock()
+                            .unwrap()
+                            .insert(l.str(f, "osm_id").to_string(), (name.to_string(), area));
                         continue;
                     }
                     let mut m = found.lock().unwrap();
@@ -342,7 +356,21 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> Vec<Park> {
         })
         .collect();
     v.sort_by(|a, b| b.area.partial_cmp(&a.area).unwrap());
-    v
+    let mut small: Vec<Value> = small
+        .into_inner()
+        .unwrap()
+        .into_iter()
+        .map(|(id, (name, area))| listed(&id, &name, area, "under --min-area"))
+        .collect();
+    small.sort_by(|x, y| x["id"].as_str().cmp(&y["id"].as_str()));
+    (v, small)
+}
+
+/// A listed.jsonl entry: a park routes found in its area, and what became of
+/// it, so a check of a park's routes (fixtures/expect.py) can tell a park
+/// that isn't curated from one outside the area (routes#109).
+fn listed(id: &str, name: &str, area: f64, status: &str) -> Value {
+    json!({"id": id, "name": name, "km2": (area / 1e4).round() / 100.0, "status": status})
 }
 
 /// Day hikes per square root of a park's km of trail (#38): 100 km of
@@ -355,11 +383,21 @@ fn main() {
     if !a.merge.is_empty() {
         // Parks from every shard, in the order one run would write them.
         let mut docs: Vec<Curated> = vec![];
+        let mut skipped: Vec<Value> = vec![];
         for dir in &a.merge {
             for e in std::fs::read_dir(dir.join("raw"))
                 .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
             {
                 let path = e.unwrap().path();
+                if path.file_name().is_some_and(|n| n == "listed.jsonl") {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    skipped.extend(
+                        text.lines()
+                            .filter(|l| !l.trim().is_empty())
+                            .map(|l| serde_json::from_str::<Value>(l).unwrap()),
+                    );
+                    continue;
+                }
                 let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap())
                     .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
                 docs.push(Curated {
@@ -377,7 +415,7 @@ fn main() {
         });
         eprintln!("merging {} parks from {} shards", docs.len(), a.merge.len());
         write_timings(&a.out, &docs);
-        write_outputs(&a.out, docs);
+        write_outputs(&a.out, docs, skipped);
         eprintln!("done in {:.1}s", t0.elapsed().as_secs_f64());
         return;
     }
@@ -397,7 +435,7 @@ fn main() {
             .reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])])
             .unwrap_or(archives[0].bounds)
     });
-    let mut parks = parks(&archives, bbox, &a);
+    let (mut parks, small) = parks(&archives, bbox, &a);
     eprintln!(
         "{} parks over {} km² ({:.1}s)",
         parks.len(),
@@ -524,6 +562,14 @@ fn main() {
     // from 58% to 22% busy and its parks took 2.4x as long (basemap run
     // 42454961538, routes#81).
     let docs: Vec<Curated> = parks.par_iter().filter_map(curate_park).collect();
+    // Parks not curated, for listed.jsonl: under --min-area (every shard
+    // lists the same ones, so only shard 0 passes them on), over --max-tiles.
+    let mut skipped: Vec<Value> = if a.shard.is_none_or(|(k, _)| k == 0) { small } else { vec![] };
+    for p in &parks {
+        if p.tiles().len() > a.max_tiles {
+            skipped.push(listed(&p.id, &p.name, p.area, "over --max-tiles"));
+        }
+    }
 
     if a.shard.is_some() {
         let raw = a.out.join("raw");
@@ -535,9 +581,11 @@ fn main() {
             )
             .unwrap();
         }
+        let lines: String = skipped.iter().map(|v| format!("{v}\n")).collect();
+        std::fs::write(raw.join("listed.jsonl"), lines).unwrap();
         eprintln!("{} parks curated into {}", docs.len(), raw.display());
     } else {
-        write_outputs(&a.out, docs);
+        write_outputs(&a.out, docs, skipped);
     }
     eprintln!("{}", curate::profile());
     eprintln!("{}", dem::stats());
@@ -615,8 +663,15 @@ fn write_timings(out: &std::path::Path, docs: &[Curated]) {
 
 /// Write DIR/routes.geojsonl and DIR/parks/, biggest park first, dropping
 /// routes a bigger park that overlaps this one already has.
-fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
+fn write_outputs(out: &std::path::Path, docs: Vec<Curated>, skipped: Vec<Value>) {
     std::fs::create_dir_all(out.join("parks")).unwrap();
+    // Every park found, and what became of it (see listed()): the parks not
+    // curated, then each curated one as it's written or dropped below.
+    let mut listing =
+        std::io::BufWriter::new(std::fs::File::create(out.join("listed.jsonl")).unwrap());
+    for v in &skipped {
+        writeln!(listing, "{v}").unwrap();
+    }
     let mut lines =
         std::io::BufWriter::new(std::fs::File::create(out.join("routes.geojsonl")).unwrap());
     let mut known =
@@ -672,7 +727,7 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
     let mut kept: Vec<serde_json::Value> = vec![];
     let mut twins: Vec<(String, String)> = vec![];
     let mut moves: Vec<(String, usize, String)> = vec![];
-    for (i, Curated { mut doc, .. }) in docs.into_iter().enumerate() {
+    for (i, Curated { mut doc, area, .. }) in docs.into_iter().enumerate() {
         // A multi-day trip a smaller park also has, between other ends, with
         // half or more of the same campsites, is that park's (#53): Pacific
         // Rim's whole-reserve relation had the West Coast Trail to a logging
@@ -753,16 +808,21 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
         }) + keep("stops", &|h| format!("stop|{}", s(h, "dest")))
             + keep("base_camps", &|b| format!("base|{}", s(b, "camp")))
             + keep("point_to_points", &multi_key);
+        let km2 = area;
         if n == 0 {
             // Every route is already another park's: the same park mapped
             // twice (Cape Breton Highlands is relations 4855583 and
             // 17879029). Point this park's entry at that one's routes, so the
             // website finds them under either id.
+            let mut l = listed(&p_id, &p_name, km2, if twin.is_some() { "twin" } else { "no routes" });
             if let Some(t) = twin {
+                l["twin"] = json!(t);
                 twins.push((p_id.clone(), t));
             }
+            writeln!(listing, "{l}").unwrap();
             continue;
         }
+        writeln!(listing, "{}", listed(&p_id, &p_name, km2, "written")).unwrap();
         kept.push(doc);
     }
 
@@ -917,6 +977,7 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
     eprintln!("{written} parks with routes");
     lines.flush().unwrap();
     known.flush().unwrap();
+    listing.flush().unwrap();
     if let Some(mut w) = trails {
         w.flush().unwrap();
     }
@@ -1018,6 +1079,7 @@ mod tests {
                 park("reserve", 2.0, &["Long Beach"], vec![trip("WCT", "F-0100 trailhead", &camps)]),
                 park("unit", 1.0, &[], vec![trip("WCT", "WCT", &camps)]),
             ],
+            vec![],
         );
         let big = written(&dir, "reserve").unwrap();
         assert_eq!(big["point_to_points"].as_array().unwrap().len(), 0);
@@ -1042,9 +1104,22 @@ mod tests {
                 park("big", 2.0, &["Lake"], vec![trip("X", "Y", &camps)]),
                 park("small", 1.0, &["Lake"], vec![trip("X", "Y", &camps)]),
             ],
+            vec![listed("tiny", "Tiny Park", 3.2e6, "under --min-area")],
         );
         assert_eq!(written(&dir, "big").unwrap()["point_to_points"].as_array().unwrap().len(), 1);
         assert!(written(&dir, "small").is_none());
+        // listed.jsonl says what became of each, the small one's twin included.
+        let listed: Vec<Value> = std::fs::read_to_string(dir.join("listed.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let status = |id: &str| listed.iter().find(|v| v["id"] == id).map(|v| v["status"].clone());
+        assert_eq!(status("tiny"), Some(json!("under --min-area")));
+        assert_eq!(listed.iter().find(|v| v["id"] == "tiny").unwrap()["km2"], 3.2);
+        assert_eq!(status("big"), Some(json!("written")));
+        assert_eq!(status("small"), Some(json!("twin")));
+        assert_eq!(listed.iter().find(|v| v["id"] == "small").unwrap()["twin"], "big");
     }
 
     // Same-named campsites elsewhere aren't the same trip.
@@ -1057,6 +1132,7 @@ mod tests {
                 park("a", 2.0, &[], vec![trip("X", "Y", &[("Campsite 1", -60.0), ("Campsite 2", -60.1)])]),
                 park("b", 1.0, &[], vec![trip("P", "Q", &[("Campsite 1", -120.0), ("Campsite 2", -120.1)])]),
             ],
+            vec![],
         );
         assert_eq!(written(&dir, "a").unwrap()["point_to_points"].as_array().unwrap().len(), 1);
         assert_eq!(written(&dir, "b").unwrap()["point_to_points"].as_array().unwrap().len(), 1);

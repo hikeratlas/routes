@@ -17,9 +17,18 @@
 # `name`), from routes' trails.jsonl (routes --trails). Outputs without
 # trails.jsonl check the first two only.
 #
-# ROUTES_OUT is any routes output: one run's (parks/<id>.json, trails.jsonl)
-# or the fixtures' (<fixture>/parks/<id>.json, <fixture>/trails.jsonl); a
-# park it doesn't have is skipped. It reports and never fails on what it
+# ROUTES_OUT is any routes output: one run's (parks/<id>.json, trails.jsonl,
+# listed.jsonl) or the fixtures' (<fixture>/parks/<id>.json, ...). Each
+# entry's park, by listed.jsonl (every park routes found in its area, and
+# what became of it, routes#109):
+#   - written: checked;
+#   - a twin (the same park mapped twice, its routes in the other): checked
+#     on the twin's routes;
+#   - found but not curated (under --min-area, over --max-tiles, no routes):
+#     failing, as nothing is offered there;
+#   - not found: skipped, as the park isn't in this output's area (Killarney
+#     in a Nova Scotia build). Outputs without listed.jsonl skip every park
+#     they haven't written. It reports and never fails on what it
 # finds: some of these aren't fixed yet, and a build shouldn't stop over one.
 # It does fail (exit 1) on a malformed or misnamed expectations file. --json
 # writes the results for basemap's build progress check: {"regressions":
@@ -64,6 +73,20 @@ def park_routes(park_id):
     return rs
 
 
+def read_listed():
+    """listed.jsonl's entries by park id: what became of each park routes
+    found. A park found by several fixtures counts as written if any wrote it."""
+    out = {}
+    for path in glob.glob(os.path.join(root, 'listed.jsonl')) + glob.glob(os.path.join(root, '*', 'listed.jsonl')):
+        for line in open(path):
+            if line.strip():
+                v = json.loads(line)
+                if v['id'] not in out or v['status'] == 'written':
+                    out[v['id']] = v
+    return out
+
+
+listed = read_listed()
 trail_files = glob.glob(os.path.join(root, 'trails.jsonl')) + glob.glob(os.path.join(root, '*', 'trails.jsonl'))
 _trails = None
 
@@ -77,6 +100,7 @@ def park_trails(park_id):
         return None
     if _trails is None:
         want = {e['park_id'] for e in expects if e.get('kind') == 'trail'}
+        want |= {listed[i]['twin'] for i in want if listed.get(i, {}).get('twin')}
         _trails = {}
         for path in trail_files:
             for line in open(path):
@@ -148,14 +172,25 @@ def check_trail(e, rs, trails):
 results = []
 for e in expects:
     kind = e.get('kind', 'dest')
-    rs = park_routes(e['park_id'])
+    pid = e['park_id']
+    rs = park_routes(pid)
     problems, checks = [], None
+    found = listed.get(pid)
+    if rs is None and found and found.get('twin'):
+        # The same park mapped twice: its routes are in the twin's document.
+        pid = found['twin']
+        rs = park_routes(pid)
     if rs is not None:
         if kind == 'trail':
-            problems, checks = check_trail(e, rs, park_trails(e['park_id']))
+            problems, checks = check_trail(e, rs, park_trails(pid))
         else:
             problems, checks = check_dest(e, rs)
-    status = 'skipped' if rs is None else 'failing' if problems else 'ok'
+    elif found:
+        why = {'under --min-area': f"it's under --min-area ({found['km2']} km²)",
+               'over --max-tiles': "it's over --max-tiles",
+               'no routes': 'routes found nothing to offer there'}.get(found['status'], found['status'])
+        problems = [f"the park isn't curated: {why}"]
+    status = 'skipped' if rs is None and not found else 'failing' if problems else 'ok'
     results.append({k: e[k] for k in ('name', 'park', 'park_id', 'file', 'issue')}
                    | {'kind': kind, 'status': status, 'problems': problems}
                    | ({'checks': checks} if checks else {}))
