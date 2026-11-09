@@ -738,6 +738,16 @@ pub fn score(ev: &Eval, d: &Dest, is_loop: bool) -> (f64, Vec<(&'static str, f64
         // bigger lakes are bigger draws: 0.1 km² -> 0.7, 10 km² -> 1.0
         appeal = (0.7 + 0.15 * (d.area.max(1e5) / 1e5).log10()).min(1.1);
     }
+    if d.kind == Kind::Trail {
+        // A named trail walked for itself is worth at least the best sight
+        // it passes: Cape Split's Minas Basin Trail passes its lookoffs on
+        // the way to the tip, and lost to hikes stopping at them (#109).
+        appeal = ev
+            .passed
+            .iter()
+            .map(|(k, _)| k.appeal())
+            .fold(appeal, f64::max);
+    }
     let mut kinds: HashSet<Kind> = ev.passed.iter().map(|(k, _)| *k).collect();
     kinds.insert(d.kind);
     let relief = ((ev.max_ele - ev.min_ele) / 1200.0).min(1.0);
@@ -2240,6 +2250,27 @@ impl Curated {
 
 #[cfg(test)]
 mod tests {
+    // A named trail is worth at least the best sight it passes (#109): Cape
+    // Split's Minas Basin Trail passes lookoffs on the way to the tip.
+    #[test]
+    fn a_named_trail_counts_the_sights_it_passes() {
+        use super::*;
+        let ev = |passed: Vec<(Kind, Vec<String>)>| Eval {
+            one_way: 6000.0, total: 12000.0, gain: 100.0, loss: 100.0,
+            max_ele: 100.0, min_ele: 0.0, lc_shares: vec![], lc_variety: 1.0,
+            open_high: 0.0, passed, camps: vec![], road: 0.0, bike: 0.0, known: 0.0,
+            via: vec![], max_sac: 0, line: vec![],
+        };
+        let trail = Dest {
+            name: "Minas Basin Trail".into(), kind: Kind::Trail, pt: (0.0, 0.0), area: 0.0,
+            wikidata: String::new(), qrank: 1.0, lake: None, minor: false,
+        };
+        let appeal = |e: &Eval| score(e, &trail, false).1.iter().find(|p| p.0 == "appeal").unwrap().1;
+        assert_eq!(appeal(&ev(vec![])), (W_APPEAL * crate::area::TRAIL_APPEAL * 100.0).round() / 100.0);
+        let past = ev(vec![(Kind::Viewpoint, vec!["Big Cove Look Off".into()]), (Kind::Lake, vec!["X".into()])]);
+        assert_eq!(appeal(&past), (W_APPEAL * Kind::Viewpoint.appeal() * 100.0).round() / 100.0);
+    }
+
     #[test]
     fn stop_names() {
         assert_eq!(stop_name("Keys View (accessible)"), stop_name("Keys View"));
