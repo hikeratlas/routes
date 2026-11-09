@@ -72,7 +72,17 @@ report names the offered hikes that do.
 To find the hike that's meant, `routes --candidates` writes every day hike
 each park considered, `picked` or not, to `candidates.geojsonl` (one
 GeoJSON feature per line, with its park, trailhead, destination, km and
-score), for a trace picked from them.
+score), for a trace picked from them:
+
+    routes ... --park-id ID --candidates --trails --out /tmp/cands
+    fixtures/picker-data.py fixtures/expect/<file>.jsonl /tmp/cands TILES/<key> > picker.json
+
+`picker.json` is, for each of the file's `trail` entries, the candidates
+near the OSM trail of its name (by how much of it they walk), with the
+park's paths, roads and lakes from its tiles for a map. A picker page made
+from it (an artifact, so far) saves which candidate is meant, or a line
+drawn by hand; `fixtures/apply-picks.py picks.json` writes each as its
+entry's `trace`, simplified to at most 20 points.
 
 To add a park's list, write it as
 `[{"park_id", "region", "name", "km", "source"}, ...]` (by hand, or from its
