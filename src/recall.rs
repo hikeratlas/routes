@@ -702,7 +702,11 @@ pub fn drop_redundant_from(doc: &mut Value) {
                             .strip_prefix(&d)
                             .is_some_and(|rest| rest.starts_with(' '))
                 }));
-        if redundant && titles.get(&d) == Some(&1) {
+        // A named trail walked for itself (dest_kind "trail") is that trail:
+        // "Minas Basin Trail", not "Minas Basin Trail from Cape Split Trail
+        // trailhead" (#109).
+        let trail = h["dest_kind"].as_str() == Some("trail");
+        if (redundant || trail) && titles.get(&d) == Some(&1) {
             h["name"] = json!(dest);
         }
     }
@@ -769,6 +773,8 @@ mod tests {
             {"dest": "Cascade Falls", "from": "Cascade Falls Trail Head"},
             {"dest": "Gros Ventre", "from": "Gros Ventre Campground"},
             {"dest": "Mount Edith Cavell", "from": "Mount Edith Cavell (upper lot)"},
+            {"dest": "Minas Basin Trail", "from": "Cape Split Trail trailhead", "dest_kind": "trail"},
+            {"dest": "Big Cove Look Off", "from": "Cape Split Trail trailhead", "dest_kind": "viewpoint"},
         ]});
         drop_redundant_from(&mut doc);
         let names: Vec<Option<&str>> = doc["day_hikes"]
@@ -792,6 +798,8 @@ mod tests {
                 Some("Cascade Falls"),      // ... or "trail head"
                 None,                       // a campground isn't a trailhead name
                 Some("Mount Edith Cavell"), // a parenthetical on the start (#55)
+                Some("Minas Basin Trail"),  // a named trail walked for itself (#109)
+                None,                       // a viewpoint from another trail's trailhead
             ]
         );
     }

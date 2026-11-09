@@ -44,6 +44,10 @@ const USAGE: &str = "usage: routes --tiles FILE|URL [--tiles ...] --out DIR
   [--bbox W,S,E,N]       only parks in this box (default: the bounds of the
                          archives with parks or trail areas)
   [--min-area KM2]       smallest park to curate (default 5)
+  [--min-area-notable KM2]
+                         smallest notable park to curate: one with a
+                         popular Wikidata item or named a national,
+                         provincial or state park (default 1)
   [--max-tiles N]        skip parks needing more z14 tiles than this (default 50000)
   [--qrank qrank.db]     Wikidata popularity (hikeratlas/qrank)
   [--tile-cache DIR]     cache tiles fetched from a URL here
@@ -79,6 +83,7 @@ struct Args {
     park_id: Option<String>,
     bbox: Option<[f64; 4]>,
     min_area: f64,
+    min_area_notable: f64,
     max_tiles: usize,
     qrank: Option<String>,
     tile_cache: Option<PathBuf>,
@@ -100,6 +105,7 @@ fn args() -> Args {
         park_id: None,
         bbox: None,
         min_area: 5.0,
+        min_area_notable: 1.0,
         max_tiles: 50000,
         qrank: None,
         tile_cache: None,
@@ -143,6 +149,7 @@ fn args() -> Args {
                 a.bbox = Some(b.try_into().unwrap_or_else(|_| die()));
             }
             "--min-area" => a.min_area = val.parse().unwrap_or_else(|_| die()),
+            "--min-area-notable" => a.min_area_notable = val.parse().unwrap_or_else(|_| die()),
             "--max-tiles" => a.max_tiles = val.parse().unwrap_or_else(|_| die()),
             "--qrank" => a.qrank = Some(val),
             "--tile-cache" => a.tile_cache = Some(val.into()),
@@ -309,7 +316,9 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> (Vec<Park>, Vec<Valu
                     {
                         continue;
                     }
-                    if !trail_area && area < a.min_area * 1e6 {
+                    let rank = l.get(f, "rank").map(|v| v.as_f64()).unwrap_or(1.0);
+                    let floor = if notable(name, rank) { a.min_area_notable } else { a.min_area };
+                    if !trail_area && area < floor * 1e6 {
                         small
                             .lock()
                             .unwrap()
@@ -364,6 +373,31 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> (Vec<Park>, Vec<Valu
         .collect();
     small.sort_by(|x, y| x["id"].as_str().cmp(&y["id"].as_str()));
     (v, small)
+}
+
+/// QRank (the park layer's rank) over which a park's Wikidata item is
+/// popular enough for --min-area-notable.
+const NOTABLE_RANK: f64 = 100.0;
+
+/// A park people go to even if it's small (#109): Cape Split Provincial
+/// Park, 4.46 km², is one of Nova Scotia's best-known hikes. Its name says
+/// what it is, or its Wikidata item is popular. Of North America's 9,524
+/// parks of 1-5 km², 1,436 are notable (8,861 are over 5 km²); the rest are
+/// mostly small wildlife areas and nature reserves.
+fn notable(name: &str, rank: f64) -> bool {
+    let n = name.to_lowercase();
+    rank > NOTABLE_RANK
+        || [
+            "national park",
+            "provincial park",
+            "state park",
+            "parc national",
+            "parc provincial",
+            "parque nacional",
+            "parque estatal",
+        ]
+        .iter()
+        .any(|k| n.contains(k))
 }
 
 /// A listed.jsonl entry: a park routes found in its area, and what became of
@@ -437,9 +471,10 @@ fn main() {
     });
     let (mut parks, small) = parks(&archives, bbox, &a);
     eprintln!(
-        "{} parks over {} km² ({:.1}s)",
+        "{} parks over {} km², or {} km² if notable ({:.1}s)",
         parks.len(),
         a.min_area,
+        a.min_area_notable,
         t0.elapsed().as_secs_f64()
     );
     if let Some((k, n)) = a.shard {
