@@ -2,7 +2,7 @@
 // relations (the basemap's hiking_route layer, e.g. the West Coast Trail,
 // Lake O'Hara's Alpine Circuit) checked against the routes, as a measure that
 // doesn't depend on our own scoring. Only reported, never used to pick routes.
-use crate::area::Area;
+use crate::area::{Area, Class};
 use crate::geo::{self, P, metres, mpu};
 use rustc_hash::FxHashMap as HashMap;
 use serde_json::{Value, json};
@@ -169,33 +169,188 @@ fn coverage_segs(pts: &[P], segs: &[(P, P)]) -> f64 {
     if pts.is_empty() || segs.is_empty() {
         return 0.0;
     }
-    // The segments' points every few metres, bucketed by a grid of COVER_M
-    // cells.
-    let cell = COVER_M / mpu(segs[0].0.1);
-    let mut grid: HashMap<(i64, i64), Vec<P>> = HashMap::default();
-    for &(a, b) in segs {
-        let n = (metres(a, b) / (COVER_M / 4.0)).ceil().max(1.0) as usize;
-        for i in 0..=n {
-            let t = i as f64 / n as f64;
-            let p = (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t);
-            grid.entry(((p.0 / cell).floor() as i64, (p.1 / cell).floor() as i64))
-                .or_default()
-                .push(p);
+    Near::new(segs).share(pts)
+}
+
+/// Segments' points every few metres, bucketed by a grid of COVER_M cells,
+/// to ask how many of some points are within COVER_M of them.
+struct Near {
+    cell: f64,
+    grid: HashMap<(i64, i64), Vec<P>>,
+}
+
+impl Near {
+    fn new(segs: &[(P, P)]) -> Near {
+        let cell = COVER_M / mpu(segs.first().map_or(0.0, |s| s.0.1));
+        let mut grid: HashMap<(i64, i64), Vec<P>> = HashMap::default();
+        for &(a, b) in segs {
+            let n = (metres(a, b) / (COVER_M / 4.0)).ceil().max(1.0) as usize;
+            for i in 0..=n {
+                let t = i as f64 / n as f64;
+                let p = (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t);
+                grid.entry(((p.0 / cell).floor() as i64, (p.1 / cell).floor() as i64))
+                    .or_default()
+                    .push(p);
+            }
         }
+        Near { cell, grid }
     }
-    let hit = pts
-        .iter()
-        .filter(|&&p| {
-            let (cx, cy) = ((p.0 / cell).floor() as i64, (p.1 / cell).floor() as i64);
-            (-1..=1).any(|dx| {
-                (-1..=1).any(|dy| {
-                    grid.get(&(cx + dx, cy + dy))
-                        .is_some_and(|v| v.iter().any(|&q| metres(p, q) <= COVER_M))
+
+    fn share(&self, pts: &[P]) -> f64 {
+        if pts.is_empty() || self.grid.is_empty() {
+            return 0.0;
+        }
+        let cell = self.cell;
+        let hit = pts
+            .iter()
+            .filter(|&&p| {
+                let (cx, cy) = ((p.0 / cell).floor() as i64, (p.1 / cell).floor() as i64);
+                (-1..=1).any(|dx| {
+                    (-1..=1).any(|dy| {
+                        self.grid
+                            .get(&(cx + dx, cy + dy))
+                            .is_some_and(|v| v.iter().any(|&q| metres(p, q) <= COVER_M))
+                    })
                 })
             })
+            .count();
+        hit as f64 / pts.len() as f64
+    }
+}
+
+/// A named trail is reported when it has at least this much length.
+const TRAIL_MIN_M: f64 = 200.0;
+
+/// The hikes a park offers, as (summary, line): day hikes, hikes from base
+/// camps and multi-day routes; not base camps' approaches, which aren't
+/// offered as hikes in themselves.
+fn offered(doc: &Value) -> Vec<(Value, Vec<P>)> {
+    let line = |r: &Value| -> Vec<P> {
+        r["line"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|c| Some(world(c[0].as_f64()?, c[1].as_f64()?)))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let summary = |h: &Value, ty: &str, from: &Value, dest: &Value| {
+        json!({
+            "type": ty, "name": h["name"], "from": from, "dest": dest,
+            "kind": h["kind"], "km": h["route"]["km"],
         })
-        .count();
-    hit as f64 / pts.len() as f64
+    };
+    let mut out = vec![];
+    for h in doc["day_hikes"].as_array().into_iter().flatten() {
+        out.push((summary(h, "day", &h["from"], &h["dest"]), line(&h["route"])));
+    }
+    for b in doc["base_camps"].as_array().into_iter().flatten() {
+        for h in b["hikes"].as_array().into_iter().flatten() {
+            out.push((
+                summary(h, "from-camp", &b["camp"], &h["dest"]),
+                line(&h["route"]),
+            ));
+        }
+    }
+    for t in doc["point_to_points"].as_array().into_iter().flatten() {
+        out.push((
+            summary(t, "multi-day", &t["from"], &t["to"]),
+            line(&t["route"]),
+        ));
+    }
+    out
+}
+
+/// Each named trail in the area loaded for the park (its path and track ways
+/// of one name, e.g. Killarney's "Granite Ridge Trail"), its share inside the
+/// park, and the offered hikes that walk at least PARTIAL of it, best first.
+/// Trails outside count too: a park's own list of its trails can cross its
+/// boundary (Killarney's Lake of The Woods Trail is in the neighbouring
+/// Killarney Lakelands park). For checking well-known trails by name and
+/// length as well as by where they go (fixtures/expect.py, routes#95): only
+/// reported, never used to pick or name routes. Ways of the same name in
+/// different places are one trail.
+pub fn trails(area: &Area, doc: &Value) -> Vec<Value> {
+    let g = &area.graph;
+    // name -> (segments, metres, metres inside the park)
+    let mut by_name: HashMap<&str, (Vec<(P, P)>, f64, f64)> = HashMap::default();
+    for (a, es) in g.adj.iter().enumerate() {
+        for e in es {
+            // Each edge is in both nodes' lists: take it once.
+            if (e.to as usize) < a {
+                continue;
+            }
+            let w = &g.ways[e.way as usize];
+            if w.name.is_empty() || !matches!(w.class, Class::Trail | Class::Track) {
+                continue;
+            }
+            let (p, q) = (g.pts[a], g.pts[e.to as usize]);
+            let t = by_name.entry(w.name.as_str()).or_default();
+            let m = metres(p, q);
+            t.0.push((p, q));
+            t.1 += m;
+            if area.in_park(((p.0 + q.0) / 2.0, (p.1 + q.1) / 2.0)) {
+                t.2 += m;
+            }
+        }
+    }
+    let hikes: Vec<(Value, Near, [f64; 4])> = offered(doc)
+        .into_iter()
+        .filter(|(_, l)| l.len() > 1)
+        .map(|(v, l)| {
+            let segs: Vec<(P, P)> = l.windows(2).map(|w| (w[0], w[1])).collect();
+            let b = bounds(&l);
+            (v, Near::new(&segs), b)
+        })
+        .collect();
+    let mut names: Vec<&&str> = by_name.keys().collect();
+    names.sort();
+    let mut out = vec![];
+    for name in names {
+        let (segs, m, in_m) = &by_name[*name];
+        if *m < TRAIL_MIN_M {
+            continue;
+        }
+        let pts: Vec<P> = segs.iter().flat_map(|&(a, b)| sample(&[a, b])).collect();
+        let tb = bounds(&pts);
+        let pad = COVER_M / mpu(tb[1]);
+        let mut walked: Vec<(f64, &Value)> = hikes
+            .iter()
+            .filter(|(_, _, hb)| {
+                hb[0] <= tb[2] + pad
+                    && tb[0] <= hb[2] + pad
+                    && hb[1] <= tb[3] + pad
+                    && tb[1] <= hb[3] + pad
+            })
+            .map(|(v, near, _)| (near.share(&pts), v))
+            .filter(|(c, _)| *c >= PARTIAL)
+            .collect();
+        walked.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+        let routes: Vec<Value> = walked
+            .into_iter()
+            .map(|(c, v)| {
+                let mut v = v.clone();
+                v["coverage"] = json!((c * 100.0).round() / 100.0);
+                v
+            })
+            .collect();
+        out.push(json!({
+            "name": name,
+            "km": (m / 100.0).round() / 10.0,
+            "inside": (in_m / m * 100.0).round() / 100.0,
+            "routes": routes,
+        }));
+    }
+    out
+}
+
+/// [min x, min y, max x, max y] of some points.
+fn bounds(pts: &[P]) -> [f64; 4] {
+    pts.iter()
+        .fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| {
+            [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)]
+        })
 }
 
 /// Points every STEP_M along a line.
@@ -679,6 +834,35 @@ mod tests {
         assert!((c - 0.65).abs() < 1e-9, "{c}");
         // 100 m away covers nothing.
         assert_eq!(coverage(&pts, &[at(0.0, 100.0), at(1000.0, 100.0)]), 0.0);
+    }
+
+    #[test]
+    fn offered_hikes_leave_out_approaches() {
+        let r = |km: f64| json!({"km": km, "line": [[0.0, 45.0], [0.01, 45.0]]});
+        let doc = json!({
+            "day_hikes": [{"from": "Lot", "dest": "Lake", "kind": "loop", "route": r(4.0)}],
+            "base_camps": [{
+                "camp": "H3", "from": "Lot", "approach": r(4.6),
+                "hikes": [{"dest": "Peak", "kind": "out-and-back", "route": r(9.7)}],
+            }],
+            "point_to_points": [{"from": "Lot", "to": "Lot", "name": "Loop Trail", "route": r(73.0)}],
+        });
+        let got: Vec<(String, String, String, f64)> = offered(&doc)
+            .iter()
+            .map(|(v, l)| {
+                assert_eq!(l.len(), 2);
+                let s = |k: &str| v[k].as_str().unwrap_or("").to_string();
+                (s("type"), s("from"), s("dest"), v["km"].as_f64().unwrap())
+            })
+            .collect();
+        let want = [
+            ("day", "Lot", "Lake", 4.0),
+            ("from-camp", "H3", "Peak", 9.7),
+            ("multi-day", "Lot", "Lot", 73.0),
+        ]
+        .map(|(a, b, c, d)| (a.to_string(), b.to_string(), c.to_string(), d));
+        assert_eq!(got, want);
+        assert_eq!(offered(&doc)[2].0["name"], "Loop Trail");
     }
 }
 

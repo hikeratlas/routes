@@ -467,6 +467,9 @@ fn main() {
             recall::name_routes(&area, &mut doc);
             recall::name_loops(&mut doc);
             recall::drop_redundant_from(&mut doc);
+            // After naming, so it reports the names hikes are offered under;
+            // moved to trails.jsonl like "known".
+            doc["trails"] = json!(recall::trails(&area, &doc));
             Some(Curated { area: p.area, secs: t.elapsed().as_secs_f64(), doc })
     };
     // Not par_bridge, though it would start a shard's costliest parks first:
@@ -571,6 +574,8 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
         std::io::BufWriter::new(std::fs::File::create(out.join("routes.geojsonl")).unwrap());
     let mut known =
         std::io::BufWriter::new(std::fs::File::create(out.join("known.jsonl")).unwrap());
+    let mut trails =
+        std::io::BufWriter::new(std::fs::File::create(out.join("trails.jsonl")).unwrap());
     let mut bundle =
         std::io::BufWriter::new(std::fs::File::create(out.join("routes.bin")).unwrap());
     let mut index = serde_json::Map::new();
@@ -658,6 +663,14 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
                 k["park_id"] = json!(p_id);
                 k["park"] = json!(p_name);
                 writeln!(known, "{k}").unwrap();
+            }
+        }
+        // Builds from before routes#95 have none.
+        if let Some(Value::Array(ts)) = doc.as_object_mut().and_then(|o| o.remove("trails")) {
+            for mut t in ts {
+                t["park_id"] = json!(p_id);
+                t["park"] = json!(p_name);
+                writeln!(trails, "{t}").unwrap();
             }
         }
         // Documents from before stops (#70) have none.
@@ -855,6 +868,7 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>) {
     eprintln!("{written} parks with routes");
     lines.flush().unwrap();
     known.flush().unwrap();
+    trails.flush().unwrap();
     bundle.flush().unwrap();
     std::fs::write(
         out.join("index.json"),
