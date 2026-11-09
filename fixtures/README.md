@@ -79,10 +79,11 @@ score), for a trace picked from them:
 
 `picker.json` is, for each of the file's `trail` entries, the candidates
 near the OSM trail of its name (by how much of it they walk), with the
-park's paths, roads and lakes from its tiles for a map. A picker page made
-from it (an artifact, so far) saves which candidate is meant, or a line
-drawn by hand; `fixtures/apply-picks.py picks.json` writes each as its
-entry's `trace`, simplified to at most 20 points.
+park's paths, roads and lakes from its tiles for a map. Open it in
+https://www.hikeratlas.com/dev/trace (website#76) to pick which candidate
+is meant, or draw the hike along the trails, then copy the picks;
+`fixtures/apply-picks.py picks.json` writes each as its entry's `trace`,
+simplified to at most 20 points.
 
 To add a park's list, write it as
 `[{"park_id", "region", "name", "km", "source"}, ...]` (by hand, or from its
