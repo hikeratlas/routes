@@ -60,6 +60,15 @@ routes writes each park's named trails, and the hikes walking each one, to
 basemap's builds, which don't need the extra files) only name and length
 are checked.
 
+Where OSM splits, forks or under-maps a trail, that last check compares
+against the wrong ways. Give the entry a `trace` instead: a rough line of
+the hike that's meant, `[[lon, lat], ...]`, a dozen points on it spread
+along its length. The named hike of the right length must then pass within
+50 m (`trace_within_m`) of at least 70% (`trace_cover`) of those points; it
+checks the hike's own line, so it needs no `trails.jsonl` and works on
+basemap's builds too. When nothing under the name follows the trace, the
+report names the offered hikes that do.
+
 To add a park's list, write it as
 `[{"park_id", "region", "name", "km", "source"}, ...]` (by hand, or from its
 page any other way), run routes over the park with `--trails`, and

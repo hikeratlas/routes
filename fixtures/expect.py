@@ -17,6 +17,13 @@
 # `name`), from routes' trails.jsonl (routes --trails). Outputs without
 # trails.jsonl check the first two only.
 #
+# A `trail` entry with a `trace` (a rough line of the hike that's meant,
+# [[lon, lat], ...]: a dozen points on the hike, spread along it) checks
+# that instead of the OSM trail: the named hike of the right length must
+# pass within `trace_within_m` (default 50) of at least `trace_cover`
+# (default 0.7) of its points. For a trail OSM splits, forks or under-maps, where the walks check
+# would compare against the wrong ways. It needs no trails.jsonl.
+#
 # ROUTES_OUT is any routes output: one run's (parks/<id>.json, trails.jsonl,
 # listed.jsonl) or the fixtures' (<fixture>/parks/<id>.json, ...). Each
 # entry's park, by listed.jsonl (every park routes found in its area, and
@@ -40,6 +47,7 @@ from functools import lru_cache
 from expectations import load, norm
 
 WALKS = 0.7
+TRACE_WITHIN_M, TRACE_COVER = 50, 0.7
 
 args = sys.argv[1:]
 out_json = None
@@ -138,6 +146,44 @@ def check_dest(e, rs):
     return problems, None
 
 
+def near_line(p, line, within):
+    """Whether point p is within `within` metres of the polyline."""
+    kx = 111320 * math.cos(math.radians(p[1]))
+    px, py = p[0] * kx, p[1] * 110570
+    for a, b in zip(line, line[1:]):
+        ax, ay, bx, by = a[0] * kx, a[1] * 110570, b[0] * kx, b[1] * 110570
+        dx, dy = bx - ax, by - ay
+        t = 0 if dx == dy == 0 else max(0, min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)))
+        if math.hypot(px - ax - t * dx, py - ay - t * dy) <= within:
+            return True
+    return len(line) == 1 and metres(p, line[0]) <= within
+
+
+def cover(trace, r, within):
+    """The share of the trace's points within `within` metres of route r.
+    Its points, not the straight lines between them: a dozen points on a
+    winding trail cut its corners by more than 50 m."""
+    line = r['route'].get('line') or []
+    if not line:
+        return 0.0
+    return sum(near_line(p, line, within) for p in trace) / len(trace)
+
+
+def check_trace(e, rs, named, sized, lo, hi, checks, problems):
+    within, need = e.get('trace_within_m', TRACE_WITHIN_M), e.get('trace_cover', TRACE_COVER)
+    got = [(cover(e['trace'], r, within), r) for r in (sized or named)]
+    checks['follows'] = any(c >= need for c, _ in got)
+    if checks['follows'] or not rs:
+        return
+    # What does follow it, under any name: the clue to what went wrong.
+    best = sorted(((cover(e['trace'], r, within), r) for r in rs), key=lambda x: -x[0])[:2]
+    best = [f"{label(r)} ({c:.0%})" for c, r in best if c >= need / 2]
+    what = (f"the named hike follows only {max(c for c, _ in got):.0%} of the trace"
+            if got else "nothing offered under the name follows the trace")
+    problems.append(f"{what} (needs {need:.0%} within {within} m)"
+                    + (f"; it's followed most by {'; '.join(best)}" if best else "; nothing offered follows it"))
+
+
 def check_trail(e, rs, trails):
     names = {norm(n) for n in [e['name'], e.get('trail'), *e.get('aka', [])] if n}
     tol = e.get('km_tolerance', 0.3)
@@ -152,6 +198,10 @@ def check_trail(e, rs, trails):
         problems.append(f"no hike named {e['name']}")
     elif not sized:
         problems.append(f"{e['name']} is {', '.join(label(r) for r in named)}; expected {lo:.1f}-{hi:.1f} km")
+    if e.get('trace'):
+        checks = {'name': checks['name'], 'length': checks['length'], 'follows': None}
+        check_trace(e, rs, named, sized, lo, hi, checks, problems)
+        return problems, checks
     osm = e.get('trail', e['name'])
     t = None if trails is None else trails.get(norm(osm))
     if trails is not None and t is None:
