@@ -139,6 +139,7 @@ impl PmTiles {
                 url: src.to_string(),
                 // As the DEM's (dem.rs): a stalled request fails, not hangs.
                 agent: ureq::AgentBuilder::new()
+                    .try_proxy_from_env(true)
                     .timeout_connect(std::time::Duration::from_secs(10))
                     .timeout(std::time::Duration::from_secs(60))
                     .build(),

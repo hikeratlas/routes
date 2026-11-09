@@ -85,6 +85,7 @@ impl Dem {
         // 0.0 s with its DEM cached) took 482 s in basemap run 42428077515,
         // past --park-timeout, which isn't checked while a tile downloads.
         let agent = ureq::AgentBuilder::new()
+            .try_proxy_from_env(true)
             .timeout_connect(std::time::Duration::from_secs(10))
             .timeout(std::time::Duration::from_secs(30))
             .build();
