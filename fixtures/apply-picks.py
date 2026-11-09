@@ -25,9 +25,12 @@ def simplify(line):
     tolerance doubled until MAX_POINTS or fewer remain (at least 10 m)."""
     g = LineString(line)
     tol = 10 / 111320  # degrees, roughly
+    # Without preserve_topology: it keeps an out-and-back, which retraces
+    # itself, at dozens of points whatever the tolerance. The points kept are
+    # the line's own either way. Stops at ~1 km, whatever is left.
     while True:
-        s = list(g.simplify(tol).coords)
-        if len(s) <= MAX_POINTS:
+        s = list(g.simplify(tol, preserve_topology=False).coords)
+        if len(s) <= MAX_POINTS or tol > 0.01:
             return [[round(x, 5), round(y, 5)] for x, y in s]
         tol *= 2
 
