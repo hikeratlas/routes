@@ -1002,6 +1002,17 @@ const NAMED_MIN_M: f64 = 1000.0;
 const NAMED_MAX_M: f64 = 15000.0;
 /// How far a trailhead may be from a named trail to start it.
 const NAMED_ACCESS_M: f64 = 3000.0;
+/// Trail tours (Ctx::trail_tour): other trails cost this many times their
+/// length, roads this, the way out's edges this much more on the way back;
+/// a tour reaches this far; it's used when it walks this many times more of
+/// the trail than the piece (its longest line, or simple loop) does.
+const TOUR_OTHER_X: f64 = 4.0;
+const TOUR_ROAD_X: f64 = 20.0;
+const TOUR_BACK_X: f64 = 20.0;
+const TOUR_LIMIT_M: f64 = 15000.0;
+const TOUR_GAIN: f64 = 1.1;
+/// ...or when it's a loop where the piece is a line, walking this much of it.
+const TOUR_KEEP: f64 = 0.95;
 
 impl<'a> Ctx<'a> {
     /// Named trails as hikes in themselves: a trail with a name, in the park,
@@ -1158,6 +1169,119 @@ impl<'a> Ctx<'a> {
         pieces
     }
 
+    /// A named trail walked whole from `entry`: out to its farthest point and
+    /// back another way where there is one, as (nodes, ways, whether it's a
+    /// loop, metres of the trail it walks). Edges of the trail cost their
+    /// length; other trails and tracks TOUR_OTHER_X that (short connectors
+    /// where the trail is mapped in pieces, or shares another's ways); roads
+    /// TOUR_ROAD_X. The way back costs TOUR_BACK_X more on the way out's
+    /// edges, so it comes back the other side of a loop, and the same way
+    /// only when it must (a spur, a line).
+    fn trail_tour(&self, name: &str, entry: u32) -> Option<(Vec<u32>, Vec<u32>, bool, f64)> {
+        let g = &self.area.graph;
+        let is_trail = |w: u32| g.ways[w as usize].name == name;
+        let cost = |w: u32, m: f64, back: Option<&HashSet<u64>>, k: u64| -> f64 {
+            let way = &g.ways[w as usize];
+            let base = if way.name == name || way.class == Class::Join {
+                m
+            } else if matches!(way.class, Class::Trail | Class::Track) && !way.bike {
+                m * TOUR_OTHER_X
+            } else {
+                m * TOUR_ROAD_X
+            };
+            if back.is_some_and(|b| b.contains(&k)) { base * TOUR_BACK_X } else { base }
+        };
+        let dijkstra = |src: u32, back: Option<&HashSet<u64>>, limit: f64, target: Option<u32>| {
+            let mut dist: HashMap<u32, f64> = HashMap::default();
+            let mut prev: HashMap<u32, (u32, u32)> = HashMap::default();
+            let mut pq = BinaryHeap::new();
+            dist.insert(src, 0.0);
+            pq.push(Q::new(0.0, src));
+            while let Some(q) = pq.pop() {
+                let (d, u) = (q.key(), q.1);
+                if Some(u) == target {
+                    break;
+                }
+                if d > dist[&u] || d > limit {
+                    continue;
+                }
+                for e in &g.adj[u as usize] {
+                    let nd = d + cost(e.way, e.m as f64, back, ekey(u, e.to));
+                    if nd < *dist.get(&e.to).unwrap_or(&f64::MAX) {
+                        dist.insert(e.to, nd);
+                        prev.insert(e.to, (u, e.way));
+                        pq.push(Q::new(nd, e.to));
+                    }
+                }
+            }
+            (dist, prev)
+        };
+        let path_to = |prev: &HashMap<u32, (u32, u32)>, src: u32, dst: u32| {
+            let (mut p, mut w) = (vec![dst], vec![]);
+            while *p.last().unwrap() != src {
+                let (u, wy) = prev[p.last().unwrap()];
+                p.push(u);
+                w.push(wy);
+            }
+            p.reverse();
+            w.reverse();
+            (p, w)
+        };
+        // The trail's nodes joined to the entry by the trail itself: the
+        // tour turns at one of these, not at a stub of the trail mapped
+        // apart (Granite Ridge Trail's 160 m piece), which it would have to
+        // walk back from.
+        let mut own: HashSet<u32> = HashSet::default();
+        let mut stack = vec![entry];
+        own.insert(entry);
+        let mut own_m = 0.0;
+        while let Some(u) = stack.pop() {
+            for e in &g.adj[u as usize] {
+                if is_trail(e.way) {
+                    own_m += e.m as f64 / 2.0; // each edge from both ends
+                    if own.insert(e.to) {
+                        stack.push(e.to);
+                    }
+                }
+            }
+        }
+        // Searches bounded by the trail's own length, as a city park has
+        // hundreds of named trails.
+        let limit = (own_m * 1.5 + 500.0).min(TOUR_LIMIT_M);
+        let (dist, prev) = dijkstra(entry, None, limit, None);
+        // The farthest of them, within reach.
+        let far = dist
+            .iter()
+            .filter(|&(&n, &d)| d <= limit && n != entry && own.contains(&n))
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap().then(b.0.cmp(a.0)))
+            .map(|(&n, _)| n)?;
+        if far == entry {
+            return None;
+        }
+        let (out_p, out_w) = path_to(&prev, entry, far);
+        let out_edges = edge_set(&out_p);
+        let (dist2, prev2) = dijkstra(far, Some(&out_edges), limit * TOUR_BACK_X, Some(entry));
+        dist2.get(&entry)?;
+        let (back_p, back_w) = path_to(&prev2, far, entry);
+        let back_edges = edge_set(&back_p);
+        let shared =
+            back_edges.intersection(&out_edges).count() as f64 / back_edges.len().max(1) as f64;
+        let is_loop = shared < 0.5;
+        let mut tour = out_p.clone();
+        tour.extend(back_p.iter().skip(1));
+        let mut tour_w = out_w;
+        tour_w.extend(back_w);
+        // Metres of the trail walked, each edge once.
+        let mut seen: HashSet<u64> = HashSet::default();
+        let mut covered = 0.0;
+        for (k, w) in tour.windows(2).zip(&tour_w) {
+            if is_trail(*w) && seen.insert(ekey(k[0], k[1])) {
+                covered += metres(g.pts[k[0] as usize], g.pts[k[1] as usize]);
+            }
+        }
+        Some((tour, tour_w, is_loop, covered))
+    }
+
     pub fn named_trails(&self, starts: &[Start]) -> Vec<Cand> {
         let g = &self.area.graph;
         let pieces = self.named_pieces(NAMED_MIN_M, NAMED_MAX_M);
@@ -1205,6 +1329,54 @@ impl<'a> Ctx<'a> {
             let _ = m;
             let s = &starts[si];
             let sr = self.search_to(s.node, NAMED_ACCESS_M, None, entry);
+            // The whole trail as a tour where that covers more of it than the
+            // piece does: a loop with a spur (Chikanishing Trail), a loop
+            // closed over a stretch of another trail (Cranberry Bog Trail, on
+            // the La Cloche Silhouette), a trail that forks (#101-#103).
+            let piece_m: f64 = path
+                .windows(2)
+                .map(|w| metres(g.pts[w[0] as usize], g.pts[w[1] as usize]))
+                .sum();
+            if let Some((tour, tour_w, is_loop_tour, covered)) = self.trail_tour(name, entry) {
+                // More of the trail, or as much as a loop where the piece is a
+                // line (Cranberry Bog Trail, closed by 261 m of another trail).
+                if covered > piece_m * TOUR_GAIN
+                    || (is_loop_tour && !*is_loop && covered >= piece_m * TOUR_KEEP)
+                {
+                    let (mut full, mut fw) = sr.path(entry);
+                    full.extend(tour.iter().skip(1));
+                    fw.extend(tour_w.iter());
+                    let (back, bw) = sr.path(entry);
+                    full.extend(back.iter().rev().skip(1));
+                    fw.extend(bw.iter().rev());
+                    let far = g.pts[tour[tour.len() / 2] as usize];
+                    let ev = self.evaluate(&full, &fw, false);
+                    let d = Dest {
+                        name: name.to_string(),
+                        kind: Kind::Trail,
+                        pt: far,
+                        area: 0.0,
+                        wikidata: String::new(),
+                        qrank: 1.0,
+                        lake: None,
+                        minor: false,
+                    };
+                    let (sc, parts) = score(&ev, &d, is_loop_tour);
+                    out.push(Cand {
+                        from: s.name.clone(),
+                        start: g.pts[s.node as usize],
+                        dest: name.to_string(),
+                        dest_kind: Kind::Trail,
+                        dest_pt: far,
+                        kind: if is_loop_tour { "loop" } else { "out-and-back" },
+                        score: sc,
+                        parts,
+                        edges: edge_set(&full),
+                        ev,
+                    });
+                    continue;
+                }
+            }
             let (mut full, mut fw) = sr.path(entry);
             // Along the trail from where we joined it.
             let (tp, tw): (Vec<u32>, Vec<u32>) = if *is_loop {
@@ -1491,6 +1663,16 @@ impl<'a> Ctx<'a> {
 }
 
 /// Coverage first (each start's best), then greedily by score x novelty.
+/// Whether a hike is its start's own named trail: walked for itself (dest
+/// kind Trail) from a start named for it ("Granite Ridge Trail trailhead",
+/// "Cranberry Bog Trail").
+pub fn own_trail(c: &Cand) -> bool {
+    c.dest_kind == Kind::Trail && {
+        let (f, d) = (c.from.to_lowercase(), c.dest.to_lowercase());
+        f == d || f.strip_prefix(&d).is_some_and(|rest| rest.starts_with(' '))
+    }
+}
+
 pub fn select(cands: &[Cand], n: usize, by_start: bool) -> Vec<Cand> {
     let mut chosen: Vec<Cand> = vec![];
     let mut covered: HashSet<u64> = HashSet::default();
@@ -1507,6 +1689,23 @@ pub fn select(cands: &[Cand], n: usize, by_start: bool) -> Vec<Cand> {
         let mut v: Vec<&Cand> = best.into_values().collect();
         v.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
         for c in v {
+            if chosen.len() < n
+                && novelty(c, &covered) > 0.5
+                && chosen.iter().all(|o| o.dest != c.dest)
+            {
+                covered.extend(c.edges.iter().copied());
+                chosen.push(c.clone());
+            }
+        }
+        // And a start's own trail, where it walks new ground: "Granite Ridge
+        // Trail trailhead" offers Granite Ridge Trail besides its best hike,
+        // the 22 km to Threenarrows Lake (#102). Not instead of it: routes
+        // names many starts for the trail they meet ("Paget North Ridge
+        // Route trailhead", for Paget Peak), and a trail the best hike walks
+        // adds nothing new.
+        let mut own: Vec<&Cand> = cands.iter().filter(|c| own_trail(c)).collect();
+        own.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+        for c in own {
             if chosen.len() < n
                 && novelty(c, &covered) > 0.5
                 && chosen.iter().all(|o| o.dest != c.dest)
@@ -1761,10 +1960,18 @@ pub fn curate(
             .named_trails(&starts)
             .into_iter()
             .filter(|n| {
-                !cands.iter().any(|c| {
+                // The same hike both ways: each walks most of the other. A
+                // loop that only shares a stretch with a destination hike
+                // stays (#103): Cranberry Bog Trail, though the hike to
+                // Freeland Lake from its trailhead walks much of it.
+                // And a loop that's its start's own trail stays whatever
+                // walks it: "Cranberry Bog Trail trailhead" is there for it.
+                (n.kind == "loop" && own_trail(n))
+                    || !cands.iter().any(|c| {
+                    let shared = n.edges.intersection(&c.edges).count() as f64;
                     c.from == n.from
-                        && n.edges.intersection(&c.edges).count() as f64
-                            >= 0.7 * n.edges.len().max(1) as f64
+                        && shared >= 0.7 * n.edges.len().max(1) as f64
+                        && shared >= 0.7 * c.edges.len().max(1) as f64
                 })
             })
             .collect();
@@ -2250,6 +2457,28 @@ impl Curated {
 
 #[cfg(test)]
 mod tests {
+    // A hike is its start's own trail when it walks a named trail (dest kind
+    // Trail) from a start named for it (#102, #103).
+    #[test]
+    fn a_start_named_for_a_trail_owns_it() {
+        use super::*;
+        let ev = Eval {
+            one_way: 0.0, total: 0.0, gain: 0.0, loss: 0.0, max_ele: 0.0, min_ele: 0.0,
+            lc_shares: vec![], lc_variety: 0.0, open_high: 0.0, passed: vec![], camps: vec![],
+            road: 0.0, bike: 0.0, known: 0.0, via: vec![], max_sac: 0, line: vec![],
+        };
+        let c = |from: &str, dest: &str, k: Kind| Cand {
+            from: from.into(), start: (0.0, 0.0), dest: dest.into(), dest_kind: k,
+            dest_pt: (0.0, 0.0), kind: "loop", score: 0.0, parts: vec![],
+            edges: HashSet::default(), ev: ev.clone(),
+        };
+        assert!(own_trail(&c("Granite Ridge Trail trailhead", "Granite Ridge Trail", Kind::Trail)));
+        assert!(own_trail(&c("Skyline Trail", "Skyline Trail", Kind::Trail)));
+        assert!(!own_trail(&c("Granite Ridge Trail trailhead", "Threenarrows Lake", Kind::Lake)));
+        assert!(!own_trail(&c("Granite Ridge Trailhead", "Granite Ridge Trail", Kind::Trail)));
+        assert!(!own_trail(&c("Cranberry Bog Trail trailhead", "Granite Ridge Trail", Kind::Trail)));
+    }
+
     // A named trail is worth at least the best sight it passes (#109): Cape
     // Split's Minas Basin Trail passes lookoffs on the way to the tip.
     #[test]
