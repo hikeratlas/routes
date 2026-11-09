@@ -5,20 +5,24 @@ so a change shows how it affects speed and routes in minutes, without a
 basemap build. `parks.json` says why each park is here: the slow ones, and ones
 with routes we've fixed before.
 
-To run them locally:
+To run them locally, fetch the tiles:
 
     pip install pmtiles requests
-    fixtures/extract.py https://public.hikeratlas.com/layers/north-america /tmp/fx-tiles
+    fixtures/fetch.py /tmp/fx-tiles
 
-or use the snapshot the last north-america build froze, as CI does:
-
-    curl -s "$(curl -s https://public.hikeratlas.com/fixtures/latest.json | jq -r .url)" | tar xz -C /tmp && mv /tmp/tiles /tmp/fx-tiles
-
-then:
+It downloads the snapshot the last north-america build froze (as CI uses),
+then extracts from the live layers only the parks the snapshot lacks or
+whose `bbox` changed. Run it again after editing `parks.json` or
+`oracle.json`: a new park costs its own tiles (~30 s), and nothing is
+downloaded twice. Then:
 
     fixtures/run.sh target/release/routes /tmp/fx-tiles /tmp/fx-out/new qrank.db /tmp/dem
     fixtures/run.sh OTHER_BUILD /tmp/fx-tiles /tmp/fx-out/base qrank.db /tmp/dem
     fixtures/compare.py /tmp/fx-out/base /tmp/fx-out/new
+    fixtures/expect.py /tmp/fx-out/new
+
+To work on one park, run just it: `ONLY="cape-split" fixtures/run.sh ...`
+(keys from `parks.json`, space-separated); a small park takes seconds.
 
 `qrank.db` is from https://github.com/hikeratlas/qrank/releases.
 
