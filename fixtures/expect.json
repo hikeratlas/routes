@@ -1,0 +1,13 @@
+[
+  {
+    "name": "The \"Crack\" Trail",
+    "park": "Killarney Provincial Park",
+    "park_id": "14107244",
+    "issue": "routes#80",
+    "why": "Killarney's best-known hike: it should be offered from its own trailhead to the viewpoint, under its name. OSM's relation stops 1.5 km short of the viewpoint; routes offers the viewpoint only by a 17.9 km approach from Cranberry Bog, and gives the name to a 3.6 km hike to Kakakise Lake.",
+    "dest": "The \"Crack\" Viewpoint",
+    "start": [-81.32445, 46.04399],
+    "start_within_m": 300,
+    "max_km": 10
+  }
+]

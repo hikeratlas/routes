@@ -149,6 +149,16 @@ jobs:
           fi
           python3 new/fixtures/compare.py prev/base out/new | tee -a "$GITHUB_STEP_SUMMARY"
 
+      # Well-known routes that are very noticeable when missing or misnamed
+      # (fixtures/expect.json), on main and with this change. Information:
+      # it never fails the job (some aren't fixed yet).
+      - name: Named regressions
+        run: |
+          echo "#### With ${{ github.base_ref || 'main' }}" >> "$GITHUB_STEP_SUMMARY"
+          python3 new/fixtures/expect.py out/base | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "#### With this change" >> "$GITHUB_STEP_SUMMARY"
+          python3 new/fixtures/expect.py out/new | tee -a "$GITHUB_STEP_SUMMARY"
+
       # Known-hike recall on the oracle sample: ~160 parks with OSM hiking
       # routes, in a tuning half and a held-out half (see fixtures/oracle.py).
       # Without the bump for following an OSM hiking route (--no-known-bonus)
