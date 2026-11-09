@@ -102,9 +102,16 @@ jobs:
           (cd base && cargo build --release --locked --target-dir ../new/target)
           mkdir -p bin && cp new/target/release/routes bin/routes-base
 
+      # After building the base in the same target dir, cargo takes this
+      # change's routes for the base's (it tells workspace packages apart by
+      # their path in the workspace, the same for both) and, its sources
+      # being older than that build, doesn't rebuild it: routes-new was the
+      # base's binary whenever the base's results weren't cached (since #93).
+      # Removing the routes package's build (not its dependencies') makes
+      # cargo build it again.
       - name: Build this change
         run: |
-          (cd new && cargo build --release --locked)
+          (cd new && cargo clean --release -p routes && cargo build --release --locked)
           mkdir -p bin && cp new/target/release/routes bin/routes-new
 
       - uses: actions/upload-artifact@v4
