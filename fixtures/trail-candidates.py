@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# trail-candidates.py LIST.json ROUTES_OUT [--write] > entries.jsonl
+# trail-candidates.py LIST.json|PROPOSALS.jsonl... ROUTES_OUT [--write] > entries.jsonl
 #
 # Draft "trail" entries for the named regressions (fixtures/expect/, routes#95)
 # from a park's own list of its trails, e.g. its website's: LIST.json is
@@ -28,8 +28,15 @@ args = sys.argv[1:]
 write = '--write' in args
 if write:
     args.remove('--write')
-lst = json.load(open(args[0]))
-root = args[1]
+# A list (.json), or proposals files (fixtures/proposals/*.jsonl): their
+# open proposals.
+lst = []
+for a in args[:-1]:
+    if a.endswith('.jsonl'):
+        lst += [p for p in (json.loads(x) for x in open(a, encoding='utf-8') if x.strip()) if p.get('status') == 'open']
+    else:
+        lst += json.load(open(a))
+root = args[-1]
 
 
 want = {str(t['park_id']) for t in lst}

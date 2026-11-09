@@ -57,6 +57,8 @@ if '--json' in args:
     del args[i:i + 2]
 root = args[0]
 expects = load()
+import proposals  # noqa: E402
+proposals.load()  # a malformed proposal fails here too, as an entry would
 
 
 def metres(a, b):
