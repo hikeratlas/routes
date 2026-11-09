@@ -4,8 +4,16 @@ name: Fixtures
 # routes we've fixed before) with this change and with the branch it targets,
 # on the same tiles, and summarize how long each took and how the routes
 # differ. Minutes, instead of a basemap build's hours.
+#
+# A push to main runs main alone and caches its results, keyed by its commit,
+# for pull requests on it to compare against instead of rerunning main. It
+# also saves the cargo, tile, QRank and DEM caches where every pull request
+# can restore them: a cache saved by a pull request is only visible to that
+# pull request.
 on:
   pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 jobs:
@@ -22,24 +30,16 @@ jobs:
           path: new
 
       - uses: actions/checkout@v4
+        if: github.event_name == 'pull_request'
         with:
-          ref: ${{ github.base_ref || 'main' }}
+          ref: ${{ github.base_ref }}
           path: base
 
-      - name: Restore cargo builds
-        uses: actions/cache@v4
+      # Saved only from main, where every pull request can restore it.
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            new/target
-            base/target
-          key: fixtures-cargo-${{ runner.arch }}-${{ hashFiles('new/Cargo.lock', 'base/Cargo.lock') }}-${{ github.sha }}
-          restore-keys: fixtures-cargo-${{ runner.arch }}-
-
-      - name: Build both
-        run: |
-          (cd base && cargo build --release --locked)
-          (cd new && cargo build --release --locked)
+          workspaces: new
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # The tiles come from a snapshot the last north-america build froze
       # (basemap's build-area.yml fixtures job; fixtures/latest.json), so
@@ -61,6 +61,38 @@ jobs:
             echo "key=live-$parks-$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
             echo "Fixture tiles: extracted from the live layers (no snapshot for this parks.json)" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
+
+      # The base's results: from the run on its push to main if there was
+      # one with these tiles and this run.sh, else curated here.
+      - name: Base results key
+        id: prev
+        run: |
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            sha=$(git -C base rev-parse HEAD)
+          else
+            sha=${{ github.sha }}
+          fi
+          echo "key=fixtures-base-$sha-${{ steps.snap.outputs.key }}-${{ hashFiles('new/fixtures/run.sh') }}-$LIMIT" >> "$GITHUB_OUTPUT"
+
+      - name: Restore ${{ github.base_ref }}'s results
+        id: prevcache
+        if: github.event_name == 'pull_request'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            prev/
+            !prev/**/parks/
+          key: ${{ steps.prev.outputs.key }}
+
+      - name: Build ${{ github.base_ref }}
+        if: github.event_name == 'pull_request' && steps.prevcache.outputs.cache-hit != 'true'
+        run: |
+          # In new/target, so the dependencies built for it serve the new build too
+          (cd base && cargo build --release --locked --target-dir ../new/target)
+          mkdir -p base-bin && cp new/target/release/routes base-bin/
+
+      - name: Build this change
+        run: cd new && cargo build --release --locked
 
       - name: Restore fixture tiles
         id: tiles
@@ -102,14 +134,20 @@ jobs:
           key: fixtures-dem-${{ hashFiles('new/fixtures/parks.json', 'new/fixtures/oracle.json') }}-${{ github.sha }}
           restore-keys: fixtures-dem-${{ hashFiles('new/fixtures/parks.json', 'new/fixtures/oracle.json') }}-
 
-      - name: Curate with ${{ github.base_ref || 'main' }}
-        run: new/fixtures/run.sh base/target/release/routes tiles out/base qrank.db dem "$LIMIT"
+      - name: Curate with ${{ github.base_ref }}
+        if: github.event_name == 'pull_request' && steps.prevcache.outputs.cache-hit != 'true'
+        run: new/fixtures/run.sh base-bin/routes tiles prev/base qrank.db dem "$LIMIT"
 
       - name: Curate with this change
         run: new/fixtures/run.sh new/target/release/routes tiles out/new qrank.db dem "$LIMIT"
 
       - name: Compare
-        run: python3 new/fixtures/compare.py out/base out/new | tee -a "$GITHUB_STEP_SUMMARY"
+        if: github.event_name == 'pull_request'
+        run: |
+          if [ "${{ steps.prevcache.outputs.cache-hit }}" = true ]; then
+            echo "${{ github.base_ref }}'s results (and times) are from its own run, on another runner of the same kind." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          python3 new/fixtures/compare.py prev/base out/new | tee -a "$GITHUB_STEP_SUMMARY"
 
       # Routes we've fixed and must keep offering, named right
       # (fixtures/expect.json): a change that loses one fails here.
@@ -121,10 +159,11 @@ jobs:
       # Without the bump for following an OSM hiking route (--no-known-bonus)
       # it measures the route proposer alone; with it, what ships, which the
       # bump partly earns by itself.
-      - name: Oracle sample with ${{ github.base_ref || 'main' }}
+      - name: Oracle sample with ${{ github.base_ref }}
+        if: github.event_name == 'pull_request' && steps.prevcache.outputs.cache-hit != 'true'
         env:
           ROUTES_ARGS: --no-known-bonus
-        run: new/fixtures/run.sh base/target/release/routes tiles/oracle out/oracle-base qrank.db dem 120 new/fixtures/oracle.json > /dev/null
+        run: new/fixtures/run.sh base-bin/routes tiles/oracle prev/oracle-base qrank.db dem 120 new/fixtures/oracle.json > /dev/null
 
       - name: Oracle sample with this change, no bump for known routes
         env:
@@ -132,14 +171,34 @@ jobs:
         run: new/fixtures/run.sh new/target/release/routes tiles/oracle out/oracle-new qrank.db dem 120 new/fixtures/oracle.json > /dev/null
 
       - name: Oracle sample with this change, as it ships
+        if: github.event_name == 'pull_request'
         run: new/fixtures/run.sh new/target/release/routes tiles/oracle out/oracle-new-bonus qrank.db dem 120 new/fixtures/oracle.json > /dev/null
 
       - name: Compare on the oracle sample
+        if: github.event_name == 'pull_request'
         run: |
           python3 new/fixtures/oracle.py --title "Known hikes on the oracle sample: the route proposer (no bump for known routes)" \
-            out/oracle-base out/oracle-new new/fixtures/oracle.json | tee -a "$GITHUB_STEP_SUMMARY"
+            prev/oracle-base out/oracle-new new/fixtures/oracle.json | tee -a "$GITHUB_STEP_SUMMARY"
           python3 new/fixtures/oracle.py --title "Known hikes on the oracle sample: as it ships (with the bump)" \
-            out/oracle-base out/oracle-new-bonus new/fixtures/oracle.json | tee -a "$GITHUB_STEP_SUMMARY"
+            prev/oracle-base out/oracle-new-bonus new/fixtures/oracle.json | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # On main, this run is the base for pull requests on this commit.
+      - name: Keep main's results as a base
+        if: github.event_name != 'pull_request'
+        run: |
+          mkdir -p prev
+          cp -r out/new prev/base
+          cp -r out/oracle-new prev/oracle-base
+
+      # From a pull request, for its next push on the same base.
+      - name: Save the base's results
+        if: github.event_name != 'pull_request' || steps.prevcache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            prev/
+            !prev/**/parks/
+          key: ${{ steps.prev.outputs.key }}
 
       - name: Upload the routes and logs
         if: always()
@@ -148,4 +207,6 @@ jobs:
           name: fixtures
           path: |
             out/
+            prev/
             !out/**/parks/
+            !prev/**/parks/

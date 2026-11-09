@@ -12,5 +12,7 @@ rusqlite = { version = "0.41.1", features = ["bundled"] }
 rustc-hash = "2.1.3"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-ureq = "2"
+# native-certs: the system trust store (and SSL_CERT_FILE), not only the
+# roots bundled in, so it works behind a TLS-terminating proxy.
+ureq = { version = "2", features = ["native-certs"] }
 zstd = "0.14.3"
