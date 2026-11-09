@@ -21,3 +21,8 @@ then:
     fixtures/compare.py /tmp/fx-out/base /tmp/fx-out/new
 
 `qrank.db` is from https://github.com/hikeratlas/qrank/releases.
+
+`expect.json` lists named regressions: routes we've fixed and must keep
+offering, named right (e.g. Killarney's Crack, routes#80). CI checks them on
+the new run with `fixtures/expect.py out/new`, and fails if one is lost. Add
+one whenever a missing or misnamed route is fixed.

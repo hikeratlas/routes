@@ -4,7 +4,7 @@
 // doesn't depend on our own scoring. Only reported, never used to pick routes.
 use crate::area::Area;
 use crate::geo::{self, P, metres, mpu};
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use serde_json::{Value, json};
 
 /// A route relation's segments in the loaded tiles.
@@ -271,7 +271,7 @@ pub fn name_routes(area: &Area, doc: &mut Value) {
             lo = (lo.0.min(p.0 - pad), lo.1.min(p.1 - pad));
             hi = (hi.0.max(p.0 + pad), hi.1.max(p.1 + pad));
         }
-        let best = area
+        let near: Vec<(&Known, f64, f64)> = area
             .known
             .iter()
             .zip(&rel_pts)
@@ -280,10 +280,27 @@ pub fn name_routes(area: &Area, doc: &mut Value) {
             .map(|(k, _)| k)
             .filter(|(k, _)| !k.name.is_empty() && !is_bike(k))
             .map(|(k, rp)| (k, coverage(rp, &line), coverage_segs(&route_pts, &k.segs)))
-            .filter(|&(_, rel, route)| rel >= NAME_RELATION && route >= NAME_ROUTE)
-            .max_by(|a, b| (a.1 * a.2).partial_cmp(&(b.1 * b.2)).unwrap());
+            .filter(|&(_, rel, _)| rel >= NAME_RELATION)
+            .collect();
+        // A relation named for where the route goes ("The "Crack" Trail" to
+        // The "Crack" Viewpoint) names it however much of the route is on
+        // the relation: OSM's relation may stop short of the sight (routes#80).
+        let dest = r["dest"].as_str().unwrap_or_default().to_string();
+        let by_dest = near
+            .iter()
+            .filter(|(k, _, _)| names_place(&k.name, &dest))
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        let best = by_dest.copied().or_else(|| {
+            near.iter()
+                .filter(|&&(_, _, route)| route >= NAME_ROUTE)
+                .max_by(|a, b| (a.1 * a.2).partial_cmp(&(b.1 * b.2)).unwrap())
+                .copied()
+        });
         if let Some((k, _, _)) = best {
             r["name"] = json!(k.name);
+            if by_dest.is_some() {
+                r["named_for_dest"] = json!(true);
+            }
             // The relation's segments run in its member order (basemap's
             // hiking-routes export), which says which way the route goes
             // (#73): a loop or point-to-point that follows it goes that way.
@@ -303,7 +320,62 @@ pub fn name_routes(area: &Area, doc: &mut Value) {
     for t in doc["point_to_points"].as_array_mut().into_iter().flatten() {
         name(t);
     }
+    keep_names_for_their_place(doc);
     disambiguate(doc);
+}
+
+/// Words that say what kind of thing a name is, not which: "The "Crack"
+/// Trail" and The "Crack" Viewpoint share "crack", not "the".
+const GENERIC: &[&str] = &[
+    "the", "a", "an", "of", "to", "and", "at", "on", "in", "trail", "trails", "path", "loop", "route", "track",
+    "circuit", "traverse", "hike", "walk", "viewpoint", "lookout", "view", "overlook", "point", "trailhead",
+];
+
+fn words(s: &str) -> Vec<String> {
+    s.split(|c: char| !c.is_alphanumeric())
+        .map(str::to_lowercase)
+        .filter(|w| w.len() > 1 && !GENERIC.contains(&w.as_str()))
+        .collect()
+}
+
+/// Whether a relation's name names a place: every distinctive word of the
+/// place's name is in it (and there's at least one).
+fn names_place(relation: &str, place: &str) -> bool {
+    let (r, p) = (words(relation), words(place));
+    !p.is_empty() && p.iter().all(|w| r.contains(w))
+}
+
+/// Every chosen route, mutably: day hikes, point-to-points and base camps'
+/// hikes.
+fn each_route(doc: &mut Value, mut f: impl FnMut(&mut Value)) {
+    for k in ["day_hikes", "point_to_points"] {
+        for r in doc[k].as_array_mut().into_iter().flatten() {
+            f(r);
+        }
+    }
+    for b in doc["base_camps"].as_array_mut().into_iter().flatten() {
+        for r in b["hikes"].as_array_mut().into_iter().flatten() {
+            f(r);
+        }
+    }
+}
+
+/// A relation's name that went to the route to the place it's named for is
+/// that route's alone: another route that merely follows the relation (part
+/// way to the Crack, then on to Kakakise Lake) loses it.
+fn keep_names_for_their_place(doc: &mut Value) {
+    let mut taken: HashSet<String> = HashSet::default();
+    each_route(doc, |r| {
+        if r["named_for_dest"] == true {
+            taken.extend(r["name"].as_str().map(str::to_string));
+        }
+    });
+    each_route(doc, |r| {
+        let by_dest = r.as_object_mut().and_then(|o| o.remove("named_for_dest")).is_some();
+        if !by_dest && r["name"].as_str().is_some_and(|n| taken.contains(n)) {
+            r.as_object_mut().unwrap().remove("name");
+        }
+    });
 }
 
 /// How far along a line a point is (metres), and how far from it.

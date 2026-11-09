@@ -1,0 +1,12 @@
+[
+  {
+    "fixture": "killarney",
+    "issue": "routes#80",
+    "why": "The Crack is Killarney's best-known hike: it must be offered from its own trailhead, named for it. OSM's relation stops short of the viewpoint, and the viewpoint was once offered only by a 17.9 km approach from another trailhead, while the name went to a 3.6 km hike to Kakakise Lake.",
+    "name": "The \"Crack\" Trail",
+    "dest": "The \"Crack\" Viewpoint",
+    "start": [-81.32445, 46.04399],
+    "start_within_m": 300,
+    "max_km": 10
+  }
+]
