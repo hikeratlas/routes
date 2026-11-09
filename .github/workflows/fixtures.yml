@@ -83,7 +83,8 @@ jobs:
           else
             sha=${{ github.sha }}
           fi
-          echo "key=fixtures-base-$sha-${{ steps.snap.outputs.key }}-${{ hashFiles('new/fixtures/run.sh') }}-$LIMIT" >> "$GITHUB_OUTPUT"
+          # v2: with oracle-base-bonus, the base's oracle run as it ships
+          echo "key=fixtures-base-v2-$sha-${{ steps.snap.outputs.key }}-${{ hashFiles('new/fixtures/run.sh') }}-$LIMIT" >> "$GITHUB_OUTPUT"
 
       # Only to see whether it's there: compare restores it.
       - name: Look for ${{ github.base_ref }}'s results
@@ -176,7 +177,7 @@ jobs:
           # fixtures/oracle.py). Without the bump for following an OSM
           # hiking route (--no-known-bonus) it measures the route proposer
           # alone; with it, what ships, which the bump partly earns by
-          # itself.
+          # itself. Each is compared with the base's run of the same kind.
           - leg: oracle-new
             title: Oracle sample, no bump for known routes
             tiles: tiles/oracle
@@ -190,31 +191,18 @@ jobs:
             limit: 120
             parks: new/fixtures/oracle.json
             args: ''
-            base: ''
+            base: oracle-base-bonus
     steps:
-      - name: Skip on main
-        id: go
-        run: |
-          # On main, only the runs pull requests compare against
-          if [ "${{ github.event_name }}" != pull_request ] && [ "${{ matrix.leg }}" = oracle-new-bonus ]; then
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          fi
-
       - uses: actions/checkout@v4
-        if: steps.go.outputs.run == 'true'
         with:
           path: new
 
       - uses: actions/download-artifact@v4
-        if: steps.go.outputs.run == 'true'
         with:
           name: bin
           path: bin
 
       - name: Restore fixture tiles
-        if: steps.go.outputs.run == 'true'
         uses: actions/cache/restore@v4
         with:
           path: tiles
@@ -222,7 +210,6 @@ jobs:
           fail-on-cache-miss: true
 
       - name: Restore QRank
-        if: steps.go.outputs.run == 'true'
         uses: actions/cache/restore@v4
         with:
           path: qrank.db
@@ -231,7 +218,6 @@ jobs:
 
       # Per leg, as the legs read different tiles; saved from main.
       - name: Restore DEM tiles
-        if: steps.go.outputs.run == 'true'
         uses: actions/cache@v4
         with:
           path: dem
@@ -239,7 +225,7 @@ jobs:
           restore-keys: fixtures-dem-${{ matrix.leg }}-${{ hashFiles('new/fixtures/parks.json', 'new/fixtures/oracle.json') }}-
 
       - name: ${{ matrix.title }} with ${{ github.base_ref }}
-        if: steps.go.outputs.run == 'true' && matrix.base != '' && github.event_name == 'pull_request' && needs.build.outputs.prev-hit != 'true'
+        if: matrix.base != '' && github.event_name == 'pull_request' && needs.build.outputs.prev-hit != 'true'
         env:
           ROUTES_ARGS: ${{ matrix.args }}
           L: ${{ matrix.limit }}
@@ -248,7 +234,6 @@ jobs:
           new/fixtures/run.sh bin/routes-base ${{ matrix.tiles }} out/prev/${{ matrix.base }} qrank.db dem "${L:-$LIMIT}" ${{ matrix.parks }}
 
       - name: ${{ matrix.title }} with this change
-        if: steps.go.outputs.run == 'true'
         env:
           ROUTES_ARGS: ${{ matrix.args }}
           L: ${{ matrix.limit }}
@@ -257,7 +242,7 @@ jobs:
           new/fixtures/run.sh bin/routes-new ${{ matrix.tiles }} out/new/${{ matrix.leg == 'fixtures' && 'new' || matrix.leg }} qrank.db dem "${L:-$LIMIT}" ${{ matrix.parks }}
 
       - uses: actions/upload-artifact@v4
-        if: always() && steps.go.outputs.run == 'true'
+        if: always()
         with:
           name: out-${{ matrix.leg }}
           path: out/
@@ -318,7 +303,7 @@ jobs:
           python3 new/fixtures/oracle.py --title "Known hikes on the oracle sample: the route proposer (no bump for known routes)" \
             prev/oracle-base out/new/oracle-new new/fixtures/oracle.json | tee -a "$GITHUB_STEP_SUMMARY"
           python3 new/fixtures/oracle.py --title "Known hikes on the oracle sample: as it ships (with the bump)" \
-            prev/oracle-base out/new/oracle-new-bonus new/fixtures/oracle.json | tee -a "$GITHUB_STEP_SUMMARY"
+            prev/oracle-base-bonus out/new/oracle-new-bonus new/fixtures/oracle.json | tee -a "$GITHUB_STEP_SUMMARY"
 
       # On main, this run is the base for pull requests on this commit.
       - name: Keep main's results as a base
@@ -326,6 +311,7 @@ jobs:
         run: |
           cp -r out/new/new prev/base
           cp -r out/new/oracle-new prev/oracle-base
+          cp -r out/new/oracle-new-bonus prev/oracle-base-bonus
 
       # From a pull request, for its next push on the same base.
       - name: Save the base's results
