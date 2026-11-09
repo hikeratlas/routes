@@ -72,16 +72,19 @@ jobs:
           else
             sha=${{ github.sha }}
           fi
-          echo "key=fixtures-base-$sha-${{ steps.snap.outputs.key }}-${{ hashFiles('new/fixtures/run.sh') }}-$LIMIT" >> "$GITHUB_OUTPUT"
+          # v2: with the fixtures' parks/ (caches from before lack them).
+          echo "key=fixtures-base-v2-$sha-${{ steps.snap.outputs.key }}-${{ hashFiles('new/fixtures/run.sh') }}-$LIMIT" >> "$GITHUB_OUTPUT"
 
       - name: Restore ${{ github.base_ref }}'s results
         id: prevcache
         if: github.event_name == 'pull_request'
         uses: actions/cache/restore@v4
         with:
+          # The fixtures' parks/ stay (a few MB) for the named regressions;
+          # not the oracle sample's.
           path: |
             prev/
-            !prev/**/parks/
+            !prev/oracle-base/**/parks/
           key: ${{ steps.prev.outputs.key }}
 
       - name: Build ${{ github.base_ref }}
@@ -150,13 +153,16 @@ jobs:
           python3 new/fixtures/compare.py prev/base out/new | tee -a "$GITHUB_STEP_SUMMARY"
 
       # Well-known routes that are very noticeable when missing or misnamed
-      # (fixtures/expect.json), on main and with this change. Information:
-      # it never fails the job (some aren't fixed yet).
+      # (fixtures/expect.json): on a pull request, with its base and with the
+      # change; on main, its own. Information: it never fails the job (some
+      # aren't fixed yet).
       - name: Named regressions
         run: |
-          echo "#### With ${{ github.base_ref || 'main' }}" >> "$GITHUB_STEP_SUMMARY"
-          python3 new/fixtures/expect.py out/base | tee -a "$GITHUB_STEP_SUMMARY"
-          echo "#### With this change" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            echo "#### With ${{ github.base_ref }}" >> "$GITHUB_STEP_SUMMARY"
+            python3 new/fixtures/expect.py prev/base | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "#### With this change" >> "$GITHUB_STEP_SUMMARY"
+          fi
           python3 new/fixtures/expect.py out/new | tee -a "$GITHUB_STEP_SUMMARY"
 
       # Known-hike recall on the oracle sample: ~160 parks with OSM hiking
@@ -200,9 +206,11 @@ jobs:
         if: github.event_name != 'pull_request' || steps.prevcache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
+          # The fixtures' parks/ stay (a few MB) for the named regressions;
+          # not the oracle sample's.
           path: |
             prev/
-            !prev/**/parks/
+            !prev/oracle-base/**/parks/
           key: ${{ steps.prev.outputs.key }}
 
       - name: Upload the routes and logs
