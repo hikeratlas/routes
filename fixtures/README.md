@@ -71,7 +71,11 @@ report names the offered hikes that do. The trace's first point is the
 trailhead: the same hike must start within 150 m of it (`trace_start_m`;
 `null` for a trace that doesn't begin at one), however much of the rest it
 covers, so a hike from the wrong lot fails (routes#102). Draw a trace from
-the trailhead.
+the trailhead. With a trace, the length also passes within 0.85-1.4 times
+the trace's own length, not just the park's figure (Granite Ridge: the park
+says 2 km, the trail 2.8); the report notes a length that passes by the
+trace only. A trace's points cut corners, so it's shorter than the hike:
+draw one in more detail where that matters (a long trail).
 
 Traces are made on https://www.hikeratlas.com/dev/regressions (website#77):
 it shows each proposal (below) with the OSM trail of its name and the hikes
