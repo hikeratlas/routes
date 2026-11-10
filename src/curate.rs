@@ -63,7 +63,7 @@ pub struct Ctx<'a> {
 /// measures the bump itself, so the fixture CI reports recall both ways.
 pub static KNOWN_BONUS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 /// Whether to keep every day-hike candidate, not just those picked (routes
-/// --candidates), for the named regressions' candidate picker.
+/// --candidates), to see why a named regression's hike isn't offered.
 pub static CANDIDATES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// An edge whose midpoint is this close to an OSM hiking route is on it.
 const ON_KNOWN_M: f64 = 30.0;

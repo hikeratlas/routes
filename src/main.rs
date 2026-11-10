@@ -64,7 +64,7 @@ const USAGE: &str = "usage: routes --tiles FILE|URL [--tiles ...] --out DIR
                          regressions (fixtures/expect.py); off by default
   [--candidates]         also write DIR/candidates.geojsonl: every day hike
                          each park considered, `picked` or not, for the
-                         named regressions' candidate picker; off by default
+                         named regressions (why a hike isn't offered); off by default
   [--park-timeout SECS]  stop starting new searches in a park after this
                          long, keeping what was found, and report it
   [--shard K/N]          curate only shard K (0-based) of N, and write each
