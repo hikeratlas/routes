@@ -143,6 +143,9 @@ pub struct Area {
     pub dests: Vec<Dest>,
     pub camps: Vec<Place>,
     pub parkings: Vec<Place>,
+    /// Lots mapped only by their aisles: the middle of each piece of
+    /// service=parking_aisle road (the basemap's parking_aisle flag).
+    pub aisles: Vec<P>,
     /// Hiking route relations (the hiking_route layer) passing through.
     pub known: Vec<crate::recall::Known>,
 }
@@ -155,6 +158,7 @@ struct Raw {
     dests: Vec<Dest>,
     camps: Vec<Place>,
     parkings: Vec<Place>,
+    aisles: Vec<P>,
     known: Vec<crate::recall::Known>, // pieces of relations in this tile
 }
 
@@ -173,6 +177,7 @@ fn read_tile(
         dests: vec![],
         camps: vec![],
         parkings: vec![],
+        aisles: vec![],
         known: vec![],
     };
     let s = |x: i32, y: i32, ext: u32| -> P {
@@ -265,9 +270,19 @@ fn read_tile(
                         let bike = !walk
                             && (flag("mtb")
                                 || (l.str(f, "bicycle") == "designated" && foot != "yes"));
+                        let aisle = class == Class::Road && flag("parking_aisle");
                         for line in f.geometry() {
                             let pts: Vec<P> =
                                 line.into_iter().map(|(x, y)| s(x, y, l.extent)).collect();
+                            if aisle && !pts.is_empty() {
+                                // Its middle, by its points; pieces in the
+                                // tile's buffer too (Ctx::starts merges them).
+                                let n = pts.len() as f64;
+                                raw.aisles.push((
+                                    pts.iter().map(|p| p.0).sum::<f64>() / n,
+                                    pts.iter().map(|p| p.1).sum::<f64>() / n,
+                                ));
+                            }
                             raw.lines.push((
                                 Way {
                                     name: not_a_note(l.str(f, "name")),
@@ -578,6 +593,7 @@ impl Area {
             dests: vec![],
             camps: vec![],
             parkings: vec![],
+            aisles: vec![],
             known: vec![],
         };
         let mut known: HashMap<String, crate::recall::Known> = HashMap::new();
@@ -596,6 +612,7 @@ impl Area {
             area.dests.extend(r.dests);
             area.camps.extend(r.camps);
             area.parkings.extend(r.parkings);
+            area.aisles.extend(r.aisles);
             for k in r.known {
                 match known.get_mut(&k.id) {
                     Some(e) => e.segs.extend(k.segs),

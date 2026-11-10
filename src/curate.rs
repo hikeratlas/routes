@@ -1545,21 +1545,28 @@ impl<'a> Ctx<'a> {
 
     /// The first named trail (else road) reached walking out from a node.
     fn trail_name_near(&self, node: u32) -> Option<String> {
+        self.trail_near(node).map(|(name, _)| name)
+    }
+
+    /// The first named trail (else road) reached walking out from a node,
+    /// named for a start ("<trail> trailhead", "Parking off <road>"), and
+    /// the walk to it in metres (infinite for a road: no trail within reach).
+    fn trail_near(&self, node: u32) -> Option<(String, f64)> {
         let g = &self.area.graph;
         let s = self.search(node, 1500.0, None);
         let mut order: Vec<(f64, u32)> = s.all_reached().map(|(n, m)| (m, n)).collect();
         order.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let mut road = None;
-        for (_, n) in order {
+        for (m, n) in order {
             for e in &g.adj[n as usize] {
                 let w = &g.ways[e.way as usize];
                 if w.name.is_empty() {
                     continue;
                 }
                 if matches!(w.class, Class::Trail | Class::Track) && !w.bike {
-                    return Some(format!("{} trailhead", w.name));
+                    return Some((format!("{} trailhead", w.name), m));
                 }
-                road = road.or_else(|| Some(format!("Parking off {}", w.name)));
+                road = road.or_else(|| Some((format!("Parking off {}", w.name), f64::INFINITY)));
             }
         }
         road
@@ -1572,14 +1579,34 @@ impl<'a> Ctx<'a> {
     /// around its trails, so its starts must be inside it: 5 km around the
     /// Skerwink Trail reached a lot across Trinity East, and a 19 km road
     /// walk from there outscored nothing.
-    pub fn starts(&self, parkings: &[Place], trail_area: bool) -> Vec<Start> {
+    pub fn starts(&self, parkings: &[Place], aisles: &[P], trail_area: bool) -> Vec<Start> {
         let (lot_reach, junction_reach) = if trail_area {
             (0.0, 0.0)
         } else {
             (5000.0, 2000.0)
         };
         let urban = urban_lots(parkings);
-        let mut out: Vec<Start> = parkings
+        let lot = |p: &Place| -> Option<(Start, f64)> {
+            let node = self.nearest(p.pt, 250.0)?;
+            let near = self.trail_near(node);
+            let walk = near.as_ref().map_or(f64::INFINITY, |n| n.1);
+            let name = if p.name.is_empty() {
+                near.map_or_else(|| "Parking".into(), |n| n.0)
+            } else {
+                p.name.clone()
+            };
+            Some((
+                Start {
+                    name,
+                    node,
+                    pt: p.pt,
+                    trailhead: p.trailhead,
+                    known: p.trailhead || !p.name.is_empty(),
+                },
+                walk,
+            ))
+        };
+        let mut out: Vec<(Start, f64)> = parkings
             .par_iter()
             .enumerate()
             .filter(|&(i, p)| {
@@ -1591,31 +1618,27 @@ impl<'a> Ctx<'a> {
                     Some(d) => d == 0.0 || p.trailhead || !urban[i],
                 }
             })
-            .map(|(_, p)| p)
-            .filter_map(|p| {
-                let node = self.nearest(p.pt, 250.0)?;
-                let name = if p.name.is_empty() {
-                    self.trail_name_near(node)
-                        .unwrap_or_else(|| "Parking".into())
-                } else {
-                    p.name.clone()
-                };
-                Some(Start {
-                    name,
-                    node,
-                    pt: p.pt,
-                    trailhead: p.trailhead,
-                    known: p.trailhead || !p.name.is_empty(),
-                })
-            })
+            .filter_map(|(_, p)| lot(p))
             .collect();
-        out.sort_by_key(|s| (!s.trailhead, s.name == "Parking"));
-        let mut merged: Vec<Start> = vec![];
-        for s in out {
-            if merged.iter().all(|m| metres(m.pt, s.pt) >= 400.0) {
-                merged.push(s);
-            }
-        }
+        // Lots mapped only by their driving aisles (service=parking_aisle,
+        // no amenity=parking): Killarney's Granite Ridge trailhead is a loop
+        // of aisle off Highway 637 (routes#102). In or just by the park, and
+        // not inside a mapped lot, which stands for itself.
+        let aisle_reach = if trail_area { 0.0 } else { AISLE_REACH_M };
+        out.par_extend(
+            aisles
+                .par_iter()
+                .filter(|&&pt| self.area.park_dist(pt, aisle_reach).is_some())
+                .filter(|&&pt| parkings.iter().all(|p| metres(p.pt, pt) > AISLE_IN_LOT_M))
+                .filter_map(|&pt| {
+                    lot(&Place {
+                        name: String::new(),
+                        pt,
+                        trailhead: false,
+                    })
+                }),
+        );
+        let mut merged = merge_lots(out);
         // Where a trail meets a drivable road near the park. The basemap only
         // has parking lots inside parks, so a trailhead whose lot is just
         // outside (Joffre Lakes), or isn't mapped at all, is found this way.
@@ -1663,6 +1686,37 @@ impl<'a> Ctx<'a> {
         }
         merged
     }
+}
+
+/// How far outside the park a lot mapped only by its aisles may be.
+const AISLE_REACH_M: f64 = 500.0;
+/// An aisle this close to a mapped lot's point is in that lot, which stands
+/// for itself. Not much more: the Granite Ridge trailhead's aisle loop is
+/// 140 m from the park office's lot (routes#102).
+const AISLE_IN_LOT_M: f64 = 60.0;
+/// Lots closer than this are one start.
+const LOT_MERGE_M: f64 = 400.0;
+
+/// Lots (each with its walk to the nearest named trail) merged into starts:
+/// of lots within LOT_MERGE_M of each other, one is kept. Mapped trailheads
+/// first, then lots named for something (in OSM, or here for the trail or
+/// road nearby) over plain "Parking", then the shortest walk to a trail:
+/// of Killarney's George Lake campground lot and the Granite Ridge
+/// trailhead's, 230 m apart, the trailhead's, from which the trail starts,
+/// not the campground's, 350 m of campground road from it (routes#102).
+fn merge_lots(mut lots: Vec<(Start, f64)>) -> Vec<Start> {
+    lots.sort_by(|(a, wa), (b, wb)| {
+        (!a.trailhead, a.name == "Parking")
+            .cmp(&(!b.trailhead, b.name == "Parking"))
+            .then(wa.total_cmp(wb))
+    });
+    let mut merged: Vec<Start> = vec![];
+    for (s, _) in lots {
+        if merged.iter().all(|m| metres(m.pt, s.pt) >= LOT_MERGE_M) {
+            merged.push(s);
+        }
+    }
+    merged
 }
 
 /// Coverage first (each start's best), then greedily by score x novelty.
@@ -1937,7 +1991,7 @@ pub fn curate(
     let mut ctx = Ctx::new(area, dem, dests, camps);
     ctx.lake_access = area.lake_access().into_iter().collect();
     let targets = ctx.targets(1000.0);
-    let starts = ctx.starts(&area.parkings, trail_area);
+    let starts = ctx.starts(&area.parkings, &area.aisles, trail_area);
     let t = std::time::Instant::now();
     let mut stats = format!(
         "{} nodes, {} destinations ({} reachable), {} trailheads, {} backcountry campsites",
@@ -2570,6 +2624,36 @@ mod tests {
             pt: (1000.0 + m_east * u, y0 + m_north * u),
             trailhead: false,
         }
+    }
+
+    #[test]
+    fn of_lots_near_each_other_the_one_nearest_its_trail_is_kept() {
+        let start = |name: &str, m_north: f64, trailhead: bool| Start {
+            name: name.into(),
+            node: 0,
+            pt: lot(0.0, m_north).pt,
+            trailhead,
+            known: trailhead,
+        };
+        let names = |v: Vec<Start>| v.into_iter().map(|s| s.name).collect::<Vec<_>>();
+        // Killarney (routes#102): the campground's lot, 350 m of road from
+        // the Granite Ridge Trail, and the trailhead's aisle loop 230 m
+        // away, which the trail starts from. Either order in.
+        let camp = || (start("Granite Ridge Trail trailhead", 230.0, false), 350.0);
+        let loop_ = || (start("Granite Ridge Trail trailhead", 0.0, false), 20.0);
+        assert_eq!(merge_lots(vec![camp(), loop_()]).len(), 1);
+        assert_eq!(merge_lots(vec![camp(), loop_()])[0].pt, loop_().0.pt);
+        assert_eq!(merge_lots(vec![loop_(), camp()])[0].pt, loop_().0.pt);
+        // A mapped trailhead still comes first, however far its walk; and a
+        // lot named for a trail over plain "Parking".
+        let th = (start("Lot 9", 230.0, true), 900.0);
+        assert_eq!(names(merge_lots(vec![loop_(), th])), ["Lot 9"]);
+        let plain = (start("Parking", 0.0, false), f64::INFINITY);
+        let named = (start("Parking off Highway 637", 100.0, false), f64::INFINITY);
+        assert_eq!(names(merge_lots(vec![plain, named])), ["Parking off Highway 637"]);
+        // 400 m or more apart: both kept.
+        let far = (start("Parking", 500.0, false), f64::INFINITY);
+        assert_eq!(merge_lots(vec![loop_(), far]).len(), 2);
     }
 
     #[test]

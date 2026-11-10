@@ -67,7 +67,11 @@ along its length. The named hike of the right length must then pass within
 50 m (`trace_within_m`) of at least 70% (`trace_cover`) of those points; it
 checks the hike's own line, so it needs no `trails.jsonl` and works on
 basemap's builds too. When nothing under the name follows the trace, the
-report names the offered hikes that do.
+report names the offered hikes that do. The trace's first point is the
+trailhead: the same hike must start within 150 m of it (`trace_start_m`;
+`null` for a trace that doesn't begin at one), however much of the rest it
+covers, so a hike from the wrong lot fails (routes#102). Draw a trace from
+the trailhead.
 
 Traces are made on https://www.hikeratlas.com/dev/regressions (website#77):
 it shows each proposal (below) with the OSM trail of its name and the hikes

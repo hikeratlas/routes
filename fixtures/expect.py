@@ -22,7 +22,12 @@
 # that instead of the OSM trail: the named hike of the right length must
 # pass within `trace_within_m` (default 50) of at least `trace_cover`
 # (default 0.7) of its points. For a trail OSM splits, forks or under-maps, where the walks check
-# would compare against the wrong ways. It needs no trails.jsonl.
+# would compare against the wrong ways. It needs no trails.jsonl. The
+# trace's first point is the trailhead, and isn't just one point among the
+# rest: the same hike must start within `trace_start_m` (default 150) of it,
+# so a hike from the wrong lot that walks over to the trail fails however
+# much of the trace it covers (routes#102). `"trace_start_m": null` turns
+# this off, for a trace that doesn't begin at a trailhead.
 #
 # ROUTES_OUT is any routes output: one run's (parks/<id>.json, trails.jsonl,
 # listed.jsonl) or the fixtures' (<fixture>/parks/<id>.json, ...). Each
@@ -47,7 +52,7 @@ from functools import lru_cache
 from expectations import load, norm
 
 WALKS = 0.7
-TRACE_WITHIN_M, TRACE_COVER = 50, 0.7
+TRACE_WITHIN_M, TRACE_COVER, TRACE_START_M = 50, 0.7, 150
 
 args = sys.argv[1:]
 out_json = None
@@ -171,12 +176,31 @@ def cover(trace, r, within):
     return sum(near_line(p, line, within) for p in trace) / len(trace)
 
 
-def check_trace(e, rs, named, sized, lo, hi, checks, problems):
+def start_off(trace, r):
+    """How far route r starts (its line's first point, where the walk
+    begins) from the trace's trailhead, its first point."""
+    line = r['route'].get('line') or []
+    return metres(trace[0], line[0]) if line else math.inf
+
+
+def check_trace(e, rs, named, sized, problems):
+    """The follows and start checks, as {'start': ..., 'follows': ...}
+    ('start' left out where the entry turns it off)."""
     within, need = e.get('trace_within_m', TRACE_WITHIN_M), e.get('trace_cover', TRACE_COVER)
+    start_m = e.get('trace_start_m', TRACE_START_M)
     got = [(cover(e['trace'], r, within), r) for r in (sized or named)]
-    checks['follows'] = any(c >= need for c, _ in got)
+    checks = {'follows': any(c >= need for c, _ in got)}
+    if start_m is not None:
+        # The same hike must start at the trailhead and follow the trace:
+        # the ones that follow it, if any do, else any under the name.
+        pool = [r for c, r in got if c >= need] or [r for _, r in got]
+        off = min((start_off(e['trace'], r) for r in pool), default=None)
+        checks = {'start': None if off is None else off <= start_m} | checks
+        if checks['start'] is False:
+            problems.append(f"the named hike starts {off:.0f} m from the trace's trailhead"
+                            f" (its first point; needs {start_m} m)")
     if checks['follows'] or not rs:
-        return
+        return checks
     # What does follow it, under any name: the clue to what went wrong.
     best = sorted(((cover(e['trace'], r, within), r) for r in rs), key=lambda x: -x[0])[:2]
     best = [f"{label(r)} ({c:.0%})" for c, r in best if c >= need / 2]
@@ -184,6 +208,7 @@ def check_trace(e, rs, named, sized, lo, hi, checks, problems):
             if got else "nothing offered under the name follows the trace")
     problems.append(f"{what} (needs {need:.0%} within {within} m)"
                     + (f"; it's followed most by {'; '.join(best)}" if best else "; nothing offered follows it"))
+    return checks
 
 
 def check_trail(e, rs, trails):
@@ -201,8 +226,7 @@ def check_trail(e, rs, trails):
     elif not sized:
         problems.append(f"{e['name']} is {', '.join(label(r) for r in named)}; expected {lo:.1f}-{hi:.1f} km")
     if e.get('trace'):
-        checks = {'name': checks['name'], 'length': checks['length'], 'follows': None}
-        check_trace(e, rs, named, sized, lo, hi, checks, problems)
+        checks = {'name': checks['name'], 'length': checks['length']} | check_trace(e, rs, named, sized, problems)
         return problems, checks
     osm = e.get('trail', e['name'])
     t = None if trails is None else trails.get(norm(osm))
