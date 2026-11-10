@@ -120,5 +120,17 @@
       -64.34,
       45.4
     ]
+  },
+  {
+    "key": "castle",
+    "id": "7214660",
+    "park": "Castle Provincial Park",
+    "why": "quality: park-listed trails as named regressions (routes#95)",
+    "bbox": [
+      -114.57,
+      49.317,
+      -114.25,
+      49.568
+    ]
   }
 ]
