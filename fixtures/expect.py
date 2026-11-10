@@ -27,7 +27,13 @@
 # rest: the same hike must start within `trace_start_m` (default 150) of it,
 # so a hike from the wrong lot that walks over to the trail fails however
 # much of the trace it covers (routes#102). `"trace_start_m": null` turns
-# this off, for a trace that doesn't begin at a trailhead.
+# this off, for a trace that doesn't begin at a trailhead. With a trace,
+# the length also passes within TRACE_KM (0.85-1.4) times the trace's own
+# length: the trace says which hike is meant better than a park's rounded
+# figure (Granite Ridge: the park says 2 km, the trail as drawn 2.5). A
+# trace is a few points and cuts corners, so it's shorter than the hike;
+# draw one in more detail if that's not enough. The report notes a length
+# that passes by the trace only.
 #
 # ROUTES_OUT is any routes output: one run's (parks/<id>.json, trails.jsonl,
 # listed.jsonl) or the fixtures' (<fixture>/parks/<id>.json, ...). Each
@@ -53,6 +59,7 @@ from expectations import load, norm
 
 WALKS = 0.7
 TRACE_WITHIN_M, TRACE_COVER, TRACE_START_M = 50, 0.7, 150
+TRACE_KM = (0.85, 1.4)
 
 args = sys.argv[1:]
 out_json = None
@@ -150,7 +157,7 @@ def check_dest(e, rs):
     wrong = [label(r) for r in rs if r.get('name') == e['name'] and r not in want]
     if wrong:
         problems.append(f"{e['name']} names another route: {'; '.join(wrong)}")
-    return problems, None
+    return problems, None, []
 
 
 def near_line(p, line, within):
@@ -211,23 +218,39 @@ def check_trace(e, rs, named, sized, problems):
     return checks
 
 
+def line_km(line):
+    return sum(metres(a, b) for a, b in zip(line, line[1:])) / 1000
+
+
 def check_trail(e, rs, trails):
     names = {norm(n) for n in [e['name'], e.get('trail'), *e.get('aka', [])] if n}
     tol = e.get('km_tolerance', 0.3)
     lo, hi = e['km'] * (1 - tol), e['km'] * (1 + tol)
     fits = lambda r: lo <= r['route']['km'] <= hi
     named = [r for r in rs if norm(r.get('name')) in names]
-    sized = [r for r in named if fits(r)]
+    notes = []
+    want = f"{lo:.1f}-{hi:.1f} km"
+    if e.get('trace'):
+        # Or within TRACE_KM of the trace's own length.
+        tk = line_km(e['trace'])
+        tlo, thi = tk * TRACE_KM[0], tk * TRACE_KM[1]
+        by_trace = lambda r: tlo <= r['route']['km'] <= thi
+        sized = [r for r in named if fits(r) or by_trace(r)]
+        want += f", or {tlo:.1f}-{thi:.1f} by its trace ({tk:.1f} km)"
+        if sized and not any(fits(r) for r in sized):
+            notes.append(f"the length passes by the trace only: {label(sized[0])}, the trace {tk:.1f} km;"
+                         f" the park's {e['km']} km wants {lo:.1f}-{hi:.1f}")
+    else:
+        sized = [r for r in named if fits(r)]
     checks = {'name': bool(named), 'length': bool(sized), 'walks': None}
     problems = []
-    want = f"{e['name']} ({e['km']} km, {lo:.1f}-{hi:.1f})"
     if not named:
         problems.append(f"no hike named {e['name']}")
     elif not sized:
-        problems.append(f"{e['name']} is {', '.join(label(r) for r in named)}; expected {lo:.1f}-{hi:.1f} km")
+        problems.append(f"{e['name']} is {', '.join(label(r) for r in named)}; expected {want}")
     if e.get('trace'):
         checks = {'name': checks['name'], 'length': checks['length']} | check_trace(e, rs, named, sized, problems)
-        return problems, checks
+        return problems, checks, notes
     osm = e.get('trail', e['name'])
     t = None if trails is None else trails.get(norm(osm))
     if trails is not None and t is None:
@@ -243,7 +266,7 @@ def check_trail(e, rs, trails):
             what = 'the named hike walks too little of it' if named else 'nothing offered under the name walks it'
             problems.append(f"{what} ({osm}, {t['km']} km in OSM); " +
                             (f"it's walked most by {'; '.join(desc(w) for w in best)}" if best else 'no hike walks it'))
-    return problems, checks
+    return problems, checks, notes
 
 
 results = []
@@ -251,7 +274,7 @@ for e in expects:
     kind = e.get('kind', 'dest')
     pid = e['park_id']
     rs = park_routes(pid)
-    problems, checks = [], None
+    problems, checks, notes = [], None, []
     found = listed.get(pid)
     if rs is None and found and (found.get('twin') or found.get('in')):
         # The same park mapped twice, or a small park inside a bigger one:
@@ -260,9 +283,9 @@ for e in expects:
         rs = park_routes(pid)
     if rs is not None:
         if kind == 'trail':
-            problems, checks = check_trail(e, rs, park_trails(pid))
+            problems, checks, notes = check_trail(e, rs, park_trails(pid))
         else:
-            problems, checks = check_dest(e, rs)
+            problems, checks, notes = check_dest(e, rs)
     elif found:
         why = {'under --min-area': f"it's under --min-area ({found['km2']} km²)",
                'over --max-tiles': "it's over --max-tiles",
@@ -271,7 +294,8 @@ for e in expects:
     status = 'skipped' if rs is None and not found else 'failing' if problems else 'ok'
     results.append({k: e[k] for k in ('name', 'park', 'park_id', 'file', 'issue')}
                    | {'kind': kind, 'status': status, 'problems': problems}
-                   | ({'checks': checks} if checks else {}))
+                   | ({'checks': checks} if checks else {})
+                   | ({'notes': notes} if notes else {}))
 
 checked = [r for r in results if r['status'] != 'skipped']
 failing = [r for r in checked if r['status'] == 'failing']
@@ -295,7 +319,8 @@ for f in order:
         if r.get('checks'):
             detail = ' (' + ', '.join(f"{k} {tick[v]}" for k, v in r['checks'].items()) + ')'
         print(f"- {mark[r['status']]} **{r['name']}** ({r['issue']}): {r['status']}{detail}"
-              + ''.join(f"\n  - {p}" for p in r['problems']))
+              + ''.join(f"\n  - {p}" for p in r['problems'])
+              + ''.join(f"\n  - ℹ️ {n}" for n in r.get('notes', [])))
     print()
 if skipped:
     print(f"➖ Not in this output: {', '.join(sorted(skipped))}")
