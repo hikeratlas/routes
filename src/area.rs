@@ -575,71 +575,9 @@ impl Graph {
                 }
             }
         }
-        g.bridge_dead_ends();
         g
     }
-
-    /// A trail that dead-ends just short of a road or track (within
-    /// BRIDGE_M), joined to it: OSM often stops a trail at its lot's outline
-    /// or a few metres from the road, and routes can't walk an outline.
-    /// Algonquin's Big Pines Trail ends on its lot's outline, 40 m from
-    /// Sunday Lake Road, and no trailhead could reach it (routes#133).
-    fn bridge_dead_ends(&mut self) {
-        let bridge = self.ways.len() as u32;
-        self.ways.push(Way {
-            name: String::new(),
-            class: Class::Track,
-            bike: false,
-            walk: false,
-            sac: 0,
-        });
-        let is_road = |w: &Way| matches!(w.class, Class::Road | Class::Track) && !w.bike;
-        // Road and track nodes, bucketed by CELL world units.
-        const CELL: f64 = 128.0;
-        let cell = |p: P| ((p.0 / CELL).floor() as i64, (p.1 / CELL).floor() as i64);
-        let mut roads: HashMap<(i64, i64), Vec<u32>> = HashMap::new();
-        for (i, adj) in self.adj.iter().enumerate() {
-            if adj.iter().any(|e| is_road(&self.ways[e.way as usize])) {
-                roads.entry(cell(self.pts[i])).or_default().push(i as u32);
-            }
-        }
-        let mut add = vec![];
-        for (i, adj) in self.adj.iter().enumerate() {
-            let [e] = adj.as_slice() else { continue };
-            if self.ways[e.way as usize].class != Class::Trail {
-                continue;
-            }
-            let p = self.pts[i];
-            let r = BRIDGE_M / mpu(p.1);
-            let (cx, cy) = cell(p);
-            let reach = (r / CELL).ceil() as i64;
-            let mut best: Option<(f64, u32)> = None;
-            for dx in -reach..=reach {
-                for dy in -reach..=reach {
-                    for &j in roads.get(&(cx + dx, cy + dy)).map(|v| &v[..]).unwrap_or(&[]) {
-                        let m = metres(p, self.pts[j as usize]);
-                        if m <= BRIDGE_M && best.is_none_or(|b| m < b.0) {
-                            best = Some((m, j));
-                        }
-                    }
-                }
-            }
-            if let Some((m, j)) = best {
-                add.push((i as u32, j, m));
-            }
-        }
-        for (i, j, m) in add {
-            let m = m as f32;
-            let cost = m * 1.3;
-            self.adj[i as usize].push(Edge { to: j, m, cost, way: bridge });
-            self.adj[j as usize].push(Edge { to: i, m, cost, way: bridge });
-        }
-    }
 }
-
-/// How far a trail's dead end may be from a road or track to be joined to
-/// it (see Graph::bridge_dead_ends).
-const BRIDGE_M: f64 = 50.0;
 
 impl Area {
     pub fn load(archives: &[PmTiles], park_id: &str, tiles: &[(u32, u32)]) -> Area {
