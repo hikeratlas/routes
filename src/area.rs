@@ -159,6 +159,9 @@ struct Raw {
     camps: Vec<Place>,
     parkings: Vec<Place>,
     aisles: Vec<P>,
+    /// Parking lots' outlines (the basemap's building layer, amenity=parking:
+    /// in parks, city parks and campgrounds).
+    lots: Vec<Poly>,
     known: Vec<crate::recall::Known>, // pieces of relations in this tile
 }
 
@@ -178,6 +181,7 @@ fn read_tile(
         camps: vec![],
         parkings: vec![],
         aisles: vec![],
+        lots: vec![],
         known: vec![],
     };
     let s = |x: i32, y: i32, ext: u32| -> P {
@@ -294,6 +298,9 @@ fn read_tile(
                                 pts,
                             ));
                         }
+                    }
+                    "building" if f.typ == 3 && l.str(f, "amenity") == "parking" => {
+                        raw.lots.push(Poly::new(geo::rings(f.geometry(), tx, ty, l.extent), tx, ty));
                     }
                     "land" if f.typ == 3 => {
                         let c = ["natural", "landuse", "wetland"]
@@ -575,9 +582,83 @@ impl Graph {
                 }
             }
         }
+        g.join_lots(raws.iter().flat_map(|r| &r.lots));
         g
     }
+
+    /// A trail that ends on a parking lot's outline joins what else touches or
+    /// crosses the lot: a lot is open ground, but its outline isn't a way to
+    /// walk. Algonquin's Big Pines Trail ends on its lot's outline, and the
+    /// road through the lot doesn't touch it: no trailhead reached the trail
+    /// (routes#133). Each trail node on the outline gets a way (a track's
+    /// cost) to the nearest node of another way on the outline or inside.
+    fn join_lots<'a>(&mut self, lots: impl Iterator<Item = &'a Poly>) {
+        let lots: Vec<&Poly> = lots.collect();
+        if lots.is_empty() {
+            return;
+        }
+        const CELL: f64 = 128.0;
+        let cell = |p: P| ((p.0 / CELL).floor() as i64, (p.1 / CELL).floor() as i64);
+        let mut grid: HashMap<(i64, i64), Vec<u32>> = HashMap::new();
+        for (i, p) in self.pts.iter().enumerate() {
+            grid.entry(cell(*p)).or_default().push(i as u32);
+        }
+        let join = self.ways.len() as u32;
+        self.ways.push(Way {
+            name: String::new(),
+            class: Class::Track,
+            bike: false,
+            walk: false,
+            sac: 0,
+        });
+        let mut add = vec![];
+        for lot in lots {
+            // The lot's nodes: on its outline (within ON_OUTLINE) or inside.
+            let (c0, c1) = (cell(lot.min), cell(lot.max));
+            let mut on = vec![];
+            let mut members = vec![];
+            for cx in c0.0 - 1..=c1.0 + 1 {
+                for cy in c0.1 - 1..=c1.1 + 1 {
+                    for &n in grid.get(&(cx, cy)).map(|v| &v[..]).unwrap_or(&[]) {
+                        let p = self.pts[n as usize];
+                        let edge = lot.boundary_dist(p, ON_OUTLINE) <= ON_OUTLINE;
+                        if edge || lot.contains(p) {
+                            members.push(n);
+                            if edge {
+                                on.push(n);
+                            }
+                        }
+                    }
+                }
+            }
+            for &t in &on {
+                let tw: Vec<u32> = self.adj[t as usize].iter().map(|e| e.way).collect();
+                if !tw.iter().any(|&w| self.ways[w as usize].class == Class::Trail) {
+                    continue;
+                }
+                // Another way's node: not one of the trail's own ways.
+                let other = members
+                    .iter()
+                    .copied()
+                    .filter(|&o| o != t)
+                    .filter(|&o| self.adj[o as usize].iter().any(|e| !tw.contains(&e.way) && e.way != join))
+                    .map(|o| (metres(self.pts[t as usize], self.pts[o as usize]), o))
+                    .min_by(|a, b| a.0.total_cmp(&b.0));
+                if let Some((m, o)) = other {
+                    add.push((t, o, m));
+                }
+            }
+        }
+        for (t, o, m) in add {
+            let m = m as f32;
+            self.adj[t as usize].push(Edge { to: o, m, cost: m * 1.3, way: join });
+            self.adj[o as usize].push(Edge { to: t, m, cost: m * 1.3, way: join });
+        }
+    }
 }
+
+/// How close (world units, ~1 m) a node must be to a lot's outline to be on it.
+const ON_OUTLINE: f64 = 2.0;
 
 impl Area {
     pub fn load(archives: &[PmTiles], park_id: &str, tiles: &[(u32, u32)]) -> Area {

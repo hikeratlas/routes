@@ -79,12 +79,24 @@ def main():
     snapshot(out)
     if snapshot_only:
         return
-    stale = []
+    stale, missing = [], []
     for name, sub in (('parks.json', ''), ('oracle.json', 'oracle')):
         for p in json.load(open(os.path.join(here, name))):
             d = os.path.join(out, sub, p['key'])
             if not current(d, p['bbox']):
                 stale.append((p, d))
+            else:
+                # A layer added since the snapshot was cut (buildings).
+                missing += [(p, d, layer) for layer in extract.LAYERS
+                            if not os.path.exists(os.path.join(d, f'{layer}.pmtiles'))]
+    if missing:
+        print(f"{len(missing)} layer files the snapshot lacks", flush=True)
+        for p, d, layer in missing:
+            url = f'{layers}/{layer}.pmtiles'
+            if layer in extract.OPTIONAL and not extract.exists(url):
+                continue
+            n, spans, size = extract.extract(url, p['bbox'], os.path.join(d, f'{layer}.pmtiles'))
+            print(f"  {p['key']}/{layer}: {n} tiles, {size / 1e6:.1f} MB", flush=True)
     if not stale:
         print('every fixture is in the snapshot')
         return
