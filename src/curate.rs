@@ -1433,14 +1433,48 @@ impl<'a> Ctx<'a> {
             return vec![];
         }
         // The nearest trailhead to each piece: to any node of a loop, to
-        // either end of a line.
+        // either end of a line, or to any dead end of a trail that forks.
+        // Where a trail crosses a tile edge, the tiles' copies of it make
+        // little side loops, so a forked trail's longest line can end part
+        // way round it, away from both its real ends: Algonquin's Two Rivers
+        // Trail, a lollipop whose stick meets its lot (3.4 km for 2.1,
+        // routes#133).
+        let dead_ends = |name: &str, p: &[u32]| {
+            // The piece's own edges, as named_pieces has them.
+            let named = |n: u32| {
+                g.adj[n as usize].iter().filter(move |e| {
+                    let w = &g.ways[e.way as usize];
+                    w.name == name
+                        && w.class == Class::Trail
+                        && !w.bike
+                        && self.in_park[n as usize]
+                        && self.in_park[e.to as usize]
+                })
+            };
+            let mut seen: HashSet<u32> = p.iter().copied().collect();
+            let mut todo: Vec<u32> = p.to_vec();
+            let mut out = vec![p[0], *p.last().unwrap()];
+            while let Some(n) = todo.pop() {
+                let mut deg = 0;
+                for e in named(n) {
+                    deg += 1;
+                    if seen.insert(e.to) {
+                        todo.push(e.to);
+                    }
+                }
+                if deg == 1 && !out.contains(&n) {
+                    out.push(n);
+                }
+            }
+            out
+        };
         let entries: Vec<Vec<u32>> = pieces
             .iter()
-            .map(|(_, p, _, l)| {
+            .map(|(name, p, _, l)| {
                 if *l {
                     p.clone()
                 } else {
-                    vec![p[0], *p.last().unwrap()]
+                    dead_ends(name, p)
                 }
             })
             .collect();
