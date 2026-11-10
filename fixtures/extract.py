@@ -21,9 +21,10 @@ import requests
 from pmtiles.tile import Compression, deserialize_directory, deserialize_header, find_tile, zxy_to_tileid
 from pmtiles.writer import Writer
 
-LAYERS = ['ways', 'land', 'water', 'parks', 'peaks', 'pois', 'trailareas', 'hikingroutes']
-# Layers a build may not have yet: skipped if missing.
-OPTIONAL = {'trailareas', 'hikingroutes'}
+LAYERS = ['ways', 'land', 'water', 'parks', 'peaks', 'pois', 'trailareas', 'hikingroutes', 'buildings']
+# Layers a build may not have yet: skipped if missing. buildings: parking
+# lots' outlines, which join a trail ending on one to the lot's roads.
+OPTIONAL = {'trailareas', 'hikingroutes', 'buildings'}
 GAP = 1 << 20
 session = requests.Session()
 
