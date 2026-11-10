@@ -27,7 +27,10 @@
 # rest: the same hike must start within `trace_start_m` (default 150) of it,
 # so a hike from the wrong lot that walks over to the trail fails however
 # much of the trace it covers (routes#102). `"trace_start_m": null` turns
-# this off, for a trace that doesn't begin at a trailhead. With a trace,
+# this off, for a trace that doesn't begin at a trailhead. Its last point is
+# where the hike ends, likewise: the same hike must end within
+# `trace_end_m` (default 150) of it (`null`: unchecked). A loop's trace ends
+# where it starts; Killarney's La Cloche Silhouette ends 770 m from its start. With a trace,
 # the length also passes within TRACE_KM (0.85-1.4) times the trace's own
 # length: the trace says which hike is meant better than a park's rounded
 # figure (Granite Ridge: the park says 2 km, the trail as drawn 2.5). A
@@ -58,7 +61,7 @@ from functools import lru_cache
 from expectations import load, norm
 
 WALKS = 0.7
-TRACE_WITHIN_M, TRACE_COVER, TRACE_START_M = 50, 0.7, 150
+TRACE_WITHIN_M, TRACE_COVER, TRACE_START_M, TRACE_END_M = 50, 0.7, 150, 150
 TRACE_KM = (0.85, 1.4)
 
 args = sys.argv[1:]
@@ -190,22 +193,37 @@ def start_off(trace, r):
     return metres(trace[0], line[0]) if line else math.inf
 
 
+def end_off(trace, r):
+    """How far route r ends (its line's last point) from the trace's last."""
+    line = r['route'].get('line') or []
+    return metres(trace[-1], line[-1]) if line else math.inf
+
+
 def check_trace(e, rs, named, sized, problems):
-    """The follows and start checks, as {'start': ..., 'follows': ...}
-    ('start' left out where the entry turns it off)."""
+    """The start, end and follows checks, as {'start': ..., 'end': ...,
+    'follows': ...} ('start' or 'end' left out where the entry turns it
+    off)."""
     within, need = e.get('trace_within_m', TRACE_WITHIN_M), e.get('trace_cover', TRACE_COVER)
     start_m = e.get('trace_start_m', TRACE_START_M)
+    end_m = e.get('trace_end_m', TRACE_END_M)
     got = [(cover(e['trace'], r, within), r) for r in (sized or named)]
-    checks = {'follows': any(c >= need for c, _ in got)}
-    if start_m is not None:
-        # The same hike must start at the trailhead and follow the trace:
-        # the ones that follow it, if any do, else any under the name.
-        pool = [r for c, r in got if c >= need] or [r for _, r in got]
-        off = min((start_off(e['trace'], r) for r in pool), default=None)
-        checks = {'start': None if off is None else off <= start_m} | checks
-        if checks['start'] is False:
-            problems.append(f"the named hike starts {off:.0f} m from the trace's trailhead"
-                            f" (its first point; needs {start_m} m)")
+    follows = any(c >= need for c, _ in got)
+    checks = {}
+    # The same hike must start and end where the trace does, and follow it:
+    # of the ones that follow it (if any do, else any under the name), the
+    # one that fails fewest of the two, then is nearest.
+    pool = [r for c, r in got if c >= need] or [r for _, r in got]
+    ends = [(start_off(e['trace'], r), end_off(e['trace'], r)) for r in pool]
+    lim = (math.inf if start_m is None else start_m, math.inf if end_m is None else end_m)
+    best = min(ends, key=lambda o: ((o[0] > lim[0]) + (o[1] > lim[1]), o[0] + o[1]), default=None)
+    for k, i, m, what in (('start', 0, start_m, "starts {off:.0f} m from the trace's trailhead (its first point"),
+                          ('end', 1, end_m, "ends {off:.0f} m from where the trace ends (its last point")):
+        if m is None:
+            continue
+        checks[k] = None if best is None else best[i] <= m
+        if checks[k] is False:
+            problems.append("the named hike " + what.format(off=best[i]) + f"; needs {m} m)")
+    checks['follows'] = follows
     if checks['follows'] or not rs:
         return checks
     # What does follow it, under any name: the clue to what went wrong.
