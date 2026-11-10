@@ -1432,13 +1432,43 @@ impl<'a> Ctx<'a> {
         if pieces.is_empty() {
             return vec![];
         }
-        // The nearest trailhead to each piece: to any node of a loop, to
-        // either end of a line.
+        // The nearest trailhead to each piece: to any node of a loop or of a
+        // trail that forks, all of it (trail_tour walks it whole from
+        // anywhere on it),
+        // to either end of a plain line. Algonquin's Two Rivers Trail forks,
+        // its trailhead part way along: joined at the end of its longest
+        // line, the loop was walked from there and back (3.4 km to 2.2,
+        // routes#133).
+        let forks = |name: &str, p: &[u32]| {
+            p.iter().any(|&n| {
+                g.adj[n as usize]
+                    .iter()
+                    .filter(|e| g.ways[e.way as usize].name == name)
+                    .count()
+                    > 2
+            })
+        };
+        // All of a forked trail's nodes: its longest line, and what branches
+        // off it under the same name (the line can miss the trailhead's end).
+        let whole = |name: &str, p: &[u32]| {
+            let mut seen: HashSet<u32> = p.iter().copied().collect();
+            let mut todo: Vec<u32> = p.to_vec();
+            while let Some(n) = todo.pop() {
+                for e in &g.adj[n as usize] {
+                    if g.ways[e.way as usize].name == name && seen.insert(e.to) {
+                        todo.push(e.to);
+                    }
+                }
+            }
+            seen.into_iter().collect::<Vec<u32>>()
+        };
         let entries: Vec<Vec<u32>> = pieces
             .iter()
-            .map(|(_, p, _, l)| {
+            .map(|(name, p, _, l)| {
                 if *l {
                     p.clone()
+                } else if forks(name, p) {
+                    whole(name, p)
                 } else {
                     vec![p[0], *p.last().unwrap()]
                 }
