@@ -813,6 +813,10 @@ pub struct Start {
 /// A line's nodes in order, and the ways between them.
 type Line = (Vec<u32>, Vec<u32>);
 
+/// How far outside the park a destination may be on a trail named for it
+/// that's partly in the park (see Ctx::targets).
+const TRAIL_DEST_M: f64 = 3000.0;
+
 /// How far apart a trail's pieces may be (by search cost: roads count
 /// extra) to be chained end to end by chain_pieces. A long trail's name can
 /// lapse for a few km where it shares another trail's ways: Killarney's La
@@ -1568,11 +1572,44 @@ impl<'a> Ctx<'a> {
 }
 
 impl<'a> Ctx<'a> {
-    /// Destinations, each with the network nodes it can be reached from.
+    /// Destinations, each with the network nodes it can be reached from:
+    /// within park_m of the park, or within TRAIL_DEST_M on a named trail
+    /// that's partly in the park and named for it (a summit's own trail from
+    /// a park trailhead: Castle's Table Mountain Trail to Table Mountain, 1.6
+    /// km outside the park, routes#130). Not any destination on a park's
+    /// trail: Pinkham Notch's trails to Mount Washington and the like took
+    /// the place of the area's own known hikes.
     pub fn targets(&self, park_m: f64) -> Vec<(usize, Vec<u32>)> {
+        let g = &self.area.graph;
+        // Named trails with an edge in the park.
+        let mut in_park: HashSet<&str> = HashSet::default();
+        for (u, adj) in g.adj.iter().enumerate() {
+            for e in adj {
+                let w = &g.ways[e.way as usize];
+                if w.class == Class::Trail
+                    && !w.name.is_empty()
+                    && self.in_park[u]
+                    && self.in_park[e.to as usize]
+                {
+                    in_park.insert(w.name.as_str());
+                }
+            }
+        }
+        let on_own_park_trail = |pt: P, dest: &str| {
+            self.nearest(pt, 150.0).is_some_and(|n| {
+                g.adj[n as usize].iter().any(|e| {
+                    let t = g.ways[e.way as usize].name.as_str();
+                    in_park.contains(t) && named_for(t, dest)
+                })
+            })
+        };
         let mut out = vec![];
         for (i, d) in self.dests.iter().enumerate() {
-            if self.area.park_dist(d.pt, park_m).is_none() && d.lake.is_none() {
+            if self.area.park_dist(d.pt, park_m).is_none()
+                && d.lake.is_none()
+                && !(self.area.park_dist(d.pt, TRAIL_DEST_M).is_some()
+                    && on_own_park_trail(d.pt, &d.name))
+            {
                 continue;
             }
             if let Some(id) = d.lake {
