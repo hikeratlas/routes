@@ -1210,6 +1210,14 @@ impl<'a> Ctx<'a> {
                     i += 1;
                 }
                 let branched = comp.iter().any(|n| nbrs[n].len() > 2);
+                // All of the piece's trail, each edge once: a forked trail's
+                // longest line can be half of it (Algonquin's lollipops:
+                // Hardwood Lookout's 1.0 km is a 532 m line, routes#134).
+                let total: f64 = comp
+                    .iter()
+                    .flat_map(|&u| nbrs[&u].iter().filter(move |&&(v, _)| u < v).map(move |&(v, _)| (u, v)))
+                    .map(|(u, v)| metres(g.pts[u as usize], g.pts[v as usize]))
+                    .sum();
                 let ends: Vec<u32> = comp
                     .iter()
                     .copied()
@@ -1294,7 +1302,10 @@ impl<'a> Ctx<'a> {
                     .windows(2)
                     .map(|p| metres(g.pts[p[0] as usize], g.pts[p[1] as usize]))
                     .sum();
-                if (min_m..=max_m).contains(&m) {
+                // A forked trail is long enough by all of it: its longest line
+                // stands for it, and named_trails walks it whole (trail_tour).
+                let long_enough = if branched { total >= min_m } else { m >= min_m };
+                if long_enough && m <= max_m {
                     pieces.push((name, path, ways, is_loop));
                 }
             }
@@ -1920,6 +1931,10 @@ fn named_for(start: &str, trail: &str) -> bool {
     !d.is_empty() && (f == d || f.strip_prefix(&d).is_some_and(|rest| rest.starts_with(' ')))
 }
 
+/// Room for starts' own trails beyond the day-hike budget, as a share of it
+/// (see select).
+const OWN_EXTRA: f64 = 1.0;
+
 /// Score added to a multi-day loop from a trailhead named for the trail it
 /// mostly walks (see the loops in curate): a tie-break between trailheads on
 /// the same loop, small against the road penalty (2.5 x road share).
@@ -1968,11 +1983,14 @@ pub fn select(cands: &[Cand], n: usize, by_start: bool) -> Vec<Cand> {
         // the 22 km to Threenarrows Lake (#102). Not instead of it: routes
         // names many starts for the trail they meet ("Paget North Ridge
         // Route trailhead", for Paget Peak), and a trail the best hike walks
-        // adds nothing new.
+        // adds nothing new. Up to OWN_EXTRA x n more than n: in a big park
+        // each start's best hike fills n, and the park's own short trails
+        // got no room (Algonquin's Highway 60 trails, routes#133).
+        let own_n = n + (n as f64 * OWN_EXTRA).round() as usize;
         let mut own: Vec<&Cand> = cands.iter().filter(|c| own_trail(c)).collect();
         own.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
         for c in own {
-            if chosen.len() < n
+            if chosen.len() < own_n
                 && novelty(c, &covered) > 0.5
                 && chosen.iter().all(|o| o.dest != c.dest)
             {
