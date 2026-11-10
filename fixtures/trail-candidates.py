@@ -63,8 +63,11 @@ for t in lst:
         # "Crack" for "The Crack Trail", "Lake of the Woods" for
         # "Lake of The Woods Loop": a name containing the other, else the
         # closest by spelling.
-        near = [n for n in have if k and (n in k or k in n)]
-        near = near or difflib.get_close_matches(k, list(have), n=1, cutoff=0.75)
+        # Never an OSM name that normalizes to nothing ("Trail"): '' is in
+        # every name, so it matched dozens of parks' trails (routes#95).
+        named = [n for n in have if n]
+        near = [n for n in named if k and (n in k or k in n)]
+        near = near or difflib.get_close_matches(k, named, n=1, cutoff=0.75)
         if near:
             match, fuzzy = have[min(near, key=lambda n: abs(len(n) - len(k)))], True
     if match is None:
