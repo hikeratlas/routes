@@ -132,5 +132,17 @@
       -114.25,
       49.568
     ]
+  },
+  {
+    "key": "garibaldi",
+    "id": "2226817",
+    "park": "Garibaldi Provincial Park",
+    "why": "quality: park-listed trails as named regressions (routes#95)",
+    "bbox": [
+      -123.16,
+      49.716,
+      -122.355,
+      50.253
+    ]
   }
 ]
