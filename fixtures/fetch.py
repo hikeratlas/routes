@@ -42,13 +42,13 @@ def current(d, bbox):
 
 def snapshot(out):
     """Download and unpack the latest snapshot into out/, unless it's there."""
-    latest = requests.get(LATEST, timeout=60).json()
+    latest = extract.retried(lambda: requests.get(LATEST, timeout=60)).json()
     marker = os.path.join(out, '.snapshot')
     if os.path.exists(marker) and open(marker).read().strip() == str(latest['id']):
         print(f"snapshot {latest['id']} already in {out}")
         return
     print(f"downloading snapshot {latest['id']} (built {latest.get('built')})", flush=True)
-    r = requests.get(latest['url'], timeout=600)
+    r = extract.retried(lambda: requests.get(latest['url'], timeout=600))
     r.raise_for_status()
     with tarfile.open(fileobj=io.BytesIO(r.content), mode='r:gz') as tar:
         members = []
@@ -95,7 +95,7 @@ def main():
         os.makedirs(d)
         for layer in extract.LAYERS:
             url = f'{layers}/{layer}.pmtiles'
-            if layer in extract.OPTIONAL and requests.head(url, timeout=60).status_code == 404:
+            if layer in extract.OPTIONAL and not extract.exists(url):
                 continue
             n, spans, size = extract.extract(url, p['bbox'], os.path.join(d, f'{layer}.pmtiles'))
             print(f"  {p['key']}/{layer}: {n} tiles, {size / 1e6:.1f} MB", flush=True)

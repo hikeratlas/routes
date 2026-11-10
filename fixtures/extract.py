@@ -35,6 +35,26 @@ class Changed(Exception):
 etags = {}  # url -> the ETag of the version we started reading
 
 
+def retried(f, tries=6):
+    """f(), retried with backoff (1, 2, 4, 8, 16 s) on a connection error, a
+    timeout or a 5xx: a build's fixtures job failed on one dropped HEAD."""
+    for attempt in range(tries):
+        try:
+            r = f()
+            if r.status_code < 500:
+                return r
+            r.raise_for_status()
+        except (requests.ConnectionError, requests.Timeout, requests.HTTPError):
+            if attempt == tries - 1:
+                raise
+        time.sleep(2 ** attempt)
+
+
+def exists(url):
+    """Whether the build has the archive at url (a HEAD that isn't 404)."""
+    return retried(lambda: session.head(url, timeout=60)).status_code != 404
+
+
 def fetch(url, offset, length):
     """Bytes [offset, offset+length) of the archive's version we first read:
     with If-Match, a replaced file answers 412 instead of mixing versions."""
@@ -141,7 +161,7 @@ def main():
     def run(job):
         p, layer = job
         t = time.time()
-        if layer in OPTIONAL and requests.head(f'{base}/{layer}.pmtiles', timeout=60).status_code == 404:
+        if layer in OPTIONAL and not exists(f'{base}/{layer}.pmtiles'):
             return f"{p['key']}/{layer}: none in this build, skipped"
         n, spans, size = extract(f'{base}/{layer}.pmtiles', p['bbox'], os.path.join(out_dir, p['key'], f'{layer}.pmtiles'))
         return f"{p['key']}/{layer}: {n} tiles in {spans} ranges, {size / 1e6:.1f} MB, {time.time() - t:.0f}s"
