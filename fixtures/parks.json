@@ -156,5 +156,17 @@
       -77.478,
       46.173
     ]
+  },
+  {
+    "key": "barachois-pond",
+    "id": "154413349",
+    "park": "Barachois Pond Provincial Park",
+    "why": "quality: park-listed trails as named regressions (routes#95)",
+    "bbox": [
+      -58.345,
+      48.44,
+      -58.184,
+      48.513
+    ]
   }
 ]
