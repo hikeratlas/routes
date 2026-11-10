@@ -813,8 +813,8 @@ pub struct Start {
 /// A line's nodes in order, and the ways between them.
 type Line = (Vec<u32>, Vec<u32>);
 
-/// How far outside the park a destination on a named trail that's partly
-/// in the park may be (see Ctx::targets).
+/// How far outside the park a destination may be on a trail named for it
+/// that's partly in the park (see Ctx::targets).
 const TRAIL_DEST_M: f64 = 3000.0;
 
 /// How far apart a trail's pieces may be (by search cost: roads count
@@ -1574,8 +1574,11 @@ impl<'a> Ctx<'a> {
 impl<'a> Ctx<'a> {
     /// Destinations, each with the network nodes it can be reached from:
     /// within park_m of the park, or within TRAIL_DEST_M on a named trail
-    /// that's partly in the park (a summit trail from a park trailhead:
-    /// Castle's Table Mountain, 1.6 km outside the park, routes#130).
+    /// that's partly in the park and named for it (a summit's own trail from
+    /// a park trailhead: Castle's Table Mountain Trail to Table Mountain, 1.6
+    /// km outside the park, routes#130). Not any destination on a park's
+    /// trail: Pinkham Notch's trails to Mount Washington and the like took
+    /// the place of the area's own known hikes.
     pub fn targets(&self, park_m: f64) -> Vec<(usize, Vec<u32>)> {
         let g = &self.area.graph;
         // Named trails with an edge in the park.
@@ -1592,18 +1595,20 @@ impl<'a> Ctx<'a> {
                 }
             }
         }
-        let on_park_trail = |pt: P| {
+        let on_own_park_trail = |pt: P, dest: &str| {
             self.nearest(pt, 150.0).is_some_and(|n| {
-                g.adj[n as usize]
-                    .iter()
-                    .any(|e| in_park.contains(g.ways[e.way as usize].name.as_str()))
+                g.adj[n as usize].iter().any(|e| {
+                    let t = g.ways[e.way as usize].name.as_str();
+                    in_park.contains(t) && named_for(t, dest)
+                })
             })
         };
         let mut out = vec![];
         for (i, d) in self.dests.iter().enumerate() {
             if self.area.park_dist(d.pt, park_m).is_none()
                 && d.lake.is_none()
-                && !(self.area.park_dist(d.pt, TRAIL_DEST_M).is_some() && on_park_trail(d.pt))
+                && !(self.area.park_dist(d.pt, TRAIL_DEST_M).is_some()
+                    && on_own_park_trail(d.pt, &d.name))
             {
                 continue;
             }
