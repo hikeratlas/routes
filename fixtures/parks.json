@@ -144,5 +144,17 @@
       -122.355,
       50.253
     ]
+  },
+  {
+    "key": "algonquin",
+    "id": "910784",
+    "park": "Algonquin Provincial Park",
+    "why": "quality: park-listed trails as named regressions (routes#95)",
+    "bbox": [
+      -79.18,
+      45.141,
+      -77.478,
+      46.173
+    ]
   }
 ]
