@@ -1146,6 +1146,9 @@ const TOUR_LIMIT_M: f64 = 15000.0;
 const TOUR_GAIN: f64 = 1.1;
 /// ...or when it's a loop where the piece is a line, walking this much of it.
 const TOUR_KEEP: f64 = 0.95;
+/// How much of a trail a tour from where the way in reaches it must walk, of
+/// what the tour from the piece's entry walks, to start there instead.
+const TOUR_REACH_KEEP: f64 = 0.95;
 
 impl<'a> Ctx<'a> {
     /// Named trails as hikes in themselves: a trail with a name, in the park,
@@ -1481,16 +1484,40 @@ impl<'a> Ctx<'a> {
                 .windows(2)
                 .map(|w| metres(g.pts[w[0] as usize], g.pts[w[1] as usize]))
                 .sum();
-            if let Some((tour, tour_w, is_loop_tour, covered)) = self.trail_tour(name, entry) {
+            // The tour starts where the way in first reaches the trail, if it
+            // walks as much of the trail from there: a trailhead on a trail's
+            // stick, with the piece's line ending part way round its loop,
+            // would otherwise walk the stick and half the loop to start there
+            // (Algonquin's Two Rivers Trail, 3.4 km for 2.1, routes#133). From
+            // part way along a line, the tour would walk only one side of it.
+            let reach = {
+                let (p, _) = sr.path(entry);
+                p.into_iter()
+                    .find(|&n| {
+                        g.adj[n as usize].iter().any(|e| g.ways[e.way as usize].name == *name)
+                    })
+                    .unwrap_or(entry)
+            };
+            let from_entry = self.trail_tour(name, entry);
+            let (entry_at, tour) = match (reach != entry)
+                .then(|| self.trail_tour(name, reach))
+                .flatten()
+            {
+                Some(t) if from_entry.as_ref().is_none_or(|e| t.3 >= e.3 * TOUR_REACH_KEEP) => {
+                    (reach, Some(t))
+                }
+                _ => (entry, from_entry),
+            };
+            if let Some((tour, tour_w, is_loop_tour, covered)) = tour {
                 // More of the trail, or as much as a loop where the piece is a
                 // line (Cranberry Bog Trail, closed by 261 m of another trail).
                 if covered > piece_m * TOUR_GAIN
                     || (is_loop_tour && !*is_loop && covered >= piece_m * TOUR_KEEP)
                 {
-                    let (mut full, mut fw) = sr.path(entry);
+                    let (mut full, mut fw) = sr.path(entry_at);
                     full.extend(tour.iter().skip(1));
                     fw.extend(tour_w.iter());
-                    let (back, bw) = sr.path(entry);
+                    let (back, bw) = sr.path(entry_at);
                     full.extend(back.iter().rev().skip(1));
                     fw.extend(bw.iter().rev());
                     let far = g.pts[tour[tour.len() / 2] as usize];

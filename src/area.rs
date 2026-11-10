@@ -515,7 +515,20 @@ impl Graph {
                         g.pts.len() as u32 - 1
                     });
                     if let Some(a) = prev {
-                        if a != i {
+                        // Tiles repeat what crosses their edges, so the same
+                        // segment can come from two tiles: keep one, or each
+                        // end looks like a fork (Algonquin's Two Rivers
+                        // Trail, routes#133).
+                        let dup = g.adj[a as usize].iter().any(|e| {
+                            let w = &g.ways[e.way as usize];
+                            e.to == i
+                                && w.name == way.name
+                                && w.class == way.class
+                                && w.bike == bike
+                                && w.walk == way.walk
+                                && w.sac == way.sac
+                        });
+                        if a != i && !dup {
                             let m = metres(g.pts[a as usize], p) as f32;
                             g.adj[a as usize].push(Edge {
                                 to: i,
