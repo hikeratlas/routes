@@ -69,21 +69,16 @@ checks the hike's own line, so it needs no `trails.jsonl` and works on
 basemap's builds too. When nothing under the name follows the trace, the
 report names the offered hikes that do.
 
-To find the hike that's meant, `routes --candidates` writes every day hike
-each park considered, `picked` or not, to `candidates.geojsonl` (one
-GeoJSON feature per line, with its park, trailhead, destination, km and
-score), for a trace picked from them:
+Traces are made on https://www.hikeratlas.com/dev/regressions (website#77):
+it shows each proposal (below) with the OSM trail of its name and the hikes
+routes offers near it; accept one, or draw the hike along the trails, and
+it commits the entry, with the hike simplified to at most 20 points as its
+`trace`, to a pull request here.
 
-    routes ... --park-id ID --candidates --trails --out /tmp/cands
-    fixtures/picker-data.py fixtures/expect/<file>.jsonl /tmp/cands TILES/<key> > picker.json
-
-`picker.json` is, for each of the file's `trail` entries, the candidates
-near the OSM trail of its name (by how much of it they walk), with the
-park's paths, roads and lakes from its tiles for a map. Open it in
-https://www.hikeratlas.com/dev/trace (website#76) to pick which candidate
-is meant, or draw the hike along the trails, then copy the picks;
-`fixtures/apply-picks.py picks.json` writes each as its entry's `trace`,
-simplified to at most 20 points.
+To see why routes doesn't offer a hike, `routes --candidates` writes every
+day hike each park considered, `picked` or not, to `candidates.geojsonl`
+(one GeoJSON feature per line, with its park, trailhead, destination, km
+and score).
 
 `proposals/` holds the trails parks list that aren't entries yet: one
 file per park, named as `expect/`'s are, one trail per line as the park
