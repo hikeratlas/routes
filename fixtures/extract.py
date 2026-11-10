@@ -37,14 +37,16 @@ etags = {}  # url -> the ETag of the version we started reading
 
 def retried(f, tries=6):
     """f(), retried with backoff (1, 2, 4, 8, 16 s) on a connection error, a
-    timeout or a 5xx: a build's fixtures job failed on one dropped HEAD."""
+    timeout, a body cut off part way (ChunkedEncodingError: the snapshot's
+    250 MB) or a 5xx: a build's fixtures job failed on one dropped HEAD."""
     for attempt in range(tries):
         try:
             r = f()
             if r.status_code < 500:
                 return r
             r.raise_for_status()
-        except (requests.ConnectionError, requests.Timeout, requests.HTTPError):
+        except (requests.ConnectionError, requests.Timeout, requests.ChunkedEncodingError,
+                requests.HTTPError):
             if attempt == tries - 1:
                 raise
         time.sleep(2 ** attempt)
