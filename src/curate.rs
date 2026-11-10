@@ -1433,48 +1433,14 @@ impl<'a> Ctx<'a> {
             return vec![];
         }
         // The nearest trailhead to each piece: to any node of a loop, to
-        // either end of a line, or to any dead end of a trail that forks.
-        // Where a trail crosses a tile edge, the tiles' copies of it make
-        // little side loops, so a forked trail's longest line can end part
-        // way round it, away from both its real ends: Algonquin's Two Rivers
-        // Trail, a lollipop whose stick meets its lot (3.4 km for 2.1,
-        // routes#133).
-        let dead_ends = |name: &str, p: &[u32]| {
-            // The piece's own edges, as named_pieces has them.
-            let named = |n: u32| {
-                g.adj[n as usize].iter().filter(move |e| {
-                    let w = &g.ways[e.way as usize];
-                    w.name == name
-                        && w.class == Class::Trail
-                        && !w.bike
-                        && self.in_park[n as usize]
-                        && self.in_park[e.to as usize]
-                })
-            };
-            let mut seen: HashSet<u32> = p.iter().copied().collect();
-            let mut todo: Vec<u32> = p.to_vec();
-            let mut out = vec![p[0], *p.last().unwrap()];
-            while let Some(n) = todo.pop() {
-                let mut deg = 0;
-                for e in named(n) {
-                    deg += 1;
-                    if seen.insert(e.to) {
-                        todo.push(e.to);
-                    }
-                }
-                if deg == 1 && !out.contains(&n) {
-                    out.push(n);
-                }
-            }
-            out
-        };
+        // either end of a line.
         let entries: Vec<Vec<u32>> = pieces
             .iter()
-            .map(|(name, p, _, l)| {
+            .map(|(_, p, _, l)| {
                 if *l {
                     p.clone()
                 } else {
-                    dead_ends(name, p)
+                    vec![p[0], *p.last().unwrap()]
                 }
             })
             .collect();
@@ -1515,16 +1481,29 @@ impl<'a> Ctx<'a> {
                 .windows(2)
                 .map(|w| metres(g.pts[w[0] as usize], g.pts[w[1] as usize]))
                 .sum();
-            if let Some((tour, tour_w, is_loop_tour, covered)) = self.trail_tour(name, entry) {
+            // The tour starts where the way in first reaches the trail: a
+            // trailhead on a trail's stick, with the piece's line ending part
+            // way round its loop, would otherwise walk the stick and half the
+            // loop to start there (Algonquin's Two Rivers Trail, 3.4 km for
+            // 2.1, routes#133).
+            let entry_at = {
+                let (p, _) = sr.path(entry);
+                p.into_iter()
+                    .find(|&n| {
+                        g.adj[n as usize].iter().any(|e| g.ways[e.way as usize].name == *name)
+                    })
+                    .unwrap_or(entry)
+            };
+            if let Some((tour, tour_w, is_loop_tour, covered)) = self.trail_tour(name, entry_at) {
                 // More of the trail, or as much as a loop where the piece is a
                 // line (Cranberry Bog Trail, closed by 261 m of another trail).
                 if covered > piece_m * TOUR_GAIN
                     || (is_loop_tour && !*is_loop && covered >= piece_m * TOUR_KEEP)
                 {
-                    let (mut full, mut fw) = sr.path(entry);
+                    let (mut full, mut fw) = sr.path(entry_at);
                     full.extend(tour.iter().skip(1));
                     fw.extend(tour_w.iter());
-                    let (back, bw) = sr.path(entry);
+                    let (back, bw) = sr.path(entry_at);
                     full.extend(back.iter().rev().skip(1));
                     fw.extend(bw.iter().rev());
                     let far = g.pts[tour[tour.len() / 2] as usize];
