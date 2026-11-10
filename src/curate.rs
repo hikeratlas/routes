@@ -813,6 +813,122 @@ pub struct Start {
 /// A line's nodes in order, and the ways between them.
 type Line = (Vec<u32>, Vec<u32>);
 
+/// How far apart a trail's pieces may be (by search cost: roads count
+/// extra) to be chained end to end by chain_pieces. A long trail's name can
+/// lapse for a few km where it shares another trail's ways: Killarney's La
+/// Cloche Silhouette is three pieces, two of them 2.3 km apart as the crow
+/// flies (over 3 km by search cost) where it follows The Crack's trail.
+const CHAIN_JOIN_M: f64 = 5000.0;
+/// Most pieces chain_pieces orders (k! x 2^k chains).
+const CHAIN_MAX_PIECES: usize = 5;
+
+/// A trail's pieces (2 to CHAIN_MAX_PIECES of them) as one line: all of
+/// them, in the order and directions whose gaps (each within CHAIN_JOIN_M)
+/// add up least, of those whose two ends reach different trailheads
+/// (`start_at`: a node's nearest trailhead). The trailheads say where the
+/// trip ends: La Cloche Silhouette is a loop but for the 770 m from George
+/// Lake to the Cranberry Bog lot, and joining its pieces by the nearest
+/// gaps closes that, leaving the line's ends in the backcountry (routes#129).
+/// None if there's no such chain (the greedy join then applies).
+fn chain_pieces(ctx: &Ctx, ps: &[Line], start_at: &mut dyn FnMut(u32) -> Option<u32>) -> Option<Line> {
+    let k = ps.len();
+    if !(2..=CHAIN_MAX_PIECES).contains(&k) {
+        return None;
+    }
+    // End e of piece i is node end(i, e): 0 its first, 1 its last.
+    let end = |i: usize, e: usize| if e == 0 { ps[i].0[0] } else { *ps[i].0.last().unwrap() };
+    // gaps[(i, e)][(j, f)]: metres from end (i, e) to end (j, f).
+    let mut gaps: HashMap<(usize, usize), HashMap<(usize, usize), f64>> = HashMap::default();
+    for i in 0..k {
+        for e in 0..2 {
+            let sr = ctx.search(end(i, e), CHAIN_JOIN_M, None);
+            for j in (0..k).filter(|&j| j != i) {
+                for f in 0..2 {
+                    if let Some(m) = sr.reached(end(j, f)) {
+                        gaps.entry((i, e)).or_default().insert((j, f), m);
+                    }
+                }
+            }
+        }
+    }
+    // Chains as (pieces in order, each reversed or not); a chain and its
+    // reverse are the same line, both tried.
+    let mut best: Option<(f64, Vec<(usize, bool)>)> = None;
+    let mut order: Vec<(usize, bool)> = vec![];
+    fn walk(
+        k: usize,
+        order: &mut Vec<(usize, bool)>,
+        gap: f64,
+        gaps: &HashMap<(usize, usize), HashMap<(usize, usize), f64>>,
+        done: &mut dyn FnMut(&[(usize, bool)], f64),
+    ) {
+        if order.len() == k {
+            done(order, gap);
+            return;
+        }
+        for i in 0..k {
+            if order.iter().any(|&(j, _)| j == i) {
+                continue;
+            }
+            for rev in [false, true] {
+                // Into piece i at its end 0 (forward) or 1 (reversed), from
+                // the previous piece's exit.
+                let add = match order.last() {
+                    None => 0.0,
+                    Some(&(j, jrev)) => {
+                        let exit = (j, if jrev { 0 } else { 1 });
+                        let entry = (i, if rev { 1 } else { 0 });
+                        match gaps.get(&exit).and_then(|m| m.get(&entry)) {
+                            Some(&m) => m,
+                            None => continue,
+                        }
+                    }
+                };
+                order.push((i, rev));
+                walk(k, order, gap + add, gaps, done);
+                order.pop();
+            }
+        }
+    }
+    let mut ends_ok: HashMap<(u32, u32), bool> = HashMap::default();
+    walk(k, &mut order, 0.0, &gaps, &mut |o, gap| {
+        if best.as_ref().is_some_and(|b| b.0 <= gap) {
+            return;
+        }
+        let (f, l) = (o[0], o[k - 1]);
+        let a = end(f.0, if f.1 { 1 } else { 0 });
+        let b = end(l.0, if l.1 { 0 } else { 1 });
+        let ok = *ends_ok.entry((a, b)).or_insert_with(|| {
+            matches!((start_at(a), start_at(b)), (Some(x), Some(y)) if x != y)
+        });
+        if ok {
+            best = Some((gap, o.to_vec()));
+        }
+    });
+    let (_, o) = best?;
+    // The line: each piece in its direction, joined by the shortest way
+    // between them.
+    let (mut path, mut ways): Line = (vec![], vec![]);
+    for (n, &(i, rev)) in o.iter().enumerate() {
+        let (mut p, mut w) = ps[i].clone();
+        if rev {
+            p.reverse();
+            w.reverse();
+        }
+        if n > 0 {
+            let sr = ctx.search(*path.last().unwrap(), CHAIN_JOIN_M, None);
+            let (gp, gw) = sr.path(p[0]);
+            path.extend(gp.iter().skip(1));
+            ways.extend(gw);
+            path.extend(p.iter().skip(1));
+        } else {
+            path.extend(p.iter());
+        }
+        ways.extend(w);
+    }
+    Some((path, ways))
+}
+
 fn named_throughs(ctx: &Ctx, starts: &[Start]) -> Vec<Through> {
     let g = &ctx.area.graph;
     // The trailhead nearest a node, within NAMED_ACCESS_M: the path from
@@ -839,7 +955,17 @@ fn named_throughs(ctx: &Ctx, starts: &[Start]) -> Vec<Through> {
         }
     }
     let mut lines: Vec<(&str, Line)> = vec![];
+    // Each piece end's nearest trailhead (its node), for chain_pieces.
+    let mut start_at: HashMap<u32, Option<u32>> = HashMap::default();
     for (trail, mut ps) in by_name {
+        if let Some(line) = chain_pieces(ctx, &ps, &mut |n| {
+            *start_at
+                .entry(n)
+                .or_insert_with(|| nearest_start(n).map(|(s, _, _)| s.node))
+        }) {
+            lines.push((trail, line));
+            continue;
+        }
         // Join any two pieces with ends close together, until none are.
         'join: loop {
             for i in 0..ps.len() {
