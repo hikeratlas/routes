@@ -254,6 +254,8 @@ pub struct Cand {
     pub parts: Vec<(&'static str, f64)>,
     pub edges: HashSet<u64>,
     pub ev: Eval,
+    /// The lift a one-way hike rides back down (routes#165); "" otherwise.
+    pub return_by: String,
 }
 
 /// Merge destinations that are the same place: same kind within 400 m with
@@ -1175,6 +1177,10 @@ const TOUR_LIMIT_M: f64 = 15000.0;
 /// Up to this much unnamed trail joins a trail's pieces for its tour (a
 /// footbridge without the trail's name).
 const TOUR_GAP_M: f64 = 30.0;
+/// How near a lift station a one-way hike must start and end (routes#165):
+/// the Grouse Grind's trailhead is beside the Skyride's base, and the trail
+/// ends at its top.
+const LIFT_NEAR_M: f64 = 400.0;
 const TOUR_GAIN: f64 = 1.1;
 /// ...or when it's a loop where the piece is a line, walking this much of it.
 const TOUR_KEEP: f64 = 0.95;
@@ -1518,6 +1524,73 @@ impl<'a> Ctx<'a> {
         Some((tour, tour_w, is_loop, covered))
     }
 
+    /// A line trail walked from its entry to its far end, if a lift runs
+    /// from near that end back to near the start, and the trail can be
+    /// walked that way (one-way trails, routes#163).
+    fn lift_hike(
+        &self,
+        s: &Start,
+        sr: &Search,
+        name: &str,
+        path: &[u32],
+        ways: &[u32],
+        entry: u32,
+    ) -> Option<Cand> {
+        let g = &self.area.graph;
+        let (tp, tw): (Vec<u32>, Vec<u32>) = if entry == path[0] {
+            (path.to_vec(), ways.to_vec())
+        } else if entry == *path.last()? {
+            (path.iter().rev().copied().collect(), ways.iter().rev().copied().collect())
+        } else {
+            return None;
+        };
+        let start = g.pts[s.node as usize];
+        let end = g.pts[*tp.last()? as usize];
+        let lift = self.area.lifts.iter().find(|l| {
+            (0..2).any(|i| {
+                metres(l.ends[i], end) <= LIFT_NEAR_M && metres(l.ends[1 - i], start) <= LIFT_NEAR_M
+            })
+        })?;
+        let (mut full, mut fw) = sr.path(entry);
+        full.extend(tp.iter().skip(1));
+        fw.extend(tw.iter());
+        let forward = full.windows(2).all(|w| {
+            g.adj[w[0] as usize].iter().any(|e| e.to == w[1] && e.cost.is_finite())
+        });
+        if !forward {
+            return None;
+        }
+        let ev = self.evaluate(&full, &fw, false);
+        let far = g.pts[tp[tp.len() / 2] as usize];
+        let d = Dest {
+            name: name.to_string(),
+            kind: Kind::Trail,
+            pt: far,
+            area: 0.0,
+            wikidata: String::new(),
+            osm_ids: vec![],
+            qrank: 1.0,
+            lake: None,
+            minor: false,
+        };
+        let (sc, parts) = score(&ev, &d, false);
+        Some(Cand {
+            from: s.name.clone(),
+            start,
+            dest: name.to_string(),
+            dest_kind: Kind::Trail,
+            dest_pt: far,
+            dest_osm_ids: vec![],
+            from_osm_id: s.osm_id.clone(),
+            return_by: lift.name.clone(),
+            kind: "one-way",
+            score: sc,
+            parts,
+            edges: edge_set(&full),
+            ev,
+        })
+    }
+
     pub fn named_trails(&self, starts: &[Start]) -> Vec<Cand> {
         let g = &self.area.graph;
         let pieces = self.named_pieces(NAMED_MIN_M, NAMED_MAX_M, true);
@@ -1575,6 +1648,15 @@ impl<'a> Ctx<'a> {
             let _ = m;
             let s = &starts[si];
             let sr = self.search_to(s.node, NAMED_ACCESS_M, None, entry);
+            // A trail up to a lift that comes back down near where the trail
+            // started: walked one way, returning by lift (routes#165). The
+            // Grouse Grind is up only, and its hikers ride the Skyride down.
+            if !*is_loop {
+                if let Some(c) = self.lift_hike(s, &sr, name, path, ways, entry) {
+                    out.push(c);
+                    continue;
+                }
+            }
             // The whole trail as a tour where that covers more of it than the
             // piece does: a loop with a spur (Chikanishing Trail), a loop
             // closed over a stretch of another trail (Cranberry Bog Trail, on
@@ -1641,6 +1723,7 @@ impl<'a> Ctx<'a> {
                         dest_pt: far,
                         dest_osm_ids: vec![],
                         from_osm_id: s.osm_id.clone(),
+                        return_by: String::new(),
                         kind: if is_loop_tour { "loop" } else { "out-and-back" },
                         score: sc,
                         parts,
@@ -1703,6 +1786,7 @@ impl<'a> Ctx<'a> {
                 dest_pt: far,
                 dest_osm_ids: vec![],
                 from_osm_id: s.osm_id.clone(),
+                return_by: String::new(),
                 kind: if *is_loop { "loop" } else { "out-and-back" },
                 score: sc,
                 parts,
@@ -1819,6 +1903,7 @@ impl<'a> Ctx<'a> {
                 dest_pt: g.pts[node as usize],
                 dest_osm_ids: d.osm_ids.clone(),
                 from_osm_id: String::new(), // set by the caller, which knows the start
+                return_by: String::new(),
                 kind,
                 score: sc,
                 parts,
@@ -3040,6 +3125,9 @@ pub fn cand_json(c: &Cand) -> Value {
     if !c.from_osm_id.is_empty() {
         j["from_osm_id"] = json!(c.from_osm_id);
     }
+    if !c.return_by.is_empty() {
+        j["return_by"] = json!(c.return_by);
+    }
     j
 }
 
@@ -3096,7 +3184,7 @@ mod tests {
         };
         let c = |from: &str, dest: &str, k: Kind| Cand {
             from: from.into(), start: (0.0, 0.0), dest: dest.into(), dest_kind: k,
-            dest_pt: (0.0, 0.0), dest_osm_ids: vec![], from_osm_id: String::new(),
+            dest_pt: (0.0, 0.0), dest_osm_ids: vec![], from_osm_id: String::new(), return_by: String::new(),
             kind: "loop", score: 0.0, parts: vec![],
             edges: HashSet::default(), ev: ev.clone(),
         };
