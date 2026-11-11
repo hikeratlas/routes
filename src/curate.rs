@@ -1982,9 +1982,74 @@ impl<'a> Ctx<'a> {
                 known: false,
             });
         }
+        // Where a trail leaves a lodge's or visitor centre's driveways in the
+        // park: somewhere a car can get to, though no lot is mapped there.
+        // Mt Norquay's day lodge, 550 m from the ski area's lots, is where
+        // the trail to Cascade Amphitheatre starts (routes#156). The trail
+        // may meet them by a short track (the lodge's gravel tracks). Kept
+        // LOT_EXIT_SEP_M from every other start, not 1 km: the lot's own
+        // start already stands for a trail leaving its aisles.
+        if !trail_area {
+            let mut dist: HashMap<u32, f64> = HashMap::default();
+            let mut pq = BinaryHeap::new();
+            for (n, adj) in g.adj.iter().enumerate() {
+                if adj.iter().any(|e| g.ways[e.way as usize].lot) {
+                    dist.insert(n as u32, 0.0);
+                    pq.push(Q::new(0.0, n as u32));
+                }
+            }
+            while let Some(q) = pq.pop() {
+                let (d, u) = (q.key(), q.1);
+                if d > dist[&u] {
+                    continue;
+                }
+                for e in &g.adj[u as usize] {
+                    if !matches!(g.ways[e.way as usize].class, Class::Road | Class::Track) {
+                        continue;
+                    }
+                    let nd = d + e.m as f64;
+                    if nd <= LOT_EXIT_M && nd < *dist.get(&e.to).unwrap_or(&f64::MAX) {
+                        dist.insert(e.to, nd);
+                        pq.push(Q::new(nd, e.to));
+                    }
+                }
+            }
+            let mut exits: Vec<(f64, u32)> = dist
+                .into_iter()
+                .filter(|&(n, _)| {
+                    g.adj[n as usize].iter().any(is_trail)
+                        && self.area.park_dist(g.pts[n as usize], 0.0) == Some(0.0)
+                })
+                .map(|(n, d)| (d, n))
+                .collect();
+            exits.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            for (_, n) in exits {
+                let pt = g.pts[n as usize];
+                if merged.iter().any(|m| metres(m.pt, pt) < LOT_EXIT_SEP_M) {
+                    continue;
+                }
+                let name = match self.trail_name_near(n) {
+                    Some(t) if !t.starts_with("Parking off ") => t,
+                    _ => "Trail access".into(),
+                };
+                merged.push(Start {
+                    name,
+                    node: n,
+                    pt,
+                    trailhead: false,
+                    osm_id: String::new(),
+                    known: false,
+                });
+            }
+        }
         merged
     }
 }
+
+/// A trail leaving driveways or a lot's aisles, or a track this short from
+/// them, is a start where no other start is LOT_EXIT_SEP_M away (routes#156).
+const LOT_EXIT_M: f64 = 150.0;
+const LOT_EXIT_SEP_M: f64 = 300.0;
 
 /// How far outside the park a lot mapped only by its aisles may be.
 const AISLE_REACH_M: f64 = 500.0;

@@ -22,6 +22,9 @@ pub struct Way {
     pub walk: bool, // foot=designated, or on a hiking route relation
     /// SAC hiking grade, T1-T6 as 1-6 (the basemap's sac); 0 if ungraded.
     pub sac: u8,
+    /// A driveway or a lot's aisle (the basemap's service=driveway or
+    /// parking_aisle): part of somewhere to leave a car (routes#156).
+    pub lot: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -296,6 +299,8 @@ fn read_tile(
                                     && foot != "yes"
                                     && kind != "footway"));
                         let aisle = class == Class::Road && flag("parking_aisle");
+                        let lot = class == Class::Road
+                            && (aisle || matches!(l.str(f, "service"), "driveway" | "parking_aisle"));
                         for line in f.geometry() {
                             let pts: Vec<P> =
                                 line.into_iter().map(|(x, y)| s(x, y, l.extent)).collect();
@@ -315,6 +320,7 @@ fn read_tile(
                                     bike,
                                     walk,
                                     sac,
+                                    lot,
                                 },
                                 pts,
                             ));
@@ -521,6 +527,7 @@ impl Graph {
                     bike,
                     walk: way.walk,
                     sac: way.sac,
+                    lot: way.lot,
                 });
                 let factor = match way.class {
                     Class::Trail => 1.0,
@@ -582,6 +589,7 @@ impl Graph {
             bike: false,
             walk: false,
             sac: 0,
+            lot: false,
         });
         let mut buckets: HashMap<(i64, i64), Vec<u32>> = HashMap::new();
         for &i in &edge_nodes {
@@ -648,6 +656,7 @@ impl Graph {
             bike: false,
             walk: false,
             sac: 0,
+            lot: false,
         });
         let mut add = vec![];
         for lot in lots {
