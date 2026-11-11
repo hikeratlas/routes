@@ -2219,6 +2219,67 @@ pub fn select(cands: &[Cand], n: usize, by_start: bool) -> Vec<Cand> {
     chosen
 }
 
+/// A named trail that's a trail people walk, not a scramble or climbing
+/// route ("Mount Ishbel Route", SAC T4 and up).
+fn real_trail(c: &Cand) -> bool {
+    let lower = c.dest.to_lowercase();
+    c.ev.max_sac <= REAL_TRAIL_MAX_SAC && !lower.split(|ch: char| !ch.is_alphanumeric()).any(|w| w == "route")
+}
+
+/// Every real named trail is offered, beyond the day-hike budget: the
+/// budget is for choosing among destinations, and a park's own trails are
+/// what its visitors look for. Banff's Fenland Trail, Bow Valley's Middle
+/// Lake trail (#157). A trail counts as offered when the hikes chosen walk
+/// REAL_TRAIL_COVER of it. Otherwise its own hike is added, or the hike
+/// that stood for it (a destination hike from the same start that walks
+/// most of it: Boom Lake, for Boom Lake Trail), up to REAL_TRAILS_MAX more.
+fn real_trails(day: &mut Vec<Cand>, cands: &[Cand], trails: &[Cand]) {
+    let mut best: HashMap<&str, &Cand> = HashMap::default();
+    for t in trails.iter().filter(|t| real_trail(t)) {
+        if best.get(t.dest.as_str()).is_none_or(|b| t.score > b.score) {
+            best.insert(&t.dest, t);
+        }
+    }
+    let mut todo: Vec<&Cand> = best.into_values().collect();
+    todo.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap().then(a.dest.cmp(&b.dest)));
+    let mut covered: HashSet<u64> = day.iter().flat_map(|c| c.edges.iter().copied()).collect();
+    let mut added = 0;
+    for t in todo {
+        if added >= REAL_TRAILS_MAX {
+            break;
+        }
+        let walked = t.edges.intersection(&covered).count() as f64;
+        if walked >= REAL_TRAIL_COVER * t.edges.len().max(1) as f64 {
+            continue;
+        }
+        // The trail's own hike, if it's a candidate, else the one that
+        // stood for it.
+        let pick = cands
+            .iter()
+            .filter(|c| {
+                c.from == t.from && {
+                    let shared = t.edges.intersection(&c.edges).count() as f64;
+                    shared >= 0.7 * t.edges.len().max(1) as f64
+                        && shared >= 0.7 * c.edges.len().max(1) as f64
+                }
+            })
+            .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap())
+            .unwrap_or(t);
+        if day.iter().any(|d| d.from == pick.from && d.edges == pick.edges) {
+            continue;
+        }
+        covered.extend(pick.edges.iter().copied());
+        day.push(pick.clone());
+        added += 1;
+    }
+    day.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+}
+
+/// See real_trails.
+const REAL_TRAILS_MAX: usize = 100;
+const REAL_TRAIL_COVER: f64 = 0.7;
+const REAL_TRAIL_MAX_SAC: u8 = 3;
+
 pub struct BaseCamp {
     pub camp: String,
     pub camp_pt: P,
@@ -2449,13 +2510,16 @@ pub fn curate(
         })
         .collect();
     let mut cands = cands;
+    // Every named trail's own hike, for real_trails below.
+    let mut trails: Vec<Cand> = vec![];
     if !late() {
         // A named trail that a destination hike from the same trailhead
         // already walks (Wapta Falls Trail to Wapta Falls) is the same hike:
         // keep the one named for where it goes.
-        let named: Vec<Cand> = ctx
-            .named_trails(&starts)
-            .into_iter()
+        trails = ctx.named_trails(&starts);
+        let named: Vec<Cand> = trails
+            .iter()
+            .cloned()
             .filter(|n| {
                 // The same hike both ways: each walks most of the other. A
                 // loop that only shares a stretch with a destination hike
@@ -2474,7 +2538,8 @@ pub fn curate(
             .collect();
         cands.extend(named);
     }
-    let day = select(&cands, n_day, true);
+    let mut day = select(&cands, n_day, true);
+    real_trails(&mut day, &cands, &trails);
     let candidates: Vec<Value> = if CANDIDATES.load(Relaxed) {
         cands
             .iter()
