@@ -1177,6 +1177,9 @@ const TOUR_LIMIT_M: f64 = 15000.0;
 /// Up to this much unnamed trail joins a trail's pieces for its tour (a
 /// footbridge without the trail's name).
 const TOUR_GAP_M: f64 = 30.0;
+/// How far outside the park a named trail's edges still count as the
+/// trail's (routes#165): it may cross the park's edge and come back.
+const NAMED_OUTSIDE_M: f64 = 250.0;
 /// How near a lift station a one-way hike must start and end (routes#165):
 /// the Grouse Grind's trailhead is beside the Skyride's base, and the trail
 /// ends at its top.
@@ -1215,25 +1218,63 @@ impl<'a> Ctx<'a> {
         } else {
             vec![]
         };
-        // In-park, non-bike trail edges, by name.
+        // Names of trails, for the stretches of them mapped as tracks.
+        let trail_names: HashSet<&str> = g
+            .ways
+            .iter()
+            .filter(|w| w.class == Class::Trail && !w.name.is_empty())
+            .map(|w| w.name.as_str())
+            .collect();
+        // In-park, non-bike trail edges, by name. A track with a trail's
+        // name is part of it: Grouse Mountain's BCMC Route is a track for
+        // 180 m, which cut it into pieces under NAMED_MIN_M (routes#165).
         let mut by_name: HashMap<&'a str, Vec<(u32, u32, u32)>> = HashMap::default();
+        let named = |w: &crate::area::Way| {
+            (w.class == Class::Trail
+                || (w.class == Class::Track && trail_names.contains(w.name.as_str())))
+                && !w.bike
+                && !w.name.is_empty()
+        };
         for (u, adj) in g.adj.iter().enumerate() {
             let u = u as u32;
             for e in adj {
                 let w = &g.ways[e.way as usize];
-                if u < e.to
-                    && w.class == Class::Trail
-                    && !w.bike
-                    && !w.name.is_empty()
-                    && self.in_park[u as usize]
-                    && self.in_park[e.to as usize]
-                {
+                if u < e.to && named(w) && self.in_park[u as usize] && self.in_park[e.to as usize] {
                     by_name
                         .entry(w.name.as_str())
                         .or_default()
                         .push((u, e.to, e.way));
                 }
             }
+        }
+        // And where an in-park trail runs just outside the park's edge: the
+        // BCMC Route leaves Grouse Mountain Regional Park for 180 m, which
+        // cut it in two (routes#165).
+        let mut near: HashMap<u32, bool> = HashMap::default();
+        let mut near_park = |n: u32| {
+            *near.entry(n).or_insert_with(|| {
+                self.in_park[n as usize]
+                    || self.area.park_dist(g.pts[n as usize], NAMED_OUTSIDE_M).is_some()
+            })
+        };
+        let mut outside: Vec<(&'a str, (u32, u32, u32))> = vec![];
+        for (u, adj) in g.adj.iter().enumerate() {
+            let u = u as u32;
+            for e in adj {
+                let w = &g.ways[e.way as usize];
+                if u < e.to
+                    && named(w)
+                    && !(self.in_park[u as usize] && self.in_park[e.to as usize])
+                    && by_name.contains_key(w.name.as_str())
+                    && near_park(u)
+                    && near_park(e.to)
+                {
+                    outside.push((w.name.as_str(), (u, e.to, e.way)));
+                }
+            }
+        }
+        for (name, e) in outside {
+            by_name.get_mut(name).unwrap().push(e);
         }
         // Each name's connected pieces that are a simple loop or line, as
         // (name, nodes in order, ways between them, is a loop).
