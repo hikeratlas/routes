@@ -614,15 +614,27 @@ impl<'a> Ctx<'a> {
             lc[self.area.landcover(p) as usize] += 1.0;
         }
         let known: f64 = lc[..LANDCOVER.len()].iter().sum();
+        let other = lc[OTHER as usize];
+        // Shares of the whole route, biggest first, and then "other": what
+        // no class covers (unmapped, or farmland, a town...), so the
+        // website's terrain bar shows how much it doesn't know.
         let mut lc_shares: Vec<(&'static str, f64)> = (0..LANDCOVER.len())
             .filter(|&c| lc[c] > 0.0)
-            .map(|c| (LANDCOVER[c], lc[c] / known))
+            .map(|c| (LANDCOVER[c], lc[c] / (known + other)))
             .collect();
         lc_shares.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-        let lc_variety = if lc_shares.is_empty() {
+        if other > 0.0 {
+            lc_shares.push(("other", other / (known + other)));
+        }
+        // Variety among the classes it knows.
+        let lc_variety = if known == 0.0 {
             1.0
         } else {
-            (-lc_shares.iter().map(|(_, s)| s * s.ln()).sum::<f64>()).exp()
+            (-(0..LANDCOVER.len())
+                .filter(|&c| lc[c] > 0.0)
+                .map(|c| lc[c] / known * (lc[c] / known).ln())
+                .sum::<f64>())
+            .exp()
         };
         let alpine_share = (0..LANDCOVER.len())
             .filter(|&c| alpine(c as u8))

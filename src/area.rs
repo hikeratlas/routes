@@ -172,6 +172,8 @@ pub struct Area {
     /// Passenger lifts (the basemap's kind=lift paths): a way back down,
     /// never walked (routes#165).
     pub lifts: Vec<Lift>,
+    /// WorldCover, for land cover where OSM maps none (landcover.rs).
+    pub worldcover: Option<crate::landcover::Lookup>,
 }
 
 /// A gondola or cable car, by its two stations.
@@ -787,6 +789,7 @@ impl Area {
             aisles: vec![],
             known: vec![],
             lifts: vec![],
+            worldcover: None,
         };
         let mut known: HashMap<String, crate::recall::Known> = HashMap::new();
         let mut lake_pts: HashMap<u32, (f64, f64, f64)> = HashMap::new();
@@ -880,6 +883,8 @@ impl Area {
         }
     }
 
+    /// The land cover at p: OSM's where a land polygon covers it, otherwise
+    /// WorldCover's (if loaded), otherwise OTHER.
     pub fn landcover(&self, p: P) -> u8 {
         let Some(t) = self.tiles.get(&geo::tile_of(p)) else {
             return OTHER;
@@ -889,6 +894,11 @@ impl Area {
             if *c < best && poly.contains(p) {
                 best = *c;
             }
+        }
+        if best == OTHER
+            && let Some(wc) = &self.worldcover
+        {
+            return wc.at(geo::lonlat(p));
         }
         best
     }

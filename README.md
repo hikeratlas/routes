@@ -8,6 +8,13 @@ It reads the basemap's own z14 vector tiles: trails and roads, land cover, water
 park outlines, peaks and POIs. The routes it finds therefore follow the trails
 the map shows.
 
+Where OSM maps no land cover, it falls back on [ESA WorldCover
+2021](https://esa-worldcover.org/) (10 m, CC BY 4.0), which basemap's
+`bin/worldcover.py` publishes as z12 tiles (`--landcover`; basemap#167). OSM
+often maps a mountain's forest and leaves what's above the trees blank, so
+without it most alpine hikes look like they never leave the forest. Anything
+shown from it needs WorldCover's attribution.
+
 ```bash
 cargo build --release
 ./target/release/routes --tiles north-america.pmtiles --qrank qrank.db --out out/
@@ -32,7 +39,9 @@ The output:
   `km`, `gain` and `key`.
 - `out/parks/<osm id>.json`: each park's routes in full. This includes the
   stats, the land cover and features passed, the campsites along the way with
-  their distance from the start, and `why`, the score breakdown.
+  their distance from the start, and `why`, the score breakdown. `landcover`
+  is each class's share of the route, biggest first, then `other`: what no
+  class covers (unmapped, or farmland, a town).
 
 `id` (`<park>/day/3`) is a route's position in its park's list, and changes
 when a rebuild adds, drops or reorders routes. `key` stays the same as long

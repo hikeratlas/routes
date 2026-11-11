@@ -25,6 +25,7 @@ mod area;
 mod curate;
 mod dem;
 mod geo;
+mod landcover;
 mod mvt;
 mod pmtiles;
 mod recall;
@@ -57,6 +58,10 @@ const USAGE: &str = "usage: routes --tiles FILE|URL [--tiles ...] --out DIR
   [--nl-dem URL|FILE]    nl-dem's PMTiles of Newfoundland's 5 m DEM, used
                          before Mapterhorn there (default the published
                          archive; none for Mapterhorn alone)
+  [--landcover URL|FILE] ESA WorldCover's PMTiles (basemap's
+                         bin/worldcover.py), for land cover where OSM maps
+                         none (default the published archive; none for
+                         OSM's alone). A URL's tiles are cached in --dem-cache
   [--no-known-bonus]     don't score up routes that follow an OSM hiking
                          route (to measure the proposer on its own)
   [--trails]             also write DIR/trails.jsonl: each park's named
@@ -94,6 +99,7 @@ struct Args {
     dem_cache: Option<PathBuf>,
     dem_zoom: u8,
     nl_dem: Option<String>,
+    landcover: Option<String>,
     shard: Option<(usize, usize)>,
     shard_costs: Option<PathBuf>,
     merge: Vec<PathBuf>,
@@ -116,6 +122,7 @@ fn args() -> Args {
         dem_cache: None,
         dem_zoom: 12,
         nl_dem: Some(dem::NL_DEM.to_string()),
+        landcover: Some(landcover::URL.to_string()),
         shard: None,
         shard_costs: None,
         merge: vec![],
@@ -166,6 +173,7 @@ fn args() -> Args {
             "--dem-cache" => a.dem_cache = Some(val.into()),
             "--dem-zoom" => a.dem_zoom = val.parse().unwrap_or_else(|_| die()),
             "--nl-dem" => a.nl_dem = if val == "none" { None } else { Some(val) },
+            "--landcover" => a.landcover = if val == "none" { None } else { Some(val) },
             "--shard" => {
                 let (k, n) = val.split_once('/').unwrap_or_else(|| die());
                 let (k, n): (usize, usize) = (
@@ -668,6 +676,7 @@ fn main() {
         return;
     }
     let dem = dem::Dem::new(a.dem_zoom, a.dem_cache.clone(), a.nl_dem.as_deref());
+    let worldcover = a.landcover.as_deref().and_then(|u| landcover::WorldCover::open(u, a.dem_cache.clone()));
     let qrank = a.qrank.as_ref().map(|p| {
         Mutex::new(
             rusqlite::Connection::open_with_flags(p, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
@@ -694,6 +703,7 @@ fn main() {
                 return None;
             }
             let mut area = Area::load(&archives, &p.id, &tiles);
+            area.worldcover = worldcover.clone().map(landcover::Lookup::new);
             if let Some(q) = &qrank {
                 let q = q.lock().unwrap();
                 for d in &mut area.dests {
