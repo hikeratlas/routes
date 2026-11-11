@@ -327,7 +327,7 @@ impl<'a> Ctx<'a> {
     /// How many sites write about a named trail near the park (see
     /// Area::trail_mentions): 0 if none.
     pub fn trail_mentions(&self, name: &str) -> u32 {
-        self.area.trail_mentions.get(&name.to_lowercase()).copied().unwrap_or(0)
+        self.area.trail_mentions.get(&name.to_lowercase()).map(|v| v.0).unwrap_or(0)
     }
 
     pub fn new(area: &'a Area, dem: &'a Dem, dests: Vec<Dest>, camps: Vec<Place>) -> Ctx<'a> {
@@ -720,9 +720,13 @@ impl<'a> Ctx<'a> {
         let trail_mentions = if self.area.trail_mentions.is_empty() {
             0
         } else {
+            // The trail's pages are about all of it: a 20 km walk on Killarney's
+            // 80 km La Cloche Silhouette Trail isn't what they're about.
             main_trail_share(g, path, ways)
                 .filter(|(_, m)| *m >= TRAIL_MENTION_SHARE * one_way)
-                .map(|(n, _)| self.trail_mentions(n))
+                .and_then(|(n, m)| self.area.trail_mentions.get(&n.to_lowercase()).map(|v| (m, *v)))
+                .filter(|(m, (_, len))| *m >= TRAIL_MENTION_COVER * len)
+                .map(|(_, (sites, _))| sites)
                 .unwrap_or(0)
         };
         let mut via: Vec<String> = vec![];
@@ -794,6 +798,8 @@ const MENTIONS_FULL: f64 = 50.0;
 /// length on that trail, so a short stretch of a famous trail doesn't
 /// make a route popular.
 const TRAIL_MENTION_SHARE: f64 = 0.4;
+/// And when it walks this share of the trail.
+const TRAIL_MENTION_COVER: f64 = 0.5;
 const W_TOO_LONG: f64 = -1.5;
 const W_TOO_MUCH_GAIN: f64 = -1.0;
 
@@ -2482,8 +2488,11 @@ pub fn select(cands: &[Cand], n: usize, by_start: bool) -> Vec<Cand> {
         let mut own: Vec<&Cand> = cands.iter().filter(|c| own_trail(c)).collect();
         own.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
         for c in own {
+            // Or, a real trail no chosen hike is mostly: the best hike from
+            // Centennial Ridges' trailhead walks the whole trail and then a
+            // road to Rock Lake, and isn't Centennial Ridges (basemap#281).
             if chosen.len() < own_n
-                && novelty(c, &covered) > 0.5
+                && (novelty(c, &covered) > 0.5 || (real_trail(c) && !chosen.iter().any(|o| mostly(o, c))))
                 && chosen.iter().all(|o| o.dest != c.dest)
             {
                 covered.extend(c.edges.iter().copied());
@@ -2573,12 +2582,11 @@ fn real_trails(day: &mut Vec<Cand>, cands: &[Cand], trails: &[Cand]) {
         // Offered when one hike walks most of it: pieces of several don't
         // make the trail (the Grind up and BCMC down, routes#165, is the
         // Grind's hike up, a loop by BCMC's foot and another by its top).
-        let walked = day
-            .iter()
-            .map(|c| t.edges.intersection(&c.edges).count())
-            .max()
-            .unwrap_or(0) as f64;
-        if walked >= REAL_TRAIL_COVER * t.edges.len().max(1) as f64 {
+        // And is mostly that trail: Algonquin's Centennial Ridges Trail
+        // isn't offered by a 16 km hike to Rock Lake that walks it and then
+        // a road (basemap#281).
+        let offered = day.iter().any(|c| mostly(c, t));
+        if offered {
             continue;
         }
         // The trail's own hike, if it's a candidate, else the one that
@@ -2601,6 +2609,15 @@ fn real_trails(day: &mut Vec<Cand>, cands: &[Cand], trails: &[Cand]) {
         added += 1;
     }
     day.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+}
+
+/// Whether a hike is mostly a trail's: it walks REAL_TRAIL_COVER of the
+/// trail's hike (by its edges), and isn't much longer (by length: a road's
+/// few long edges count for little by number).
+fn mostly(hike: &Cand, trail: &Cand) -> bool {
+    let shared = trail.edges.intersection(&hike.edges).count() as f64;
+    shared >= REAL_TRAIL_COVER * trail.edges.len().max(1) as f64
+        && REAL_TRAIL_COVER * hike.ev.total <= trail.ev.total
 }
 
 /// See real_trails.

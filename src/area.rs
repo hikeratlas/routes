@@ -176,9 +176,10 @@ pub struct Area {
     /// Passenger lifts (the basemap's kind=lift paths): a way back down,
     /// never walked (routes#165).
     pub lifts: Vec<Lift>,
-    /// Named trails' mentions (see Dest::mentions), by lowercased name:
-    /// those near the park, from --mentions.
-    pub trail_mentions: HashMap<String, u32>,
+    /// Named trails' mentions (see Dest::mentions) and length in the
+    /// park's ways (metres), by lowercased name: those near the park, from
+    /// --mentions.
+    pub trail_mentions: HashMap<String, (u32, f64)>,
 }
 
 /// A gondola or cable car, by its two stations.

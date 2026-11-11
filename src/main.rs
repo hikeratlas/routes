@@ -1568,7 +1568,19 @@ impl Mentions {
         for (name, sites, trail, _) in &near {
             if *trail {
                 let v = area.trail_mentions.entry(name.clone()).or_default();
-                *v = (*v).max(*sites);
+                v.0 = v.0.max(*sites);
+            }
+        }
+        // Their lengths, each edge once.
+        let g = &area.graph;
+        for (u, adj) in g.adj.iter().enumerate() {
+            for e in adj.iter().filter(|e| e.to as usize > u) {
+                let name = &g.ways[e.way as usize].name;
+                if !name.is_empty() {
+                    if let Some(v) = area.trail_mentions.get_mut(&name.to_lowercase()) {
+                        v.1 += e.m as f64;
+                    }
+                }
             }
         }
         for d in &mut area.dests {
@@ -1584,7 +1596,9 @@ impl Mentions {
                 .map(|x| x.1)
                 .max()
                 .unwrap_or(0);
-            d.mentions = by_id.max(by_name);
+            // A big lake's pages are about all of it, not this park's shore
+            // (Killarney's Lake Huron).
+            d.mentions = if d.area > BIG_LAKE_M2 { 0 } else { by_id.max(by_name) };
         }
     }
 }
@@ -1596,3 +1610,5 @@ const MENTION_REACH: f64 = 10_000.0;
 /// How far a place may be from a destination of the same name to count as
 /// it (a lake's pages put it at its middle; routes, where the trail meets it).
 const DEST_NAME_REACH: f64 = 3_000.0;
+/// Lakes bigger than this (m²) take no mentions (see apply).
+const BIG_LAKE_M2: f64 = 2e8;
