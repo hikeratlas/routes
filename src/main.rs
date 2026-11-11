@@ -204,6 +204,9 @@ struct Park {
     trail_area: bool,
     /// Curated only as notable, under --min-area (see notable()).
     small_notable: bool,
+    /// Under --min-area-notable too: curated only if an OSM hiking route
+    /// runs through it (see ROUTE_IN_SMALL_PARK_M).
+    needs_route: bool,
     min: geo::P,
     max: geo::P,
     /// Its outline in the z8 park layer, piece by piece (each tile's), for
@@ -328,6 +331,12 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> (Vec<Park>, Vec<Valu
         .iter()
         .filter(|ar| has_parks(ar))
         .collect();
+    // OSM hiking routes, for small parks (needs_route): at z14, as the z8
+    // tiles leave short local routes out (the Grouse Grind).
+    let route_archives: Vec<&PmTiles> = archives
+        .iter()
+        .filter(|ar| ar.layers.iter().any(|l| l == "hiking_route"))
+        .collect();
     tiles.par_iter().for_each(|&(x, y)| {
         for ar in &listing {
             let Some(b) = ar.get(z, x, y).expect("reading tile") else {
@@ -381,13 +390,7 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> (Vec<Park>, Vec<Valu
                     let rank = l.get(f, "rank").map(|v| v.as_f64()).unwrap_or(1.0);
                     let floor = if notable(name, rank) { a.min_area_notable } else { a.min_area };
                     let small_notable = !trail_area && area < a.min_area * 1e6;
-                    if !trail_area && area < floor * 1e6 {
-                        small
-                            .lock()
-                            .unwrap()
-                            .insert(l.str(f, "osm_id").to_string(), (name.to_string(), area));
-                        continue;
-                    }
+                    let needs_route = !trail_area && area < floor * 1e6;
                     let mut m = found.lock().unwrap();
                     let p = m
                         .entry(l.str(f, "osm_id").to_string())
@@ -399,6 +402,7 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> (Vec<Park>, Vec<Valu
                             area,
                             trail_area,
                             small_notable,
+                            needs_route,
                             min: (f64::MAX, f64::MAX),
                             max: (f64::MIN, f64::MIN),
                             rings: vec![],
@@ -433,6 +437,21 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> (Vec<Park>, Vec<Valu
         })
         .collect();
     v.sort_by(|a, b| b.area.partial_cmp(&a.area).unwrap());
+    // A park under the minimums is curated if an OSM hiking route runs
+    // through it: a trail is evidence the park is for walking, whatever its
+    // size. Grouse Mountain Regional Park (0.73 km², routes#163) is the
+    // Grouse Grind's.
+    let (v, too_small): (Vec<Park>, Vec<Park>) = v
+        .into_iter()
+        .partition(|p| {
+            !p.needs_route || route_m_inside(p, &route_lines(p, &route_archives)) >= ROUTE_IN_SMALL_PARK_M
+        });
+    {
+        let mut m = small.lock().unwrap();
+        for p in too_small {
+            m.insert(p.id.clone(), (p.name.clone(), p.area));
+        }
+    }
     let mut small: Vec<Value> = small
         .into_inner()
         .unwrap()
@@ -465,6 +484,60 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> (Vec<Park>, Vec<Valu
     small.sort_by(|x, y| x["id"].as_str().cmp(&y["id"].as_str()));
     (v, small)
 }
+
+/// The OSM hiking routes' lines over a (small) park, from its z14 tiles.
+fn route_lines(p: &Park, archives: &[&PmTiles]) -> Vec<Vec<geo::P>> {
+    let ext = geo::EXT;
+    let (x0, y0) = ((p.min.0 / ext) as u32, (p.min.1 / ext) as u32);
+    let (x1, y1) = ((p.max.0 / ext) as u32, (p.max.1 / ext) as u32);
+    let mut out = vec![];
+    if (x1 - x0 + 1) * (y1 - y0 + 1) > 400 {
+        return out; // not a small park
+    }
+    for ar in archives {
+        for x in x0..=x1 {
+            for y in y0..=y1 {
+                let Some(b) = ar.get(14, x, y).expect("reading tile") else {
+                    continue;
+                };
+                for l in mvt::decode(&b) {
+                    if l.name != "hiking_route" {
+                        continue;
+                    }
+                    for f in l.features.iter().filter(|f| f.typ == 2) {
+                        for line in f.geometry() {
+                            out.push(
+                                line.into_iter()
+                                    .map(|(px, py)| {
+                                        (
+                                            x as f64 * ext + px as f64 * ext / l.extent as f64,
+                                            y as f64 * ext + py as f64 * ext / l.extent as f64,
+                                        )
+                                    })
+                                    .collect(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Metres of the hiking routes inside a park: segments whose midpoint is.
+fn route_m_inside(p: &Park, lines: &[Vec<geo::P>]) -> f64 {
+    lines
+        .iter()
+        .flat_map(|l| l.windows(2))
+        .filter(|w| p.contains(((w[0].0 + w[1].0) / 2.0, (w[0].1 + w[1].1) / 2.0)))
+        .map(|w| geo::metres(w[0], w[1]))
+        .sum()
+}
+
+/// A park under --min-area-notable is curated with this much of an OSM hiking
+/// route inside it (see parks()).
+const ROUTE_IN_SMALL_PARK_M: f64 = 500.0;
 
 /// QRank (the park layer's rank) over which a park's Wikidata item is
 /// popular enough for --min-area-notable.
@@ -1171,6 +1244,7 @@ mod tests {
             area: 1.0,
             trail_area: false,
             small_notable: false,
+            needs_route: false,
             min: (0.0, 0.0),
             max: (0.0, 0.0),
             rings: vec![],

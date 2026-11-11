@@ -25,6 +25,9 @@ pub struct Way {
     /// A driveway or a lot's aisle (the basemap's service=driveway or
     /// parking_aisle): part of somewhere to leave a car (routes#156).
     pub lot: bool,
+    /// Walked only one way: as its points run (the basemap's oneway, with
+    /// -1's points reversed). The Grouse Grind is up only (routes#163).
+    pub oneway: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -301,9 +304,13 @@ fn read_tile(
                         let aisle = class == Class::Road && flag("parking_aisle");
                         let lot = class == Class::Road
                             && (aisle || matches!(l.str(f, "service"), "driveway" | "parking_aisle"));
+                        let oneway = l.str(f, "oneway");
                         for line in f.geometry() {
-                            let pts: Vec<P> =
+                            let mut pts: Vec<P> =
                                 line.into_iter().map(|(x, y)| s(x, y, l.extent)).collect();
+                            if oneway == "-1" {
+                                pts.reverse();
+                            }
                             if aisle && !pts.is_empty() {
                                 // Its middle, by its points; pieces in the
                                 // tile's buffer too (Ctx::starts merges them).
@@ -321,6 +328,7 @@ fn read_tile(
                                     walk,
                                     sac,
                                     lot,
+                                    oneway: matches!(oneway, "yes" | "-1"),
                                 },
                                 pts,
                             ));
@@ -528,6 +536,7 @@ impl Graph {
                     walk: way.walk,
                     sac: way.sac,
                     lot: way.lot,
+                    oneway: way.oneway,
                 });
                 let factor = match way.class {
                     Class::Trail => 1.0,
@@ -568,10 +577,11 @@ impl Graph {
                                 cost: m * factor,
                                 way: wi,
                             });
+                            // Against a one-way trail: never walked.
                             g.adj[i as usize].push(Edge {
                                 to: a,
                                 m,
-                                cost: m * factor,
+                                cost: if way.oneway { f32::INFINITY } else { m * factor },
                                 way: wi,
                             });
                         }
@@ -590,6 +600,7 @@ impl Graph {
             walk: false,
             sac: 0,
             lot: false,
+            oneway: false,
         });
         let mut buckets: HashMap<(i64, i64), Vec<u32>> = HashMap::new();
         for &i in &edge_nodes {
@@ -657,6 +668,7 @@ impl Graph {
             walk: false,
             sac: 0,
             lot: false,
+            oneway: false,
         });
         let mut add = vec![];
         for lot in lots {
