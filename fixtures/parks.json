@@ -204,5 +204,17 @@
       -60.297,
       46.884
     ]
+  },
+  {
+    "key": "grouse-mountain",
+    "id": "52955924",
+    "park": "Grouse Mountain Regional Park",
+    "why": "quality: the Grouse Grind and BCMC, park-listed trails as named regressions (routes#95); a small park, under --min-area",
+    "bbox": [
+      -123.115,
+      49.355,
+      -123.065,
+      49.395
+    ]
   }
 ]
