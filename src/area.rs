@@ -116,6 +116,10 @@ pub struct Dest {
     pub pt: P,
     pub area: f64,
     pub wikidata: String,
+    /// The OSM ids of the feature (and of copies merged into it, see
+    /// curate::merge_dests), from the tiles' osm_id; empty where the layer
+    /// has none.
+    pub osm_ids: Vec<String>,
     pub qrank: f64,
     pub lake: Option<u32>, // for lakes: which lake (index into Area::lakes)
     /// A peak with neither an elevation nor a Wikidata item: often a
@@ -128,6 +132,17 @@ pub struct Place {
     pub name: String,
     pub pt: P,
     pub trailhead: bool,
+    /// From the tiles' osm_id ("" if none).
+    pub osm_id: String,
+}
+
+/// A feature's osm_id as a list: empty when the layer has none.
+pub fn osm_ids(id: &str) -> Vec<String> {
+    if id.is_empty() {
+        vec![]
+    } else {
+        vec![id.to_string()]
+    }
 }
 
 #[derive(Default)]
@@ -345,6 +360,7 @@ fn read_tile(
                                     pt: c,
                                     area,
                                     wikidata: l.str(f, "wikidata").to_string(),
+                                    osm_ids: osm_ids(l.str(f, "osm_id")),
                                     qrank: 1.0,
                                     lake: Some(id),
                                     minor: false,
@@ -407,6 +423,7 @@ fn read_tile(
                                 name: not_a_note(name),
                                 pt,
                                 trailhead: l.str(f, "highway") == "trailhead",
+                                osm_id: l.str(f, "osm_id").to_string(),
                             });
                         }
                         // Places to sleep on a multi-day route: campsites, huts,
@@ -423,6 +440,7 @@ fn read_tile(
                                 name: name.to_string(),
                                 pt,
                                 trailhead: false,
+                                osm_id: l.str(f, "osm_id").to_string(),
                             });
                         }
                         if name.is_empty() {
@@ -451,6 +469,7 @@ fn read_tile(
                                 pt,
                                 area: 0.0,
                                 wikidata: l.str(f, "wikidata").to_string(),
+                                osm_ids: osm_ids(l.str(f, "osm_id")),
                                 qrank: 1.0,
                                 lake: None,
                                 minor: kind == Kind::Peak

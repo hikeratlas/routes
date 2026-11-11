@@ -29,10 +29,26 @@ The output:
 - `out/routes.geojsonl`: one line per route, for a map layer. Each line has
   `id`, `park`, `park_id`, `type` (`day`, `approach`, `from-camp` or
   `multi-day`), `title`, `kind` (`out-and-back`, `loop` or `point-to-point`),
-  `km` and `gain`.
+  `km`, `gain` and `key`.
 - `out/parks/<osm id>.json`: each park's routes in full. This includes the
   stats, the land cover and features passed, the campsites along the way with
   their distance from the start, and `why`, the score breakdown.
+
+`id` (`<park>/day/3`) is a route's position in its park's list, and changes
+when a rebuild adds, drops or reorders routes. `key` stays the same as long
+as the route does: the park, the route type, its trailhead (or camp) and
+destination, and its kind, lower-cased (`2226817|day|rubble creek
+trailhead|the black tusk|out-and-back`; a multi-day trip's ends are sorted).
+Use it to attach other data to routes, such as the trip reports
+[hikeratlas/cc-crawler](https://github.com/hikeratlas/cc-crawler) links to them.
+
+For the same reason the park documents carry OSM ids where the tiles have
+them: `dest_osm_ids` (the destination, and copies merged into it),
+`from_osm_id` (the trailhead or parking node, or the campsite a from-camp
+hike starts at), `camp_osm_id` and `from_osm_id` on base camps, and
+`name_osm_id` (the hiking route relation a named route follows). They're
+left out when unknown: a start where a trail meets a road has no OSM
+feature, and a destination's layer may carry no `osm_id`.
 
 ## How it picks hikes
 

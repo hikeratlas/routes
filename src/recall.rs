@@ -548,6 +548,10 @@ pub fn name_routes(area: &Area, doc: &mut Value) {
             .max_by(|a, b| (a.1 * a.2).partial_cmp(&(b.1 * b.2)).unwrap());
         if let Some((k, _, _)) = best {
             r["name"] = json!(k.name);
+            // The relation it follows, for joining to other data about it.
+            if !k.id.is_empty() {
+                r["name_osm_id"] = json!(k.id);
+            }
             // The relation's segments run in its member order (basemap's
             // hiking-routes export), which says which way the route goes
             // (#73): a loop or point-to-point that follows it goes that way.

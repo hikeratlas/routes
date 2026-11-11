@@ -244,6 +244,11 @@ pub struct Cand {
     pub dest: String,
     pub dest_kind: Kind,
     pub dest_pt: P,
+    /// The destination's OSM ids (empty for a named trail walked for itself).
+    pub dest_osm_ids: Vec<String>,
+    /// The start's OSM id: a trailhead or parking node, or a campsite; ""
+    /// for a start found where a trail meets a road.
+    pub from_osm_id: String,
     pub kind: &'static str,
     pub score: f64,
     pub parts: Vec<(&'static str, f64)>,
@@ -280,7 +285,7 @@ pub fn merge_dests(mut dests: Vec<Dest>) -> Vec<Dest> {
     let mut out: Vec<Dest> = Vec::new();
     for d in dests {
         let bd = base(&d.name);
-        let dup = out.iter().any(|o| {
+        let dup = out.iter().position(|o| {
             let bo = base(&o.name);
             let m = metres(o.pt, d.pt);
             let reach = if o.kind == Kind::Lake || d.kind == Kind::Lake {
@@ -294,8 +299,16 @@ pub fn merge_dests(mut dests: Vec<Dest>) -> Vec<Dest> {
                     && o.kind != Kind::Lake
                     && d.kind != Kind::Lake)
         });
-        if !dup {
-            out.push(d);
+        match dup {
+            // The kept copy stands for both: it takes the other's OSM ids.
+            Some(k) => {
+                for id in d.osm_ids {
+                    if !out[k].osm_ids.contains(&id) {
+                        out[k].osm_ids.push(id);
+                    }
+                }
+            }
+            None => out.push(d),
         }
     }
     out
@@ -796,6 +809,9 @@ pub struct Start {
     pub node: u32,
     pub pt: P,
     pub trailhead: bool,
+    /// The lot's or trailhead's OSM id ("" where none: a lot mapped only by
+    /// its aisles, or where a trail meets a road).
+    pub osm_id: String,
     /// A trailhead, or a parking lot with a name, in OSM. False for an
     /// unnamed lot and for where a trail meets a road (see Ctx::starts):
     /// those are named here, after the trail or road nearby (#63).
@@ -1528,6 +1544,7 @@ impl<'a> Ctx<'a> {
                         pt: far,
                         area: 0.0,
                         wikidata: String::new(),
+                        osm_ids: vec![],
                         qrank: 1.0,
                         lake: None,
                         minor: false,
@@ -1539,6 +1556,8 @@ impl<'a> Ctx<'a> {
                         dest: name.to_string(),
                         dest_kind: Kind::Trail,
                         dest_pt: far,
+                        dest_osm_ids: vec![],
+                        from_osm_id: s.osm_id.clone(),
                         kind: if is_loop_tour { "loop" } else { "out-and-back" },
                         score: sc,
                         parts,
@@ -1587,6 +1606,7 @@ impl<'a> Ctx<'a> {
                 pt: far,
                 area: 0.0,
                 wikidata: String::new(),
+                osm_ids: vec![],
                 qrank: 1.0,
                 lake: None,
                 minor: false,
@@ -1598,6 +1618,8 @@ impl<'a> Ctx<'a> {
                 dest: name.to_string(),
                 dest_kind: Kind::Trail,
                 dest_pt: far,
+                dest_osm_ids: vec![],
+                from_osm_id: s.osm_id.clone(),
                 kind: if *is_loop { "loop" } else { "out-and-back" },
                 score: sc,
                 parts,
@@ -1712,6 +1734,8 @@ impl<'a> Ctx<'a> {
                 dest: d.name.clone(),
                 dest_kind: d.kind,
                 dest_pt: g.pts[node as usize],
+                dest_osm_ids: d.osm_ids.clone(),
+                from_osm_id: String::new(), // set by the caller, which knows the start
                 kind,
                 score: sc,
                 parts,
@@ -1809,6 +1833,7 @@ impl<'a> Ctx<'a> {
                     node,
                     pt: p.pt,
                     trailhead: p.trailhead,
+                    osm_id: p.osm_id.clone(),
                     known: p.trailhead || !p.name.is_empty(),
                 },
                 walk,
@@ -1844,6 +1869,7 @@ impl<'a> Ctx<'a> {
                         name: String::new(),
                         pt,
                         trailhead: false,
+                        osm_id: String::new(),
                     })
                 }),
         );
@@ -1890,6 +1916,7 @@ impl<'a> Ctx<'a> {
                 node: n,
                 pt,
                 trailhead: false,
+                osm_id: String::new(),
                 known: false,
             });
         }
@@ -2047,7 +2074,9 @@ pub fn select(cands: &[Cand], n: usize, by_start: bool) -> Vec<Cand> {
 pub struct BaseCamp {
     pub camp: String,
     pub camp_pt: P,
+    pub camp_osm_id: String,
     pub from: String,
+    pub from_osm_id: String,
     pub approach: Eval,
     pub hikes: Vec<Cand>,
     pub score: f64,
@@ -2222,6 +2251,7 @@ pub fn curate(
                 pt: d.pt,
                 area: d.area,
                 wikidata: d.wikidata.clone(),
+                osm_ids: d.osm_ids.clone(),
                 qrank: d.qrank,
                 lake: d.lake,
                 minor: d.minor,
@@ -2239,6 +2269,7 @@ pub fn curate(
                 name: c.name.clone(),
                 pt: c.pt,
                 trailhead: false,
+                osm_id: c.osm_id.clone(),
             });
         }
     }
@@ -2262,7 +2293,11 @@ pub fn curate(
             if late() {
                 return vec![];
             }
-            ctx.candidates(s.node, &s.name, &targets, 1500.0, 15000.0, true)
+            let mut cs = ctx.candidates(s.node, &s.name, &targets, 1500.0, 15000.0, true);
+            for c in &mut cs {
+                c.from_osm_id = s.osm_id.clone();
+            }
+            cs
         })
         .collect();
     let mut cands = cands;
@@ -2343,6 +2378,10 @@ pub fn curate(
             let hikes: Vec<Cand> = ctx
                 .candidates(cnode, &c.name, &targets, 1000.0, 8000.0, true)
                 .into_iter()
+                .map(|mut h| {
+                    h.from_osm_id = c.osm_id.clone();
+                    h
+                })
                 .filter(|h| {
                     let back = h.edges.intersection(&walk_in).count();
                     (back as f64) < BASE_BACKTRACK_MAX * h.edges.len().max(1) as f64
@@ -2360,7 +2399,9 @@ pub fn curate(
             Some(BaseCamp {
                 camp: c.name.clone(),
                 camp_pt: c.pt,
+                camp_osm_id: c.osm_id.clone(),
                 from: start_nodes[&snode].name.clone(),
+                from_osm_id: start_nodes[&snode].osm_id.clone(),
                 approach,
                 hikes: picks,
                 score,
@@ -2746,7 +2787,7 @@ pub fn eval_json(ev: &Eval) -> Value {
 }
 
 pub fn cand_json(c: &Cand) -> Value {
-    json!({
+    let mut j = json!({
         "from": c.from,
         "start": geo::round_ll(c.start),
         "dest": c.dest,
@@ -2756,7 +2797,16 @@ pub fn cand_json(c: &Cand) -> Value {
         "score": (c.score * 100.0).round() / 100.0,
         "why": c.parts.iter().map(|(k, v)| json!([k, v])).collect::<Vec<_>>(),
         "route": eval_json(&c.ev),
-    })
+    });
+    // OSM ids, for joining routes to other data about the same places (e.g.
+    // hikeratlas/cc-crawler's trip reports). Left out when unknown.
+    if !c.dest_osm_ids.is_empty() {
+        j["dest_osm_ids"] = json!(c.dest_osm_ids);
+    }
+    if !c.from_osm_id.is_empty() {
+        j["from_osm_id"] = json!(c.from_osm_id);
+    }
+    j
 }
 
 impl Curated {
@@ -2764,14 +2814,23 @@ impl Curated {
         json!({
             "day_hikes": self.day.iter().map(cand_json).collect::<Vec<_>>(),
             "stops": self.stops.iter().map(cand_json).collect::<Vec<_>>(),
-            "base_camps": self.bases.iter().map(|b| json!({
-                "camp": b.camp,
-                "at": geo::round_ll(b.camp_pt),
-                "from": b.from,
-                "score": (b.score * 100.0).round() / 100.0,
-                "approach": eval_json(&b.approach),
-                "hikes": b.hikes.iter().map(cand_json).collect::<Vec<_>>(),
-            })).collect::<Vec<_>>(),
+            "base_camps": self.bases.iter().map(|b| {
+                let mut j = json!({
+                    "camp": b.camp,
+                    "at": geo::round_ll(b.camp_pt),
+                    "from": b.from,
+                    "score": (b.score * 100.0).round() / 100.0,
+                    "approach": eval_json(&b.approach),
+                    "hikes": b.hikes.iter().map(cand_json).collect::<Vec<_>>(),
+                });
+                if !b.camp_osm_id.is_empty() {
+                    j["camp_osm_id"] = json!(b.camp_osm_id);
+                }
+                if !b.from_osm_id.is_empty() {
+                    j["from_osm_id"] = json!(b.from_osm_id);
+                }
+                j
+            }).collect::<Vec<_>>(),
             "point_to_points": self.through.iter().map(|t| {
                 let mut j = json!({
                     "from": t.from,
@@ -2803,7 +2862,8 @@ mod tests {
         };
         let c = |from: &str, dest: &str, k: Kind| Cand {
             from: from.into(), start: (0.0, 0.0), dest: dest.into(), dest_kind: k,
-            dest_pt: (0.0, 0.0), kind: "loop", score: 0.0, parts: vec![],
+            dest_pt: (0.0, 0.0), dest_osm_ids: vec![], from_osm_id: String::new(),
+            kind: "loop", score: 0.0, parts: vec![],
             edges: HashSet::default(), ev: ev.clone(),
         };
         assert!(own_trail(&c("Granite Ridge Trail trailhead", "Granite Ridge Trail", Kind::Trail)));
@@ -2826,7 +2886,7 @@ mod tests {
         };
         let trail = Dest {
             name: "Minas Basin Trail".into(), kind: Kind::Trail, pt: (0.0, 0.0), area: 0.0,
-            wikidata: String::new(), qrank: 1.0, lake: None, minor: false,
+            wikidata: String::new(), osm_ids: vec![], qrank: 1.0, lake: None, minor: false,
         };
         let appeal = |e: &Eval| score(e, &trail, false).1.iter().find(|p| p.0 == "appeal").unwrap().1;
         assert_eq!(appeal(&ev(vec![])), (W_APPEAL * crate::area::TRAIL_APPEAL * 100.0).round() / 100.0);
@@ -2884,6 +2944,7 @@ mod tests {
             name: String::new(),
             pt: (1000.0 + m_east * u, y0 + m_north * u),
             trailhead: false,
+            osm_id: String::new(),
         }
     }
 
@@ -2895,6 +2956,7 @@ mod tests {
                 node: 0,
                 pt: lot(0.0, m_north).pt,
                 trailhead,
+                osm_id: String::new(),
                 known: trailhead,
             },
             walk,
