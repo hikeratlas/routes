@@ -16,8 +16,9 @@ def slug(s):
 
 
 def norm(s):
-    """A name to compare: 'The "Crack" Trail' and 'the crack' are the same."""
-    words = re.sub(r'[^0-9a-z]+', ' ', (s or '').lower()).split()
+    """A name to compare: 'The "Crack" Trail' and 'the crack' are the same,
+    and so are "Benjie's Lake" and 'Benjies Lake' (routes#148)."""
+    words = re.sub(r'[^0-9a-z]+', ' ', re.sub(r"['\u2019]", '', (s or '').lower())).split()
     return ' '.join(w for w in words if w not in ('the', 'trail'))
 
 
