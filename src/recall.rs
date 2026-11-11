@@ -555,7 +555,11 @@ pub fn name_routes(area: &Area, doc: &mut Value) {
             // The relation's segments run in its member order (basemap's
             // hiking-routes export), which says which way the route goes
             // (#73): a loop or point-to-point that follows it goes that way.
-            if runs_against(r["kind"].as_str() == Some("loop"), &line, &k.segs) {
+            // Not a one-way hike back by lift: up is the only way it goes
+            // (the Grouse Grind's relation runs down it, routes#165).
+            if r["kind"].as_str() != Some("one-way")
+                && runs_against(r["kind"].as_str() == Some("loop"), &line, &k.segs)
+            {
                 reverse(r);
             }
         }

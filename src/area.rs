@@ -169,6 +169,45 @@ pub struct Area {
     pub aisles: Vec<P>,
     /// Hiking route relations (the hiking_route layer) passing through.
     pub known: Vec<crate::recall::Known>,
+    /// Passenger lifts (the basemap's kind=lift paths): a way back down,
+    /// never walked (routes#165).
+    pub lifts: Vec<Lift>,
+}
+
+/// A gondola or cable car, by its two stations.
+#[derive(Clone, Debug)]
+pub struct Lift {
+    pub name: String,
+    pub ends: [P; 2],
+}
+
+/// Lifts from their pieces (cut at tile edges, repeated in tile buffers):
+/// a lift is straight, so its stations are the two points of its pieces
+/// farthest apart. Unnamed lifts can't be told apart, and are dropped.
+fn lifts(pieces: Vec<(String, Vec<P>)>) -> Vec<Lift> {
+    let mut by_name: HashMap<String, Vec<P>> = HashMap::new();
+    for (name, pts) in pieces {
+        if !name.is_empty() {
+            by_name.entry(name).or_default().extend(pts);
+        }
+    }
+    let mut out: Vec<Lift> = by_name
+        .into_iter()
+        .filter_map(|(name, pts)| {
+            let mut best = (0.0, pts[0], pts[0]);
+            for (i, &a) in pts.iter().enumerate() {
+                for &b in &pts[i + 1..] {
+                    let m = metres(a, b);
+                    if m > best.0 {
+                        best = (m, a, b);
+                    }
+                }
+            }
+            (best.0 > 0.0).then(|| Lift { name, ends: [best.1, best.2] })
+        })
+        .collect();
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
 }
 
 struct Raw {
@@ -184,6 +223,7 @@ struct Raw {
     /// in parks, city parks and campgrounds).
     lots: Vec<Poly>,
     known: Vec<crate::recall::Known>, // pieces of relations in this tile
+    lifts: Vec<(String, Vec<P>)>,
 }
 
 fn read_tile(
@@ -204,6 +244,7 @@ fn read_tile(
         aisles: vec![],
         lots: vec![],
         known: vec![],
+        lifts: vec![],
     };
     let s = |x: i32, y: i32, ext: u32| -> P {
         (
@@ -223,6 +264,16 @@ fn read_tile(
                         // Via ferratas need a harness and lanyards, not
                         // just boots (#45).
                         if kind == "via_ferrata" {
+                            continue;
+                        }
+                        if kind == "lift" {
+                            for line in f.geometry() {
+                                let pts: Vec<P> =
+                                    line.into_iter().map(|(x, y)| s(x, y, l.extent)).collect();
+                                if !pts.is_empty() {
+                                    raw.lifts.push((l.str(f, "name").to_string(), pts));
+                                }
+                            }
                             continue;
                         }
                         let class = if l.name == "path" {
@@ -735,9 +786,11 @@ impl Area {
             parkings: vec![],
             aisles: vec![],
             known: vec![],
+            lifts: vec![],
         };
         let mut known: HashMap<String, crate::recall::Known> = HashMap::new();
         let mut lake_pts: HashMap<u32, (f64, f64, f64)> = HashMap::new();
+        let mut lift_pieces = vec![];
         for r in raws {
             for (id, p) in &r.data.lakes {
                 for ring in &p.rings {
@@ -753,6 +806,7 @@ impl Area {
             area.camps.extend(r.camps);
             area.parkings.extend(r.parkings);
             area.aisles.extend(r.aisles);
+            lift_pieces.extend(r.lifts);
             for k in r.known {
                 match known.get_mut(&k.id) {
                     Some(e) => e.segs.extend(k.segs),
@@ -763,6 +817,7 @@ impl Area {
             }
             area.tiles.insert((r.tx, r.ty), r.data);
         }
+        area.lifts = lifts(lift_pieces);
         area.known = known.into_values().collect();
         area.known.sort_by(|a, b| a.id.cmp(&b.id));
         for d in &mut area.dests {
@@ -957,5 +1012,27 @@ mod note_tests {
         assert_eq!(not_a_note("Lake O'Hara Fire Road"), "Lake O'Hara Fire Road");
         // "only" as part of a word is fine.
         assert_eq!(not_a_note("Onlyhill Trail"), "Onlyhill Trail");
+    }
+}
+
+#[cfg(test)]
+mod lift_tests {
+    use super::lifts;
+
+    // A lift cut at a tile edge, its pieces overlapping in the tile buffer:
+    // its stations are its farthest points. Unnamed lifts are dropped.
+    #[test]
+    fn a_lift_is_its_two_farthest_points() {
+        let y = 0.3;
+        let pieces = vec![
+            ("Skyride".to_string(), vec![(0.10, y), (0.11, y + 0.01)]),
+            ("Skyride".to_string(), vec![(0.109, y + 0.009), (0.12, y + 0.02)]),
+            (String::new(), vec![(0.5, y), (0.6, y)]),
+        ];
+        let l = lifts(pieces);
+        assert_eq!(l.len(), 1);
+        let mut ends = l[0].ends;
+        ends.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        assert_eq!(ends, [(0.10, y), (0.12, y + 0.02)]);
     }
 }
