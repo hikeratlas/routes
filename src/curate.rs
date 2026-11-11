@@ -816,6 +816,10 @@ pub struct Start {
     /// unnamed lot and for where a trail meets a road (see Ctx::starts):
     /// those are named here, after the trail or road nearby (#63).
     pub known: bool,
+    /// Where a trail leaves driveways (see Ctx::starts, routes#156): a
+    /// named trail's hike starts here only where it's LOT_EXIT_HANDICAP_M
+    /// closer than a lot.
+    pub lot_exit: bool,
 }
 
 /// Shortest and longest named trail (in the park) to offer for itself.
@@ -1534,7 +1538,17 @@ impl<'a> Ctx<'a> {
                     .iter()
                     .map(|es| {
                         es.iter()
-                            .filter_map(|&n| sr.reached(n).map(|m| (m, si, n)))
+                            .filter_map(|&n| {
+                                sr.reached(n).map(|m| {
+                                    // A lot over the driveways a trail
+                                    // leaves, where they're comparable:
+                                    // Killarney's Cranberry Bog Trail from
+                                    // its lot, not a campsite driveway 190 m
+                                    // up the trail (routes#156).
+                                    let h = if s.lot_exit { LOT_EXIT_HANDICAP_M } else { 0.0 };
+                                    (m + h, si, n)
+                                })
+                            })
                             .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
                             .unwrap_or((f64::MAX, si, u32::MAX))
                     })
@@ -1897,6 +1911,7 @@ impl<'a> Ctx<'a> {
                     trailhead: p.trailhead,
                     osm_id: p.osm_id.clone(),
                     known: p.trailhead || !p.name.is_empty(),
+                    lot_exit: false,
                 },
                 walk,
                 trail,
@@ -1980,6 +1995,7 @@ impl<'a> Ctx<'a> {
                 trailhead: false,
                 osm_id: String::new(),
                 known: false,
+                lot_exit: false,
             });
         }
         // Where a trail leaves a lodge's or visitor centre's driveways in the
@@ -2039,6 +2055,7 @@ impl<'a> Ctx<'a> {
                     trailhead: false,
                     osm_id: String::new(),
                     known: false,
+                    lot_exit: true,
                 });
             }
         }
@@ -2053,6 +2070,7 @@ impl<'a> Ctx<'a> {
 /// leaves them.
 const LOT_EXIT_M: f64 = 300.0;
 const LOT_EXIT_SEP_M: f64 = 150.0;
+const LOT_EXIT_HANDICAP_M: f64 = 200.0;
 
 /// How far outside the park a lot mapped only by its aisles may be.
 const AISLE_REACH_M: f64 = 500.0;
@@ -3088,6 +3106,7 @@ mod tests {
                 trailhead,
                 osm_id: String::new(),
                 known: trailhead,
+                lot_exit: false,
             },
             walk,
             trail: trail.into(),
