@@ -286,9 +286,15 @@ fn read_tile(
                                 .is_some_and(|v| matches!(v, mvt::Value::Bool(true)))
                         };
                         let walk = foot == "designated" || flag("on_route");
+                        // A footway is for walking whatever else may use it:
+                        // Banff's Fenland Trail is a footway designated for
+                        // bikes too, untagged for foot on one way, which made
+                        // all of it a bike trail (routes#150).
                         let bike = !walk
                             && (flag("mtb")
-                                || (l.str(f, "bicycle") == "designated" && foot != "yes"));
+                                || (l.str(f, "bicycle") == "designated"
+                                    && foot != "yes"
+                                    && kind != "footway"));
                         let aisle = class == Class::Road && flag("parking_aisle");
                         for line in f.geometry() {
                             let pts: Vec<P> =
