@@ -112,3 +112,10 @@ again as the list grows), and says on stderr what to review: fuzzy matches,
 lengths far from OSM's, trails outside the park, and names with no OSM trail
 at all (gaps in the map, not in routes, so not drafted). Without `--write`
 it prints the drafts.
+
+A draft with no OSM trail of its name (no `osm_bbox`) leaves the website
+nothing to show but the whole park. `fixtures/locate-proposals.py --write`
+looks up the place its name goes to (Lake Annette Loop: Annette Lake) on
+OSM's Nominatim, inside the park's outline, and gives it `near` and
+`near_bbox` to show instead. Run it after adding drafts; it leaves alone
+those it has done.

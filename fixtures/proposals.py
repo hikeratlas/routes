@@ -11,7 +11,9 @@
 # "unclear"), why, hours, elev_m, issue, park_bbox [W, S, E, N], osm_trail
 # (the OSM trail of its name, if one matched, spelled as in OSM), osm_bbox (the
 # box of its ways, for the website to read them from the tiles), osm_km, suggest_km and
-# suggest_why (a length to consider instead, and why), note.
+# suggest_why (a length to consider instead, and why), note, near and
+# near_bbox (with no osm_bbox: the place its name goes to, as OSM names it,
+# and a box a few km around it, for the website to frame; locate-proposals.py).
 import glob, json, os
 
 from expectations import slug
