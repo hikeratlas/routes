@@ -969,7 +969,7 @@ fn named_throughs(ctx: &Ctx, starts: &[Start]) -> Vec<Through> {
     // km), split where it leaves the trail network for a few metres.
     const JOIN_M: f64 = 1000.0;
     let mut by_name: HashMap<&str, Vec<Line>> = HashMap::default();
-    for (name, path, ways, is_loop) in ctx.named_pieces(NAMED_MIN_M, 100000.0) {
+    for (name, path, ways, is_loop) in ctx.named_pieces(NAMED_MIN_M, 100000.0, false) {
         if !is_loop {
             by_name.entry(name).or_default().push((path, ways));
         }
@@ -1148,6 +1148,11 @@ fn runs_past_known(line: &[P], known: &[P]) -> bool {
 const ROAD_X_MULTI: f64 = 8.0;
 
 const NAMED_MIN_M: f64 = 1000.0;
+/// A named trail shorter than NAMED_MIN_M is a day hike too if a trailhead
+/// named for it (highway=trailhead, "Bog Trail") is within SIGNED_NEAR_M of
+/// it, down to this long: the park signed it for visitors (routes#155).
+const SIGNED_MIN_M: f64 = 300.0;
+const SIGNED_NEAR_M: f64 = 100.0;
 const NAMED_MAX_M: f64 = 15000.0;
 /// How far a trailhead may be from a named trail to start it.
 const NAMED_ACCESS_M: f64 = 3000.0;
@@ -1159,6 +1164,9 @@ const TOUR_OTHER_X: f64 = 4.0;
 const TOUR_ROAD_X: f64 = 20.0;
 const TOUR_BACK_X: f64 = 20.0;
 const TOUR_LIMIT_M: f64 = 15000.0;
+/// Up to this much unnamed trail joins a trail's pieces for its tour (a
+/// footbridge without the trail's name).
+const TOUR_GAP_M: f64 = 30.0;
 const TOUR_GAIN: f64 = 1.1;
 /// ...or when it's a loop where the piece is a line, walking this much of it.
 const TOUR_KEEP: f64 = 0.95;
@@ -1178,8 +1186,21 @@ impl<'a> Ctx<'a> {
     /// loop or line (or a forked trail's longest line), between min_m and
     /// max_m long, as (name, nodes in order, ways between them, is a loop).
     #[allow(clippy::type_complexity)]
-    fn named_pieces(&self, min_m: f64, max_m: f64) -> Vec<(&'a str, Vec<u32>, Vec<u32>, bool)> {
+    /// With `signed`, a trail shorter than min_m counts too where the park
+    /// signed a trailhead for it (see SIGNED_MIN_M).
+    fn named_pieces(
+        &self,
+        min_m: f64,
+        max_m: f64,
+        signed: bool,
+    ) -> Vec<(&'a str, Vec<u32>, Vec<u32>, bool)> {
         let g = &self.area.graph;
+        // Trailheads OSM names, for short trails the park signed.
+        let signs: Vec<&crate::area::Place> = if signed {
+            self.area.parkings.iter().filter(|p| p.trailhead && !p.name.is_empty()).collect()
+        } else {
+            vec![]
+        };
         // In-park, non-bike trail edges, by name.
         let mut by_name: HashMap<&'a str, Vec<(u32, u32, u32)>> = HashMap::default();
         for (u, adj) in g.adj.iter().enumerate() {
@@ -1204,6 +1225,12 @@ impl<'a> Ctx<'a> {
         // (name, nodes in order, ways between them, is a loop).
         let mut pieces: Vec<(&'a str, Vec<u32>, Vec<u32>, bool)> = vec![];
         for (name, edges) in &by_name {
+            // All of the trail, in every piece: a short trail is often
+            // mapped in pieces (Lone Shieling Trail, three).
+            let name_m: f64 = edges
+                .iter()
+                .map(|&(u, v, _)| metres(g.pts[u as usize], g.pts[v as usize]))
+                .sum();
             let mut nbrs: HashMap<u32, Vec<(u32, u32)>> = HashMap::default();
             for &(u, v, w) in edges {
                 nbrs.entry(u).or_default().push((v, w));
@@ -1324,6 +1351,18 @@ impl<'a> Ctx<'a> {
                 // A forked trail is long enough by all of it: its longest line
                 // stands for it, and named_trails walks it whole (trail_tour).
                 let long_enough = if branched { total >= min_m } else { m >= min_m };
+                // A short trail with its own trailhead sign: the park put it
+                // there for visitors (Cape Breton's Bog Trail, a 0.5 km
+                // boardwalk, routes#155). Its piece by the sign is enough:
+                // trail_tour walks the rest.
+                let long_enough = long_enough
+                    || (name_m >= SIGNED_MIN_M
+                        && signs.iter().any(|t| {
+                            named_for(&t.name, name)
+                                && comp
+                                    .iter()
+                                    .any(|&n| metres(g.pts[n as usize], t.pt) <= SIGNED_NEAR_M)
+                        }));
                 if long_enough && m <= max_m {
                     pieces.push((name, path, ways, is_loop));
                 }
@@ -1394,20 +1433,43 @@ impl<'a> Ctx<'a> {
         // tour turns at one of these, not at a stub of the trail mapped
         // apart (Granite Ridge Trail's 160 m piece), which it would have to
         // walk back from.
-        let mut own: HashSet<u32> = HashSet::default();
-        let mut stack = vec![entry];
-        own.insert(entry);
-        let mut own_m = 0.0;
-        while let Some(u) = stack.pop() {
+        // Across short unnamed bits of trail too: a footbridge often lacks
+        // the trail's name (MacIntosh Brook Trail's, 11-17 m, routes#155).
+        // Nodes by the least unnamed trail walked since the trail itself.
+        let unnamed = |w: u32| {
+            let way = &g.ways[w as usize];
+            way.name.is_empty() && way.class == Class::Trail
+        };
+        let mut gap_at: HashMap<u32, f64> = HashMap::default();
+        let mut stack = vec![(entry, 0.0)];
+        gap_at.insert(entry, 0.0);
+        let mut trail_edges: HashSet<u64> = HashSet::default();
+        while let Some((u, gu)) = stack.pop() {
+            if gap_at[&u] < gu {
+                continue;
+            }
             for e in &g.adj[u as usize] {
-                if is_trail(e.way) {
-                    own_m += e.m as f64 / 2.0; // each edge from both ends
-                    if own.insert(e.to) {
-                        stack.push(e.to);
-                    }
+                let gv = if is_trail(e.way) {
+                    trail_edges.insert(ekey(u, e.to));
+                    0.0
+                } else if unnamed(e.way) && gu + e.m as f64 <= TOUR_GAP_M {
+                    gu + e.m as f64
+                } else {
+                    continue;
+                };
+                if gap_at.get(&e.to).is_none_or(|&g0| gv < g0) {
+                    gap_at.insert(e.to, gv);
+                    stack.push((e.to, gv));
                 }
             }
         }
+        // The trail's own nodes: on its edges (not the end of a gap that
+        // leads nowhere).
+        let own: HashSet<u32> = gap_at.iter().filter(|&(_, &d)| d == 0.0).map(|(&n, _)| n).collect();
+        let own_m: f64 = trail_edges
+            .iter()
+            .map(|&k| metres(g.pts[(k >> 32) as usize], g.pts[(k & 0xffff_ffff) as usize]))
+            .sum();
         // Searches bounded by the trail's own length, as a city park has
         // hundreds of named trails.
         let limit = (own_m * 1.5 + 500.0).min(TOUR_LIMIT_M);
@@ -1447,7 +1509,7 @@ impl<'a> Ctx<'a> {
 
     pub fn named_trails(&self, starts: &[Start]) -> Vec<Cand> {
         let g = &self.area.graph;
-        let pieces = self.named_pieces(NAMED_MIN_M, NAMED_MAX_M);
+        let pieces = self.named_pieces(NAMED_MIN_M, NAMED_MAX_M, true);
         if pieces.is_empty() {
             return vec![];
         }
