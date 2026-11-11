@@ -546,6 +546,10 @@ impl<'a> Ctx<'a> {
             order.push(u);
             let es = &self.adj_e[self.adj_off[u as usize] as usize..self.adj_off[u as usize + 1] as usize];
             for e in es {
+                // Against a one-way trail (routes#163).
+                if !e.cost.is_finite() {
+                    continue;
+                }
                 let mut c = e.cost as f64;
                 if penal.is_some_and(|p| p.contains(&ekey(u, e.to))) {
                     c *= 8.0;
@@ -1412,6 +1416,9 @@ impl<'a> Ctx<'a> {
                     continue;
                 }
                 for e in &g.adj[u as usize] {
+                    if !e.cost.is_finite() {
+                        continue; // against a one-way trail
+                    }
                     let nd = d + cost(e.way, e.m as f64, back, ekey(u, e.to));
                     if nd < *dist.get(&e.to).unwrap_or(&f64::MAX) {
                         dist.insert(e.to, nd);
@@ -2537,6 +2544,20 @@ pub fn curate(
             })
             .collect();
         cands.extend(named);
+    }
+    // An out-and-back can't use a one-way trail: it walks it both ways. The
+    // Grouse Grind is up only; its hike comes down another way (routes#163).
+    let oneway: HashSet<u64> = (0..area.graph.adj.len() as u32)
+        .flat_map(|u| {
+            area.graph.adj[u as usize]
+                .iter()
+                .filter(|e| !e.cost.is_finite())
+                .map(move |e| ekey(u, e.to))
+        })
+        .collect();
+    if !oneway.is_empty() {
+        cands.retain(|c| c.kind != "out-and-back" || c.edges.is_disjoint(&oneway));
+        trails.retain(|c| c.kind != "out-and-back" || c.edges.is_disjoint(&oneway));
     }
     let mut day = select(&cands, n_day, true);
     real_trails(&mut day, &cands, &trails);
