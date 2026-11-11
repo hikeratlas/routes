@@ -192,5 +192,17 @@
       -114.992,
       51.113
     ]
+  },
+  {
+    "key": "cape-breton-highlands",
+    "id": "4855583",
+    "park": "Cape Breton Highlands National Park",
+    "why": "quality: park-listed trails as named regressions (routes#95)",
+    "bbox": [
+      -60.985,
+      46.576,
+      -60.297,
+      46.884
+    ]
   }
 ]
