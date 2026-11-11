@@ -816,6 +816,10 @@ pub struct Start {
     /// unnamed lot and for where a trail meets a road (see Ctx::starts):
     /// those are named here, after the trail or road nearby (#63).
     pub known: bool,
+    /// Where a trail leaves driveways (see Ctx::starts, routes#156): a
+    /// named trail's hike starts here only where it's LOT_EXIT_HANDICAP_M
+    /// closer than a lot.
+    pub lot_exit: bool,
 }
 
 /// Shortest and longest named trail (in the park) to offer for itself.
@@ -1534,7 +1538,17 @@ impl<'a> Ctx<'a> {
                     .iter()
                     .map(|es| {
                         es.iter()
-                            .filter_map(|&n| sr.reached(n).map(|m| (m, si, n)))
+                            .filter_map(|&n| {
+                                sr.reached(n).map(|m| {
+                                    // A lot over the driveways a trail
+                                    // leaves, where they're comparable:
+                                    // Killarney's Cranberry Bog Trail from
+                                    // its lot, not a campsite driveway 190 m
+                                    // up the trail (routes#156).
+                                    let h = if s.lot_exit { LOT_EXIT_HANDICAP_M } else { 0.0 };
+                                    (m + h, si, n)
+                                })
+                            })
                             .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
                             .unwrap_or((f64::MAX, si, u32::MAX))
                     })
@@ -1897,6 +1911,7 @@ impl<'a> Ctx<'a> {
                     trailhead: p.trailhead,
                     osm_id: p.osm_id.clone(),
                     known: p.trailhead || !p.name.is_empty(),
+                    lot_exit: false,
                 },
                 walk,
                 trail,
@@ -1980,11 +1995,82 @@ impl<'a> Ctx<'a> {
                 trailhead: false,
                 osm_id: String::new(),
                 known: false,
+                lot_exit: false,
             });
+        }
+        // Where a trail leaves a lodge's or visitor centre's driveways in the
+        // park: somewhere a car can get to, though no lot is mapped there.
+        // Mt Norquay's day lodge, 550 m from the ski area's lots, is where
+        // the trail to Cascade Amphitheatre starts (routes#156). The trail
+        // may meet them by a short track (the lodge's gravel tracks). Kept
+        // LOT_EXIT_SEP_M from every other start, not 1 km: the lot's own
+        // start already stands for a trail leaving its aisles.
+        if !trail_area {
+            let mut dist: HashMap<u32, f64> = HashMap::default();
+            let mut pq = BinaryHeap::new();
+            for (n, adj) in g.adj.iter().enumerate() {
+                if adj.iter().any(|e| g.ways[e.way as usize].lot) {
+                    dist.insert(n as u32, 0.0);
+                    pq.push(Q::new(0.0, n as u32));
+                }
+            }
+            while let Some(q) = pq.pop() {
+                let (d, u) = (q.key(), q.1);
+                if d > dist[&u] {
+                    continue;
+                }
+                for e in &g.adj[u as usize] {
+                    if !matches!(g.ways[e.way as usize].class, Class::Road | Class::Track) {
+                        continue;
+                    }
+                    let nd = d + e.m as f64;
+                    if nd <= LOT_EXIT_M && nd < *dist.get(&e.to).unwrap_or(&f64::MAX) {
+                        dist.insert(e.to, nd);
+                        pq.push(Q::new(nd, e.to));
+                    }
+                }
+            }
+            let mut exits: Vec<(f64, u32)> = dist
+                .into_iter()
+                .filter(|&(n, _)| {
+                    g.adj[n as usize].iter().any(is_trail)
+                        && self.area.park_dist(g.pts[n as usize], 0.0) == Some(0.0)
+                })
+                .map(|(n, d)| (d, n))
+                .collect();
+            exits.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            for (_, n) in exits {
+                let pt = g.pts[n as usize];
+                if merged.iter().any(|m| metres(m.pt, pt) < LOT_EXIT_SEP_M) {
+                    continue;
+                }
+                let name = match self.trail_name_near(n) {
+                    Some(t) if !t.starts_with("Parking off ") => t,
+                    _ => "Trail access".into(),
+                };
+                merged.push(Start {
+                    name,
+                    node: n,
+                    pt,
+                    trailhead: false,
+                    osm_id: String::new(),
+                    known: false,
+                    lot_exit: true,
+                });
+            }
         }
         merged
     }
 }
+
+/// A trail leaving driveways or a lot's aisles, or a road or track this short
+/// from them, is a start where no other start is LOT_EXIT_SEP_M away
+/// (routes#156): the Cascade Amphitheatre path leaves Mt Norquay's lodge
+/// tracks ~225 m from its driveways, 220 m from where Mount Norquay Route
+/// leaves them.
+const LOT_EXIT_M: f64 = 300.0;
+const LOT_EXIT_SEP_M: f64 = 150.0;
+const LOT_EXIT_HANDICAP_M: f64 = 200.0;
 
 /// How far outside the park a lot mapped only by its aisles may be.
 const AISLE_REACH_M: f64 = 500.0;
@@ -2132,6 +2218,67 @@ pub fn select(cands: &[Cand], n: usize, by_start: bool) -> Vec<Cand> {
     chosen.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
     chosen
 }
+
+/// A named trail that's a trail people walk, not a scramble or climbing
+/// route ("Mount Ishbel Route", SAC T4 and up).
+fn real_trail(c: &Cand) -> bool {
+    let lower = c.dest.to_lowercase();
+    c.ev.max_sac <= REAL_TRAIL_MAX_SAC && !lower.split(|ch: char| !ch.is_alphanumeric()).any(|w| w == "route")
+}
+
+/// Every real named trail is offered, beyond the day-hike budget: the
+/// budget is for choosing among destinations, and a park's own trails are
+/// what its visitors look for. Banff's Fenland Trail, Bow Valley's Middle
+/// Lake trail (#157). A trail counts as offered when the hikes chosen walk
+/// REAL_TRAIL_COVER of it. Otherwise its own hike is added, or the hike
+/// that stood for it (a destination hike from the same start that walks
+/// most of it: Boom Lake, for Boom Lake Trail), up to REAL_TRAILS_MAX more.
+fn real_trails(day: &mut Vec<Cand>, cands: &[Cand], trails: &[Cand]) {
+    let mut best: HashMap<&str, &Cand> = HashMap::default();
+    for t in trails.iter().filter(|t| real_trail(t)) {
+        if best.get(t.dest.as_str()).is_none_or(|b| t.score > b.score) {
+            best.insert(&t.dest, t);
+        }
+    }
+    let mut todo: Vec<&Cand> = best.into_values().collect();
+    todo.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap().then(a.dest.cmp(&b.dest)));
+    let mut covered: HashSet<u64> = day.iter().flat_map(|c| c.edges.iter().copied()).collect();
+    let mut added = 0;
+    for t in todo {
+        if added >= REAL_TRAILS_MAX {
+            break;
+        }
+        let walked = t.edges.intersection(&covered).count() as f64;
+        if walked >= REAL_TRAIL_COVER * t.edges.len().max(1) as f64 {
+            continue;
+        }
+        // The trail's own hike, if it's a candidate, else the one that
+        // stood for it.
+        let pick = cands
+            .iter()
+            .filter(|c| {
+                c.from == t.from && {
+                    let shared = t.edges.intersection(&c.edges).count() as f64;
+                    shared >= 0.7 * t.edges.len().max(1) as f64
+                        && shared >= 0.7 * c.edges.len().max(1) as f64
+                }
+            })
+            .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap())
+            .unwrap_or(t);
+        if day.iter().any(|d| d.from == pick.from && d.edges == pick.edges) {
+            continue;
+        }
+        covered.extend(pick.edges.iter().copied());
+        day.push(pick.clone());
+        added += 1;
+    }
+    day.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+}
+
+/// See real_trails.
+const REAL_TRAILS_MAX: usize = 100;
+const REAL_TRAIL_COVER: f64 = 0.7;
+const REAL_TRAIL_MAX_SAC: u8 = 3;
 
 pub struct BaseCamp {
     pub camp: String,
@@ -2363,13 +2510,16 @@ pub fn curate(
         })
         .collect();
     let mut cands = cands;
+    // Every named trail's own hike, for real_trails below.
+    let mut trails: Vec<Cand> = vec![];
     if !late() {
         // A named trail that a destination hike from the same trailhead
         // already walks (Wapta Falls Trail to Wapta Falls) is the same hike:
         // keep the one named for where it goes.
-        let named: Vec<Cand> = ctx
-            .named_trails(&starts)
-            .into_iter()
+        trails = ctx.named_trails(&starts);
+        let named: Vec<Cand> = trails
+            .iter()
+            .cloned()
             .filter(|n| {
                 // The same hike both ways: each walks most of the other. A
                 // loop that only shares a stretch with a destination hike
@@ -2388,7 +2538,8 @@ pub fn curate(
             .collect();
         cands.extend(named);
     }
-    let day = select(&cands, n_day, true);
+    let mut day = select(&cands, n_day, true);
+    real_trails(&mut day, &cands, &trails);
     let candidates: Vec<Value> = if CANDIDATES.load(Relaxed) {
         cands
             .iter()
@@ -3020,6 +3171,7 @@ mod tests {
                 trailhead,
                 osm_id: String::new(),
                 known: trailhead,
+                lot_exit: false,
             },
             walk,
             trail: trail.into(),
