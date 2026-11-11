@@ -1576,7 +1576,7 @@ impl<'a> Ctx<'a> {
         path: &[u32],
         ways: &[u32],
         entry: u32,
-    ) -> Option<Cand> {
+    ) -> Option<(Cand, Vec<u32>, Vec<u32>)> {
         let g = &self.area.graph;
         let (tp, tw): (Vec<u32>, Vec<u32>) = if entry == path[0] {
             (path.to_vec(), ways.to_vec())
@@ -1615,7 +1615,7 @@ impl<'a> Ctx<'a> {
             minor: false,
         };
         let (sc, parts) = score(&ev, &d, false);
-        Some(Cand {
+        let c = Cand {
             from: s.name.clone(),
             start,
             dest: name.to_string(),
@@ -1629,7 +1629,93 @@ impl<'a> Ctx<'a> {
             parts,
             edges: edge_set(&full),
             ev,
-        })
+        };
+        Some((c, full, fw))
+    }
+
+    /// A one-way trail up to a lift, and down another trail between the
+    /// same ends (routes#165): the Grouse Grind is up only, and its hikers
+    /// who don't ride down walk the BCMC Route. Of the trails down, the
+    /// easiest (by SAC grade), then the shortest: not Flint and Feather.
+    fn up_and_down(&self, lifted: &[(Cand, Vec<u32>, Vec<u32>)]) -> (Vec<Cand>, HashSet<String>) {
+        let g = &self.area.graph;
+        let walkable = |p: &[u32], back: bool| {
+            p.windows(2).all(|w| {
+                let (a, b) = if back { (w[1], w[0]) } else { (w[0], w[1]) };
+                g.adj[a as usize].iter().any(|e| e.to == b && e.cost.is_finite())
+            })
+        };
+        let mut out = vec![];
+        let mut downs: HashSet<String> = HashSet::default();
+        for (up, up_p, up_w) in lifted {
+            // Only a trail that can't be walked back down needs one: by its
+            // own ways, not the way to it (Flint and Feather's starts up
+            // the Grind).
+            let own_oneway = up_p.windows(2).zip(up_w).any(|(w, &wy)| {
+                g.ways[wy as usize].name == up.dest
+                    && !g.adj[w[1] as usize].iter().any(|e| e.to == w[0] && e.cost.is_finite())
+            });
+            if !own_oneway {
+                continue;
+            }
+            let down = lifted
+                .iter()
+                .filter(|(d, d_p, _)| {
+                    d.dest != up.dest
+                        && d.from == up.from
+                        && d.return_by == up.return_by
+                        && d_p.first() == up_p.first()
+                        && walkable(d_p, true)
+                })
+                .min_by(|a, b| {
+                    (a.0.ev.max_sac, a.0.ev.one_way)
+                        .partial_cmp(&(b.0.ev.max_sac, b.0.ev.one_way))
+                        .unwrap()
+                });
+            let Some((d, d_p, d_w)) = down else { continue };
+            downs.insert(d.dest.clone());
+            // Up, across the top from one trail's end to the other's, down.
+            let (top_up, top_down) = (*up_p.last().unwrap(), *d_p.last().unwrap());
+            let sr = self.search_to(top_up, LIFT_NEAR_M * 2.0, None, top_down);
+            let Some(_) = sr.reached(top_down) else { continue };
+            let (across, across_w) = sr.path(top_down);
+            let mut full = up_p.clone();
+            let mut fw = up_w.clone();
+            full.extend(across.iter().skip(1));
+            fw.extend(across_w);
+            full.extend(d_p.iter().rev().skip(1));
+            fw.extend(d_w.iter().rev());
+            let ev = self.evaluate(&full, &fw, false);
+            let name = format!("{} up, {} down", up.dest, d.dest);
+            let dest = Dest {
+                name: name.clone(),
+                kind: Kind::Trail,
+                pt: up.dest_pt,
+                area: 0.0,
+                wikidata: String::new(),
+                osm_ids: vec![],
+                qrank: 1.0,
+                lake: None,
+                minor: false,
+            };
+            let (sc, parts) = score(&ev, &dest, true);
+            out.push(Cand {
+                from: up.from.clone(),
+                start: up.start,
+                dest: name,
+                dest_kind: Kind::Trail,
+                dest_pt: up.dest_pt,
+                dest_osm_ids: vec![],
+                from_osm_id: up.from_osm_id.clone(),
+                return_by: String::new(),
+                kind: "loop",
+                score: sc,
+                parts,
+                edges: edge_set(&full),
+                ev,
+            });
+        }
+        (out, downs)
     }
 
     pub fn named_trails(&self, starts: &[Start]) -> Vec<Cand> {
@@ -1677,6 +1763,7 @@ impl<'a> Ctx<'a> {
             })
             .collect();
         let mut out = vec![];
+        let mut lifted: Vec<(Cand, Vec<u32>, Vec<u32>)> = vec![];
         for (pi, (name, path, ways, is_loop)) in pieces.iter().enumerate() {
             let Some(&(m, si, entry)) = near
                 .iter()
@@ -1693,8 +1780,9 @@ impl<'a> Ctx<'a> {
             // started: walked one way, returning by lift (routes#165). The
             // Grouse Grind is up only, and its hikers ride the Skyride down.
             if !*is_loop {
-                if let Some(c) = self.lift_hike(s, &sr, name, path, ways, entry) {
-                    out.push(c);
+                if let Some(l) = self.lift_hike(s, &sr, name, path, ways, entry) {
+                    out.push(l.0.clone());
+                    lifted.push(l);
                     continue;
                 }
             }
@@ -1835,6 +1923,11 @@ impl<'a> Ctx<'a> {
                 ev,
             });
         }
+        // The trail down's own hike, up it and down by lift, gives way to
+        // the loop: the BCMC Route is walked down after the Grind.
+        let (loops, downs) = self.up_and_down(&lifted);
+        out.retain(|c| c.kind != "one-way" || !downs.contains(&c.dest));
+        out.extend(loops);
         out
     }
 }
@@ -2356,13 +2449,16 @@ pub fn select(cands: &[Cand], n: usize, by_start: bool) -> Vec<Cand> {
 /// route ("Mount Ishbel Route", SAC T4 and up).
 fn real_trail(c: &Cand) -> bool {
     let lower = c.dest.to_lowercase();
-    c.ev.max_sac <= REAL_TRAIL_MAX_SAC && !lower.split(|ch: char| !ch.is_alphanumeric()).any(|w| w == "route")
+    // A "route" graded for hiking is a trail (Grouse Mountain's BCMC
+    // Route, T1-T2, routes#165); ungraded, it's likely a scramble.
+    c.ev.max_sac <= REAL_TRAIL_MAX_SAC
+        && (c.ev.max_sac > 0 || !lower.split(|ch: char| !ch.is_alphanumeric()).any(|w| w == "route"))
 }
 
 /// Every real named trail is offered, beyond the day-hike budget: the
 /// budget is for choosing among destinations, and a park's own trails are
 /// what its visitors look for. Banff's Fenland Trail, Bow Valley's Middle
-/// Lake trail (#157). A trail counts as offered when the hikes chosen walk
+/// Lake trail (#157). A trail counts as offered when a hike chosen walks
 /// REAL_TRAIL_COVER of it. Otherwise its own hike is added, or the hike
 /// that stood for it (a destination hike from the same start that walks
 /// most of it: Boom Lake, for Boom Lake Trail), up to REAL_TRAILS_MAX more.
@@ -2375,13 +2471,19 @@ fn real_trails(day: &mut Vec<Cand>, cands: &[Cand], trails: &[Cand]) {
     }
     let mut todo: Vec<&Cand> = best.into_values().collect();
     todo.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap().then(a.dest.cmp(&b.dest)));
-    let mut covered: HashSet<u64> = day.iter().flat_map(|c| c.edges.iter().copied()).collect();
     let mut added = 0;
     for t in todo {
         if added >= REAL_TRAILS_MAX {
             break;
         }
-        let walked = t.edges.intersection(&covered).count() as f64;
+        // Offered when one hike walks most of it: pieces of several don't
+        // make the trail (the Grind up and BCMC down, routes#165, is the
+        // Grind's hike up, a loop by BCMC's foot and another by its top).
+        let walked = day
+            .iter()
+            .map(|c| t.edges.intersection(&c.edges).count())
+            .max()
+            .unwrap_or(0) as f64;
         if walked >= REAL_TRAIL_COVER * t.edges.len().max(1) as f64 {
             continue;
         }
@@ -2401,7 +2503,6 @@ fn real_trails(day: &mut Vec<Cand>, cands: &[Cand], trails: &[Cand]) {
         if day.iter().any(|d| d.from == pick.from && d.edges == pick.edges) {
             continue;
         }
-        covered.extend(pick.edges.iter().copied());
         day.push(pick.clone());
         added += 1;
     }
