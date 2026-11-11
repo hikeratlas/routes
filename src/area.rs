@@ -127,6 +127,10 @@ pub struct Dest {
     /// has none.
     pub osm_ids: Vec<String>,
     pub qrank: f64,
+    /// How many sites have a trip report or trail guide about it
+    /// (hikeratlas/cc-crawler's mentions.py; --mentions): 0 if none, or
+    /// without --mentions.
+    pub mentions: u32,
     pub lake: Option<u32>, // for lakes: which lake (index into Area::lakes)
     /// A peak with neither an elevation nor a Wikidata item: often a
     /// climbing crag mapped as a peak (Joshua Tree's Cyclops Rock, Sports
@@ -172,6 +176,9 @@ pub struct Area {
     /// Passenger lifts (the basemap's kind=lift paths): a way back down,
     /// never walked (routes#165).
     pub lifts: Vec<Lift>,
+    /// Named trails' mentions (see Dest::mentions), by lowercased name:
+    /// those near the park, from --mentions.
+    pub trail_mentions: HashMap<String, u32>,
 }
 
 /// A gondola or cable car, by its two stations.
@@ -433,6 +440,7 @@ fn read_tile(
                                     wikidata: l.str(f, "wikidata").to_string(),
                                     osm_ids: osm_ids(l.str(f, "osm_id")),
                                     qrank: 1.0,
+                                    mentions: 0,
                                     lake: Some(id),
                                     minor: false,
                                 });
@@ -542,6 +550,7 @@ fn read_tile(
                                 wikidata: l.str(f, "wikidata").to_string(),
                                 osm_ids: osm_ids(l.str(f, "osm_id")),
                                 qrank: 1.0,
+                                mentions: 0,
                                 lake: None,
                                 minor: kind == Kind::Peak
                                     && l.get(f, "ele").is_none()
@@ -787,6 +796,7 @@ impl Area {
             aisles: vec![],
             known: vec![],
             lifts: vec![],
+            trail_mentions: HashMap::new(),
         };
         let mut known: HashMap<String, crate::recall::Known> = HashMap::new();
         let mut lake_pts: HashMap<u32, (f64, f64, f64)> = HashMap::new();

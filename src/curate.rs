@@ -234,6 +234,9 @@ pub struct Eval {
     pub bike: f64,
     /// Share of the route along an OSM hiking route (see Ctx::on_known).
     pub known: f64,
+    /// Mentions (Dest::mentions) of the named trail it walks most of, if
+    /// that's TRAIL_MENTION_SHARE of it or more.
+    pub trail_mentions: u32,
     pub via: Vec<String>,
     /// Hardest SAC grade along the route (1-4; 0 if none is graded): 4 is
     /// a scramble (#45).
@@ -321,6 +324,12 @@ pub fn merge_dests(mut dests: Vec<Dest>) -> Vec<Dest> {
 }
 
 impl<'a> Ctx<'a> {
+    /// How many sites write about a named trail near the park (see
+    /// Area::trail_mentions): 0 if none.
+    pub fn trail_mentions(&self, name: &str) -> u32 {
+        self.area.trail_mentions.get(&name.to_lowercase()).copied().unwrap_or(0)
+    }
+
     pub fn new(area: &'a Area, dem: &'a Dem, dests: Vec<Dest>, camps: Vec<Place>) -> Ctx<'a> {
         let g = &area.graph;
         let mut grid: HashMap<(u32, u32), Vec<u32>> = HashMap::default();
@@ -707,6 +716,15 @@ impl<'a> Ctx<'a> {
                 .sum::<f64>()
                 / one_way.max(1.0)
         };
+        // The named trail it walks most of, and how many sites write about it.
+        let trail_mentions = if self.area.trail_mentions.is_empty() {
+            0
+        } else {
+            main_trail_share(g, path, ways)
+                .filter(|(_, m)| *m >= TRAIL_MENTION_SHARE * one_way)
+                .map(|(n, _)| self.trail_mentions(n))
+                .unwrap_or(0)
+        };
         let mut via: Vec<String> = vec![];
         for &w in ways {
             let n = &g.ways[w as usize].name;
@@ -731,6 +749,7 @@ impl<'a> Ctx<'a> {
             road,
             bike,
             known,
+            trail_mentions,
             via,
             max_sac,
             line: full,
@@ -765,6 +784,16 @@ pub const MAX_BIKE: f64 = 0.5;
 /// trail from the road's end is under the 1.5 km a day hike needs. Roads closed
 /// to cars are tracks (area.rs), so fire roads and the like still count.
 pub const MAX_ROAD: f64 = 0.5;
+/// Mentions (Dest::mentions, Eval::trail_mentions) score up to W_MENTIONS,
+/// on a log scale that's full at MENTIONS_FULL sites: 1 site 0.18 of it, 10
+/// sites 0.61, 50 sites 1.0. Johnston Canyon Trail has 118, Lake Agnes 48,
+/// Larch Valley Trail 10; Cirrus Mountain 1 (basemap#281).
+const W_MENTIONS: f64 = 4.0;
+const MENTIONS_FULL: f64 = 50.0;
+/// A route's trail's mentions count for it when it walks this share of its
+/// length on that trail, so a short stretch of a famous trail doesn't
+/// make a route popular.
+const TRAIL_MENTION_SHARE: f64 = 0.4;
 const W_TOO_LONG: f64 = -1.5;
 const W_TOO_MUCH_GAIN: f64 = -1.0;
 
@@ -817,6 +846,14 @@ pub fn score(ev: &Eval, d: &Dest, is_loop: bool) -> (f64, Vec<(&'static str, f64
             W_TOO_MUCH_GAIN * ((ev.gain - 1700.0) / 600.0).max(0.0),
         ),
     ];
+    let mut parts = parts;
+    // How many sites write about where it goes, or the trail it mostly
+    // walks (basemap#281): QRank misses most trails, passes and small lakes.
+    let mentions = d.mentions.max(ev.trail_mentions);
+    if mentions > 0 {
+        let m = ((1.0 + mentions as f64).ln() / (1.0 + MENTIONS_FULL).ln()).min(1.0);
+        parts.push(("mentions", W_MENTIONS * m));
+    }
     let s = parts.iter().map(|p| p.1).sum();
     (
         s,
@@ -1629,6 +1666,7 @@ impl<'a> Ctx<'a> {
             wikidata: String::new(),
             osm_ids: vec![],
             qrank: 1.0,
+            mentions: self.trail_mentions(name),
             lake: None,
             minor: false,
         };
@@ -1713,6 +1751,7 @@ impl<'a> Ctx<'a> {
                 wikidata: String::new(),
                 osm_ids: vec![],
                 qrank: 1.0,
+                mentions: 0,
                 lake: None,
                 minor: false,
             };
@@ -1858,6 +1897,7 @@ impl<'a> Ctx<'a> {
                         wikidata: String::new(),
                         osm_ids: vec![],
                         qrank: 1.0,
+                        mentions: self.trail_mentions(name),
                         lake: None,
                         minor: false,
                     };
@@ -1921,6 +1961,7 @@ impl<'a> Ctx<'a> {
                 wikidata: String::new(),
                 osm_ids: vec![],
                 qrank: 1.0,
+                mentions: self.trail_mentions(name),
                 lake: None,
                 minor: false,
             };
@@ -2389,6 +2430,11 @@ const W_OWN_LOOP: f64 = 0.25;
 /// The named trail a route walks the most of, by length (ways[i] is the way
 /// from path[i] to path[i + 1]).
 fn main_trail<'g>(g: &'g crate::area::Graph, path: &[u32], ways: &[u32]) -> Option<&'g str> {
+    main_trail_share(g, path, ways).map(|(n, _)| n)
+}
+
+/// main_trail, with the metres of it walked.
+fn main_trail_share<'g>(g: &'g crate::area::Graph, path: &[u32], ways: &[u32]) -> Option<(&'g str, f64)> {
     let mut by: HashMap<&str, f64> = HashMap::default();
     for (w, &way) in path.windows(2).zip(ways) {
         let way = &g.ways[way as usize];
@@ -2397,7 +2443,7 @@ fn main_trail<'g>(g: &'g crate::area::Graph, path: &[u32], ways: &[u32]) -> Opti
                 metres(g.pts[w[0] as usize], g.pts[w[1] as usize]);
         }
     }
-    by.into_iter().max_by(|a, b| a.1.total_cmp(&b.1)).map(|(n, _)| n)
+    by.into_iter().max_by(|a, b| a.1.total_cmp(&b.1))
 }
 
 pub fn select(cands: &[Cand], n: usize, by_start: bool) -> Vec<Cand> {
@@ -2461,6 +2507,36 @@ pub fn select(cands: &[Cand], n: usize, by_start: bool) -> Vec<Cand> {
     }
     chosen.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
     chosen
+}
+
+/// Sites writing about a destination for it to be offered beyond the
+/// day-hike budget (see popular_dests).
+const POPULAR_SITES: u32 = 15;
+/// Room for popular destinations beyond the day-hike budget, as a share of
+/// it.
+const POPULAR_EXTRA: f64 = 0.5;
+
+/// Each popular destination (see POPULAR_SITES) that no chosen hike goes to
+/// gets its best hike, best scoring first, up to
+/// POPULAR_EXTRA x n of them. Not checked for new ground: Lake Agnes is on
+/// the way to the Big Beehive, and is where most people walk.
+fn popular_dests(day: &mut Vec<Cand>, cands: &[Cand], popular: &HashSet<&str>, n: usize) {
+    if popular.is_empty() {
+        return;
+    }
+    // By name, ignoring case: "Moraine lake" is Moraine Lake.
+    let mut done: HashSet<String> = day.iter().map(|c| c.dest.to_lowercase()).collect();
+    let mut best: Vec<&Cand> = cands.iter().filter(|c| popular.contains(c.dest.as_str())).collect();
+    best.sort_by(|a, b| b.score.total_cmp(&a.score));
+    let room = (n as f64 * POPULAR_EXTRA).round() as usize;
+    let mut added = 0;
+    for c in best {
+        if added < room && done.insert(c.dest.to_lowercase()) {
+            day.push(c.clone());
+            added += 1;
+        }
+    }
+    day.sort_by(|a, b| b.score.total_cmp(&a.score));
 }
 
 /// A named trail that's a trail people walk, not a scramble or climbing
@@ -2714,6 +2790,7 @@ pub fn curate(
                 wikidata: d.wikidata.clone(),
                 osm_ids: d.osm_ids.clone(),
                 qrank: d.qrank,
+                mentions: d.mentions,
                 lake: d.lake,
                 minor: d.minor,
             })
@@ -2805,6 +2882,17 @@ pub fn curate(
         trails.retain(|c| c.kind != "out-and-back" || c.edges.is_disjoint(&oneway));
     }
     let mut day = select(&cands, n_day, true);
+    // Destinations many sites write about, each with its own hike even past
+    // the budget (basemap#281): Banff's 15 went to peaks scoring higher on
+    // what they pass, and Bow Glacier Falls and Peyto Lake, well known,
+    // weren't offered.
+    let popular: HashSet<&str> = ctx
+        .dests
+        .iter()
+        .filter(|d| d.mentions >= POPULAR_SITES)
+        .map(|d| d.name.as_str())
+        .collect();
+    popular_dests(&mut day, &cands, &popular, n_day);
     real_trails(&mut day, &cands, &trails);
     let candidates: Vec<Value> = if CANDIDATES.load(Relaxed) {
         cands
@@ -3342,7 +3430,7 @@ mod tests {
         let ev = Eval {
             one_way: 0.0, total: 0.0, gain: 0.0, loss: 0.0, max_ele: 0.0, min_ele: 0.0,
             lc_shares: vec![], lc_variety: 0.0, open_high: 0.0, passed: vec![], along: vec![], camps: vec![],
-            road: 0.0, bike: 0.0, known: 0.0, via: vec![], max_sac: 0, line: vec![],
+            road: 0.0, bike: 0.0, known: 0.0, trail_mentions: 0, via: vec![], max_sac: 0, line: vec![],
         };
         let c = |from: &str, dest: &str, k: Kind| Cand {
             from: from.into(), start: (0.0, 0.0), dest: dest.into(), dest_kind: k,
@@ -3366,11 +3454,11 @@ mod tests {
             one_way: 6000.0, total: 12000.0, gain: 100.0, loss: 100.0,
             max_ele: 100.0, min_ele: 0.0, lc_shares: vec![], lc_variety: 1.0,
             open_high: 0.0, passed, along: vec![], camps: vec![], road: 0.0, bike: 0.0, known: 0.0,
-            via: vec![], max_sac: 0, line: vec![],
+            trail_mentions: 0, via: vec![], max_sac: 0, line: vec![],
         };
         let trail = Dest {
             name: "Minas Basin Trail".into(), kind: Kind::Trail, pt: (0.0, 0.0), area: 0.0,
-            wikidata: String::new(), osm_ids: vec![], qrank: 1.0, lake: None, minor: false,
+            wikidata: String::new(), osm_ids: vec![], qrank: 1.0, mentions: 0, lake: None, minor: false,
         };
         let appeal = |e: &Eval| score(e, &trail, false).1.iter().find(|p| p.0 == "appeal").unwrap().1;
         assert_eq!(appeal(&ev(vec![])), (W_APPEAL * crate::area::TRAIL_APPEAL * 100.0).round() / 100.0);

@@ -20,6 +20,9 @@ usage=$("$bin" 2>&1 || true)
 for a in ${ROUTES_ARGS:-}; do
   if grep -q -- "$a" <<< "$usage"; then extra+=("$a"); else echo "run.sh: $bin has no $a, running without it" >&2; fi
 done
+# How many sites write about each place (basemap#281): MENTIONS, a
+# mentions.tsv.gz, where set and the build takes --mentions.
+if [ -n "${MENTIONS:-}" ] && grep -q -- "--mentions" <<< "$usage"; then extra+=(--mentions "$MENTIONS"); fi
 # Each park's named trails, for the named regressions (expect.py), where the
 # build has them (routes#95).
 if grep -q -- "--trails" <<< "$usage"; then extra+=(--trails); fi
