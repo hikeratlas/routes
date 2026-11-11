@@ -46,7 +46,7 @@ def retried(f, tries=6):
             if r.status_code < 500:
                 return r
             r.raise_for_status()
-        except (requests.ConnectionError, requests.Timeout, requests.ChunkedEncodingError,
+        except (requests.ConnectionError, requests.Timeout, requests.exceptions.ChunkedEncodingError,
                 requests.HTTPError):
             if attempt == tries - 1:
                 raise
