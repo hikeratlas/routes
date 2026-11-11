@@ -38,6 +38,16 @@
 # draw one in more detail if that's not enough. The report notes a length
 # that passes by the trace only.
 #
+# A blessed entry is a `trail` entry with a trace made from a hike routes
+# offered (the website's /dev/regressions: "Bless"), to keep it as it is:
+# `blessed` says which ({key: the route's key, km, date, build}), and `km`
+# is its length then; `name` is what the site calls it, its name or else
+# "<dest> from <trailhead>". It's checked as any trail entry with a trace, but the
+# length within 15% of `km` (`km_tolerance`), not by the trace: it's the
+# hike's own length, not a park's rounded figure. When it fails, the report
+# says what became of the route of that key: renamed, longer or shorter,
+# moved, or gone.
+#
 # ROUTES_OUT is any routes output: one run's (parks/<id>.json, trails.jsonl,
 # listed.jsonl) or the fixtures' (<fixture>/parks/<id>.json, ...). Each
 # entry's park, by listed.jsonl (every park routes found in its area, and
@@ -63,6 +73,7 @@ from expectations import load, norm
 WALKS = 0.7
 TRACE_WITHIN_M, TRACE_COVER, TRACE_START_M, TRACE_END_M = 50, 0.7, 150, 150
 TRACE_KM = (0.85, 1.4)
+BLESSED_TOLERANCE = 0.15
 
 args = sys.argv[1:]
 out_json = None
@@ -236,19 +247,49 @@ def check_trace(e, rs, named, sized, problems):
     return checks
 
 
+def title(r):
+    """What the site calls a route: its name, else "<dest> from <from>"
+    (as routes' routes.geojsonl titles it). A blessed entry is named this,
+    as most hikes have no name of their own."""
+    return r.get('name') or f"{r.get('dest')} from {r.get('from')}"
+
+
+def became(e, rs):
+    """What became of a blessed entry's route: the one routes offers under
+    its key now, compared with what was blessed."""
+    b = e['blessed']
+    r = next((r for r in rs if r.get('key') == b['key']), None)
+    if r is None:
+        return f"routes no longer offers the blessed route ({b['key']})"
+    was, now = b.get('km', e['km']), r['route']['km']
+    diffs = []
+    if norm(title(r)) != norm(e['name']):
+        diffs.append(f"called {title(r)}, not {e['name']}")
+    if abs(now - was) > 0.05 * was:
+        diffs.append(f"{now} km, was {was}")
+    for what, off, m in (('starts', start_off, TRACE_START_M), ('ends', end_off, TRACE_END_M)):
+        if off(e['trace'], r) > m:
+            diffs.append(f"{what} {off(e['trace'], r):.0f} m from where it did")
+    c = cover(e['trace'], r, e.get('trace_within_m', TRACE_WITHIN_M))
+    if c < e.get('trace_cover', TRACE_COVER):
+        diffs.append(f"follows {c:.0%} of its old line")
+    return f"the blessed route ({b['key']}) is now {label(r)}" + (f": {'; '.join(diffs)}" if diffs else '')
+
+
 def line_km(line):
     return sum(metres(a, b) for a, b in zip(line, line[1:])) / 1000
 
 
 def check_trail(e, rs, trails):
     names = {norm(n) for n in [e['name'], e.get('trail'), *e.get('aka', [])] if n}
-    tol = e.get('km_tolerance', 0.3)
+    blessed = e.get('blessed')
+    tol = e.get('km_tolerance', BLESSED_TOLERANCE if blessed else 0.3)
     lo, hi = e['km'] * (1 - tol), e['km'] * (1 + tol)
     fits = lambda r: lo <= r['route']['km'] <= hi
-    named = [r for r in rs if norm(r.get('name')) in names]
+    named = [r for r in rs if norm(title(r) if blessed else r.get('name')) in names]
     notes = []
     want = f"{lo:.1f}-{hi:.1f} km"
-    if e.get('trace'):
+    if e.get('trace') and not blessed:
         # Or within TRACE_KM of the trace's own length.
         tk = line_km(e['trace'])
         tlo, thi = tk * TRACE_KM[0], tk * TRACE_KM[1]
@@ -268,6 +309,8 @@ def check_trail(e, rs, trails):
         problems.append(f"{e['name']} is {', '.join(label(r) for r in named)}; expected {want}")
     if e.get('trace'):
         checks = {'name': checks['name'], 'length': checks['length']} | check_trace(e, rs, named, sized, problems)
+        if blessed and problems:
+            problems.append(became(e, rs))
         return problems, checks, notes
     osm = e.get('trail', e['name'])
     t = None if trails is None else trails.get(norm(osm))
@@ -310,7 +353,8 @@ for e in expects:
                'no routes': 'routes found nothing to offer there'}.get(found['status'], found['status'])
         problems = [f"the park isn't curated: {why}"]
     status = 'skipped' if rs is None and not found else 'failing' if problems else 'ok'
-    results.append({k: e[k] for k in ('name', 'park', 'park_id', 'file', 'issue')}
+    results.append({k: e[k] for k in ('name', 'park', 'park_id', 'file')}
+                   | {'issue': e.get('issue') or 'blessed'}
                    | {'kind': kind, 'status': status, 'problems': problems}
                    | ({'checks': checks} if checks else {})
                    | ({'notes': notes} if notes else {}))

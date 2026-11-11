@@ -86,6 +86,17 @@ routes offers near it; accept one, or draw the hike along the trails, and
 it commits the entry, with the hike simplified to at most 20 points as its
 `trace`, to a pull request here.
 
+To keep a hike routes offers now, bless it (Bless, on the regressions page):
+that makes a trail entry from the hike itself, with its line as the trace,
+its length as `km`, what the site calls it (its name, else "<dest> from
+<trailhead>") as `name`, and `blessed`: `{key, km, date, build}`, the
+route's key in routes' output and its length then. It's checked as any
+entry with a trace, but its length within 15% of `km`, not by the trace,
+and it needs no `issue`. When it fails, the report says what became of the
+route of that key: called something else, longer or shorter, starting or
+ending elsewhere, on another line, or gone. Bless it again to accept a
+change.
+
 To see why routes doesn't offer a hike, `routes --candidates` writes every
 day hike each park considered, `picked` or not, to `candidates.geojsonl`
 (one GeoJSON feature per line, with its park, trailhead, destination, km
