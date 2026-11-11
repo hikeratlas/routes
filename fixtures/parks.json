@@ -180,5 +180,17 @@
       -115.145,
       52.292
     ]
+  },
+  {
+    "key": "bow-valley",
+    "id": "6364810",
+    "park": "Bow Valley Provincial Park",
+    "why": "quality: park-listed trails as named regressions (routes#95)",
+    "bbox": [
+      -115.342,
+      50.945,
+      -114.992,
+      51.113
+    ]
   }
 ]
