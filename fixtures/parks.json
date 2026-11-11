@@ -168,5 +168,17 @@
       -58.184,
       48.513
     ]
+  },
+  {
+    "key": "banff",
+    "id": "6365995",
+    "park": "Banff National Park",
+    "why": "quality: park-listed trails as named regressions (routes#95)",
+    "bbox": [
+      -117.337,
+      50.685,
+      -115.145,
+      52.292
+    ]
   }
 ]
