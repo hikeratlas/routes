@@ -1022,9 +1022,10 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>, skipped: Vec<Value>)
     }
 
     let mut written = 0;
-    for doc in kept {
+    for mut doc in kept {
         let (p_id, p_name) = (s(&doc["park"], "id"), s(&doc["park"], "name"));
         written += 1;
+        add_keys(&p_id, &mut doc);
         let body = serde_json::to_vec(&doc).unwrap();
         std::fs::write(out.join("parks").join(format!("{p_id}.json")), &body).unwrap();
         let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
@@ -1035,6 +1036,7 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>, skipped: Vec<Value>)
         offset += gz.len() as u64;
         // one line per route
         let mut emit = |id: String,
+                        key: Option<&str>,
                         typ: &str,
                         title: String,
                         route: &serde_json::Value,
@@ -1043,6 +1045,9 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>, skipped: Vec<Value>)
                 "id": id, "park": p_name, "park_id": p_id, "type": typ, "title": title,
                 "km": route["km"], "gain": route["gain"],
             });
+            if let Some(k) = key {
+                props["key"] = json!(k);
+            }
             for (k, v) in extra.as_object().unwrap() {
                 props[k] = v.clone();
             }
@@ -1058,6 +1063,7 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>, skipped: Vec<Value>)
         for (i, h) in doc["day_hikes"].as_array().unwrap().iter().enumerate() {
             emit(
                 format!("{p_id}/day/{i}"),
+                h["key"].as_str(),
                 "day",
                 named(h, format!("{} from {}", s(h, "dest"), s(h, "from"))),
                 &h["route"],
@@ -1068,6 +1074,7 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>, skipped: Vec<Value>)
         for (i, h) in doc["stops"].as_array().into_iter().flatten().enumerate() {
             emit(
                 format!("{p_id}/stop/{i}"),
+                h["key"].as_str(),
                 "stop",
                 format!("{} from {}", s(h, "dest"), s(h, "from")),
                 &h["route"],
@@ -1078,6 +1085,7 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>, skipped: Vec<Value>)
             let camp = s(b, "camp");
             emit(
                 format!("{p_id}/base/{i}"),
+                b["key"].as_str(),
                 "approach",
                 format!("{camp} from {}", s(b, "from")),
                 &b["approach"],
@@ -1086,6 +1094,7 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>, skipped: Vec<Value>)
             for (j, h) in b["hikes"].as_array().unwrap().iter().enumerate() {
                 emit(
                     format!("{p_id}/base/{i}/{j}"),
+                    h["key"].as_str(),
                     "from-camp",
                     named(h, format!("{} from {camp}", s(h, "dest"))),
                     &h["route"],
@@ -1101,6 +1110,7 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>, skipped: Vec<Value>)
         {
             emit(
                 format!("{p_id}/multi/{i}"),
+                t["key"].as_str(),
                 "multi-day",
                 named(
                     t,
@@ -1326,5 +1336,80 @@ mod tests {
         );
         assert_eq!(written(&dir, "a").unwrap()["point_to_points"].as_array().unwrap().len(), 1);
         assert_eq!(written(&dir, "b").unwrap()["point_to_points"].as_array().unwrap().len(), 1);
+    }
+}
+
+/// A route's stable key: what defines it, so it survives rebuilds that add,
+/// drop or reorder a park's routes (its `id`, "<park>/day/<i>", is a
+/// position and doesn't). Names are lower-cased with spaces collapsed; a
+/// multi-day trip's ends are sorted, as either way round is the same trip.
+///   day:       <park>|day|<trailhead>|<destination>|<kind>
+///   stop:      <park>|stop|<where the car is>|<sight>
+///   approach:  <park>|approach|<trailhead>|<camp>
+///   from-camp: <park>|camp|<camp>|<destination>|<kind>
+///   multi-day: <park>|multi|<end>|<end>|<kind>
+fn route_key(parts: &[&str]) -> String {
+    parts
+        .iter()
+        .map(|p| {
+            p.split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_lowercase()
+                .replace('|', "/")
+        })
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+/// Sets `key` (see route_key) on each of a park document's routes.
+fn add_keys(p_id: &str, doc: &mut Value) {
+    let s = |v: &Value, k: &str| v[k].as_str().unwrap_or("").to_string();
+    for h in doc["day_hikes"].as_array_mut().into_iter().flatten() {
+        h["key"] = json!(route_key(&[p_id, "day", &s(h, "from"), &s(h, "dest"), &s(h, "kind")]));
+    }
+    for h in doc["stops"].as_array_mut().into_iter().flatten() {
+        h["key"] = json!(route_key(&[p_id, "stop", &s(h, "from"), &s(h, "dest")]));
+    }
+    for b in doc["base_camps"].as_array_mut().into_iter().flatten() {
+        let camp = s(b, "camp");
+        b["key"] = json!(route_key(&[p_id, "approach", &s(b, "from"), &camp]));
+        for h in b["hikes"].as_array_mut().into_iter().flatten() {
+            h["key"] = json!(route_key(&[p_id, "camp", &camp, &s(h, "dest"), &s(h, "kind")]));
+        }
+    }
+    for t in doc["point_to_points"].as_array_mut().into_iter().flatten() {
+        let (mut a, mut b) = (s(t, "from"), s(t, "to"));
+        if s(t, "kind") == "loop" {
+            b = a.clone();
+        } else if a > b {
+            std::mem::swap(&mut a, &mut b);
+        }
+        t["key"] = json!(route_key(&[p_id, "multi", &a, &b, &s(t, "kind")]));
+    }
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::*;
+
+    // Keys are what define a route, not its position (cc-crawler links trip
+    // reports to routes by key, across rebuilds).
+    #[test]
+    fn keys_name_the_route_and_ignore_order_and_case() {
+        let mut doc = json!({
+            "day_hikes": [{"from": "Rubble Creek  Trailhead", "dest": "The Black Tusk", "kind": "out-and-back"}],
+            "stops": [],
+            "base_camps": [{"camp": "Garibaldi Lake", "from": "Rubble Creek Trailhead",
+                            "hikes": [{"dest": "Panorama Ridge", "kind": "out-and-back"}]}],
+            "point_to_points": [{"from": "Rubble Creek Trailhead", "to": "Cheakamus Lake", "kind": "point-to-point"},
+                                {"from": "A|B", "to": "", "kind": "loop"}],
+        });
+        add_keys("2226817", &mut doc);
+        assert_eq!(doc["day_hikes"][0]["key"], "2226817|day|rubble creek trailhead|the black tusk|out-and-back");
+        assert_eq!(doc["base_camps"][0]["key"], "2226817|approach|rubble creek trailhead|garibaldi lake");
+        assert_eq!(doc["base_camps"][0]["hikes"][0]["key"], "2226817|camp|garibaldi lake|panorama ridge|out-and-back");
+        assert_eq!(doc["point_to_points"][0]["key"], "2226817|multi|cheakamus lake|rubble creek trailhead|point-to-point");
+        assert_eq!(doc["point_to_points"][1]["key"], "2226817|multi|a/b|a/b|loop");
     }
 }
