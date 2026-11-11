@@ -460,12 +460,19 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> (Vec<Park>, Vec<Valu
         .collect();
     // A small notable park inside a bigger one is that park's to offer:
     // Patapsco Valley State Park's units (McKeldin Area, 1.6 km²) are each
-    // named a state park, and would repeat its hikes.
+    // named a state park, and would repeat its hikes. Not inside a trail
+    // area: that's a trail's corridor, and Grouse Mountain Regional Park
+    // lies in the Baden Powell Trail's (routes#165).
     let inside: Vec<(usize, usize)> = (0..v.len())
         .filter(|&i| v[i].small_notable)
         .filter_map(|i| {
             (0..v.len())
-                .find(|&j| j != i && v[j].area > INSIDE_RATIO * v[i].area && v[j].has_inside(&v[i]))
+                .find(|&j| {
+                    j != i
+                        && !v[j].trail_area
+                        && v[j].area > INSIDE_RATIO * v[i].area
+                        && v[j].has_inside(&v[i])
+                })
                 .map(|j| (i, j))
         })
         .collect();
