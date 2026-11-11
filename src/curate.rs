@@ -2046,10 +2046,13 @@ impl<'a> Ctx<'a> {
     }
 }
 
-/// A trail leaving driveways or a lot's aisles, or a track this short from
-/// them, is a start where no other start is LOT_EXIT_SEP_M away (routes#156).
-const LOT_EXIT_M: f64 = 150.0;
-const LOT_EXIT_SEP_M: f64 = 300.0;
+/// A trail leaving driveways or a lot's aisles, or a road or track this short
+/// from them, is a start where no other start is LOT_EXIT_SEP_M away
+/// (routes#156): the Cascade Amphitheatre path leaves Mt Norquay's lodge
+/// tracks ~225 m from its driveways, 220 m from where Mount Norquay Route
+/// leaves them.
+const LOT_EXIT_M: f64 = 300.0;
+const LOT_EXIT_SEP_M: f64 = 150.0;
 
 /// How far outside the park a lot mapped only by its aisles may be.
 const AISLE_REACH_M: f64 = 500.0;
