@@ -43,7 +43,8 @@ def load(d=DIR):
             except json.JSONDecodeError as x:
                 errors.append(f'{where}: not JSON ({x})')
                 continue
-            missing = [k for k in ('name', 'park', 'park_id', 'issue') if not e.get(k)]
+            # A blessed entry needs no issue: what it guards is its `blessed`.
+            missing = [k for k in ('name', 'park', 'park_id') + (() if e.get('blessed') else ('issue',)) if not e.get(k)]
             if missing:
                 errors.append(f"{where}: no {', '.join(missing)}")
                 continue
@@ -55,6 +56,11 @@ def load(d=DIR):
                 continue
             if t is not None and e.get('kind', 'dest') != 'trail':
                 errors.append(f"{where}: trace is for trail entries")
+                continue
+            b = e.get('blessed')
+            if b is not None and not (isinstance(b, dict) and isinstance(b.get('key'), str) and b['key']
+                                      and t is not None and isinstance(e.get('km'), (int, float))):
+                errors.append(f"{where}: a blessed entry is a trail entry with a trace and km, and blessed {{key, ...}}")
                 continue
             e['park_id'] = str(e['park_id'])
             ids.add(e['park_id'])
