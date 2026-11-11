@@ -31,6 +31,7 @@ jobs:
     timeout-minutes: 30
     outputs:
       snap: ${{ steps.snap.outputs.key }}
+      mentions: ${{ steps.mentions.outputs.tag }}
       prev: ${{ steps.prev.outputs.key }}
       # Whether the base's results came from the cache (else the run jobs
       # curate the base too)
@@ -186,6 +187,39 @@ jobs:
         if: steps.qrank.outputs.cache-hit != 'true'
         run: wget -q --tries=4 -O qrank.db https://github.com/hikeratlas/qrank/releases/download/latest/qrank.db
 
+      # How many sites write about each place (--mentions, basemap#281):
+      # hikeratlas/cc-crawler's mentions.py over its newest route-inputs
+      # release, as basemap's routes build does. A build without
+      # --mentions (the base, before it) runs without it.
+      - name: Which mentions
+        id: mentions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh api 'repos/hikeratlas/cc-crawler/releases?per_page=100' \
+            --jq '[.[] | select(.tag_name | startswith("route-inputs-run-"))][0].tag_name // ""')
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Mentions: cc-crawler's ${tag:-(none)}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Restore mentions
+        id: mentions-cache
+        if: steps.mentions.outputs.tag != ''
+        uses: actions/cache@v4
+        with:
+          path: mentions.tsv.gz
+          key: fixtures-mentions-${{ steps.mentions.outputs.tag }}
+
+      - name: Make mentions
+        if: steps.mentions.outputs.tag != '' && steps.mentions-cache.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git clone -q --depth 1 https://github.com/hikeratlas/cc-crawler.git "$RUNNER_TEMP/cc-crawler"
+          gh release download "${{ steps.mentions.outputs.tag }}" -R hikeratlas/cc-crawler --dir "$RUNNER_TEMP/ri" \
+            --pattern hikes.tsv.gz --pattern route_features.jsonl.gz
+          python3 -I "$RUNNER_TEMP/cc-crawler/scripts/mentions.py" --hikes "$RUNNER_TEMP/ri/hikes.tsv.gz" \
+            --features "$RUNNER_TEMP/ri/route_features.jsonl.gz" --out mentions.tsv.gz
+
   # One runner per set of runs. `base` is where the base's run of the same
   # parks goes, when its results weren't cached (pull requests only).
   run:
@@ -222,6 +256,13 @@ jobs:
           key: fixtures-qrank-${{ needs.build.outputs.snap }}
           fail-on-cache-miss: true
 
+      - name: Restore mentions
+        if: needs.build.outputs.mentions != ''
+        uses: actions/cache/restore@v4
+        with:
+          path: mentions.tsv.gz
+          key: fixtures-mentions-${{ needs.build.outputs.mentions }}
+
       # Per leg, as the legs read different tiles; saved from main.
       - name: Restore DEM tiles
         uses: actions/cache@v4
@@ -235,6 +276,7 @@ jobs:
         env:
           ROUTES_ARGS: ${{ matrix.args }}
           L: ${{ matrix.limit }}
+          MENTIONS: ${{ needs.build.outputs.mentions != '' && 'mentions.tsv.gz' || '' }}
         run: |
           chmod +x bin/*
           new/fixtures/run.sh bin/routes-base ${{ matrix.tiles }} out/prev/${{ matrix.base }} qrank.db dem "${L:-$LIMIT}" ${{ matrix.parks }}
@@ -243,6 +285,7 @@ jobs:
         env:
           ROUTES_ARGS: ${{ matrix.args }}
           L: ${{ matrix.limit }}
+          MENTIONS: ${{ needs.build.outputs.mentions != '' && 'mentions.tsv.gz' || '' }}
         run: |
           chmod +x bin/*
           new/fixtures/run.sh bin/routes-new ${{ matrix.tiles }} out/new/${{ matrix.leg == 'fixtures' && 'new' || matrix.leg }} qrank.db dem "${L:-$LIMIT}" ${{ matrix.parks }}

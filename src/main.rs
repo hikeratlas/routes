@@ -51,6 +51,10 @@ const USAGE: &str = "usage: routes --tiles FILE|URL [--tiles ...] --out DIR
                          provincial or state park (default 1)
   [--max-tiles N]        skip parks needing more z14 tiles than this (default 50000)
   [--qrank qrank.db]     Wikidata popularity (hikeratlas/qrank)
+  [--mentions FILE]      how many sites write about each place
+                         (hikeratlas/cc-crawler's mentions.py,
+                         mentions.tsv.gz): scores up popular trails and
+                         destinations QRank misses (basemap#281)
   [--tile-cache DIR]     cache tiles fetched from a URL here
   [--dem-cache DIR]      cache DEM tiles here
   [--dem-zoom Z]         DEM zoom (default 12)
@@ -90,6 +94,7 @@ struct Args {
     min_area_notable: f64,
     max_tiles: usize,
     qrank: Option<String>,
+    mentions: Option<PathBuf>,
     tile_cache: Option<PathBuf>,
     dem_cache: Option<PathBuf>,
     dem_zoom: u8,
@@ -112,6 +117,7 @@ fn args() -> Args {
         min_area_notable: 1.0,
         max_tiles: 50000,
         qrank: None,
+        mentions: None,
         tile_cache: None,
         dem_cache: None,
         dem_zoom: 12,
@@ -161,6 +167,7 @@ fn args() -> Args {
             "--min-area-notable" => a.min_area_notable = val.parse().unwrap_or_else(|_| die()),
             "--max-tiles" => a.max_tiles = val.parse().unwrap_or_else(|_| die()),
             "--qrank" => a.qrank = Some(val),
+            "--mentions" => a.mentions = Some(val.into()),
             "--tile-cache" => a.tile_cache = Some(val.into()),
             "--write-region" => a.write_region = Some(val.into()),
             "--dem-cache" => a.dem_cache = Some(val.into()),
@@ -675,6 +682,7 @@ fn main() {
         )
     });
 
+    let mentions = a.mentions.as_ref().map(|p| Mentions::load(p));
     let timed_out: Mutex<Vec<String>> = Mutex::new(vec![]);
     // Curate parks in parallel (biggest first), then write them out in order,
     // dropping routes a bigger park that overlaps this one already has.
@@ -709,6 +717,9 @@ fn main() {
                             .unwrap_or(1.0);
                     }
                 }
+            }
+            if let Some(m) = &mentions {
+                m.apply(&mut area);
             }
             // Day hikes: by the park's size, or by how much trail it has if
             // that's more (#38). Small parks with dense networks got 3:
@@ -1494,3 +1505,110 @@ mod key_tests {
         assert_eq!(doc["point_to_points"][1]["key"], "2226817|multi|a/b|a/b|loop");
     }
 }
+
+/// How many sites write about each place (hikeratlas/cc-crawler's
+/// mentions.py: osm_id, sites, pages, kind, name, lat, lon; gzipped TSV):
+/// destinations by their OSM ids, named trails by name near the park, as
+/// the park's ways carry no OSM ids (basemap#281).
+struct Mentions {
+    by_id: HashMap<String, u32>,
+    /// Every place's name (lowercased), sites, kind and position (lon, lat).
+    named: Vec<(String, u32, bool, (f64, f64))>,
+}
+
+impl Mentions {
+    fn load(path: &std::path::Path) -> Mentions {
+        use std::io::BufRead;
+        let f = std::fs::File::open(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let r = std::io::BufReader::new(flate2::read::MultiGzDecoder::new(f));
+        let mut m = Mentions { by_id: HashMap::default(), named: vec![] };
+        for line in r.lines().skip(1) {
+            let line = line.expect("mentions");
+            let c: Vec<&str> = line.split('\t').collect();
+            if c.len() < 7 {
+                continue;
+            }
+            let Ok(sites) = c[1].parse::<u32>() else { continue };
+            m.by_id.insert(c[0].to_string(), sites);
+            if !c[4].is_empty() {
+                if let (Ok(lat), Ok(lon)) = (c[5].parse::<f64>(), c[6].parse::<f64>()) {
+                    m.named.push((c[4].to_lowercase(), sites, c[3] == "trail", (lon, lat)));
+                }
+            }
+        }
+        eprintln!("mentions: {} places, {} named", m.by_id.len(), m.named.len());
+        m
+    }
+
+    /// Each destination's mentions: by its OSM ids, or a place of its name
+    /// within DEST_NAME_REACH (Consolation Lakes is two lakes, two ids:
+    /// pages name one, the routes the other); and the named trails' within
+    /// MENTION_REACH of the park's ways, by name.
+    fn apply(&self, area: &mut Area) {
+        let pts = &area.graph.pts;
+        if pts.is_empty() {
+            return;
+        }
+        // The ways' box, in degrees (points are world coordinates).
+        let (mut w, mut s, mut e, mut n) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        for &p in pts {
+            let (lon, lat) = geo::lonlat(p);
+            w = w.min(lon);
+            e = e.max(lon);
+            s = s.min(lat);
+            n = n.max(lat);
+        }
+        let dy = MENTION_REACH / 111_000.0;
+        let dx = dy / (((s + n) / 2.0).to_radians().cos()).max(0.1);
+        let near: Vec<&(String, u32, bool, (f64, f64))> = self
+            .named
+            .iter()
+            .filter(|(_, _, _, p)| p.0 >= w - dx && p.0 <= e + dx && p.1 >= s - dy && p.1 <= n + dy)
+            .collect();
+        for (name, sites, trail, _) in &near {
+            if *trail {
+                let v = area.trail_mentions.entry(name.clone()).or_default();
+                v.0 = v.0.max(*sites);
+            }
+        }
+        // Their lengths, each edge once.
+        let g = &area.graph;
+        for (u, adj) in g.adj.iter().enumerate() {
+            for e in adj.iter().filter(|e| e.to as usize > u) {
+                let name = &g.ways[e.way as usize].name;
+                if !name.is_empty() {
+                    if let Some(v) = area.trail_mentions.get_mut(&name.to_lowercase()) {
+                        v.1 += e.m as f64;
+                    }
+                }
+            }
+        }
+        for d in &mut area.dests {
+            let by_id = d.osm_ids.iter().filter_map(|i| self.by_id.get(i)).copied().max().unwrap_or(0);
+            let (lon, lat) = geo::lonlat(d.pt);
+            let name = d.name.to_lowercase();
+            let by_name = near
+                .iter()
+                .filter(|(n, _, _, p)| {
+                    *n == name
+                        && ((p.0 - lon) * lat.to_radians().cos()).hypot(p.1 - lat) * 111_000.0 <= DEST_NAME_REACH
+                })
+                .map(|x| x.1)
+                .max()
+                .unwrap_or(0);
+            // A big lake's pages are about all of it, not this park's shore
+            // (Killarney's Lake Huron).
+            d.mentions = if d.area > BIG_LAKE_M2 { 0 } else { by_id.max(by_name) };
+        }
+    }
+}
+
+/// How far outside a park's ways a trail's pages may place it and still
+/// count for a trail of that name in the park: pages put a trail at the
+/// middle of the places they name.
+const MENTION_REACH: f64 = 10_000.0;
+/// How far a place may be from a destination of the same name to count as
+/// it (a lake's pages put it at its middle; routes, where the trail meets it).
+const DEST_NAME_REACH: f64 = 3_000.0;
+/// Lakes bigger than this (m²) take no mentions (see apply).
+const BIG_LAKE_M2: f64 = 2e8;
