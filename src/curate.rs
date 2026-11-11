@@ -225,6 +225,10 @@ pub struct Eval {
     pub lc_variety: f64,
     pub open_high: f64,
     pub passed: Vec<(Kind, Vec<String>)>,
+    /// What it passes, in the order it does: kind, name, metres from the
+    /// start (where the walk first comes near it) and where (a lake's
+    /// shore where the walk meets it; anything else, its own point).
+    pub along: Vec<(Kind, String, f64, P)>,
     pub camps: Vec<(String, f64, P)>,
     pub road: f64,
     pub bike: f64,
@@ -630,30 +634,7 @@ impl<'a> Ctx<'a> {
         let ele: Vec<f64> = self.dem.profile(&prof);
         let (gain, loss) = gain_loss(&ele, 10.0);
         let high = ele.iter().filter(|&&e| e >= 1650.0).count() as f64 / ele.len() as f64;
-        // destinations passed within 100 m
-        let mut passed: HashMap<Kind, Vec<String>> = HashMap::default();
-        let near: HashSet<u32> = path.iter().copied().collect();
-        for (d, dn) in self.dests.iter().zip(&self.dest_near) {
-            if dn.iter().any(|n| near.contains(n)) {
-                passed.entry(d.kind).or_default().push(d.name.clone());
-            }
-        }
-        // lakes: passed if the route comes within 75 m of the shore
-        for d in &self.dests {
-            if let Some(id) = d.lake {
-                if self
-                    .lake_access
-                    .get(&id)
-                    .is_some_and(|ns| ns.iter().any(|n| near.contains(n)))
-                {
-                    passed.entry(Kind::Lake).or_default().push(d.name.clone());
-                }
-            }
-        }
-        let mut passed: Vec<(Kind, Vec<String>)> = passed.into_iter().collect();
-        passed.sort_by_key(|(k, _)| k.name());
-        // campsites along the way, at their distance from the start
-        let mut camps: Vec<(String, f64, P)> = vec![];
+        // the walk's nodes, and where each first comes along it (metres)
         let walk: Vec<u32> = if out_and_back {
             path.iter()
                 .chain(path.iter().rev().skip(1))
@@ -662,6 +643,42 @@ impl<'a> Ctx<'a> {
         } else {
             path.to_vec()
         };
+        let mut first: HashMap<u32, f64> = HashMap::default();
+        let mut m = 0.0;
+        for (i, &n) in walk.iter().enumerate() {
+            if i > 0 {
+                m += metres(g.pts[walk[i - 1] as usize], g.pts[n as usize]);
+            }
+            first.entry(n).or_insert(m);
+        }
+        let mut along: Vec<(Kind, String, f64, P)> = vec![];
+        // destinations passed within 100 m
+        let mut passed: HashMap<Kind, Vec<String>> = HashMap::default();
+        for (d, dn) in self.dests.iter().zip(&self.dest_near) {
+            if let Some(at) = dn.iter().filter_map(|n| first.get(n)).copied().reduce(f64::min) {
+                passed.entry(d.kind).or_default().push(d.name.clone());
+                along.push((d.kind, d.name.clone(), at, d.pt));
+            }
+        }
+        // lakes: passed if the route comes within 75 m of the shore
+        for d in &self.dests {
+            if let Some(id) = d.lake {
+                let shore = self.lake_access.get(&id).and_then(|ns| {
+                    ns.iter()
+                        .filter_map(|n| first.get(n).map(|m| (*m, *n)))
+                        .min_by(|a, b| a.0.total_cmp(&b.0))
+                });
+                if let Some((at, n)) = shore {
+                    passed.entry(Kind::Lake).or_default().push(d.name.clone());
+                    along.push((Kind::Lake, d.name.clone(), at, g.pts[n as usize]));
+                }
+            }
+        }
+        let mut passed: Vec<(Kind, Vec<String>)> = passed.into_iter().collect();
+        passed.sort_by_key(|(k, _)| k.name());
+        along.sort_by(|a, b| a.2.total_cmp(&b.2));
+        // campsites along the way, at their distance from the start
+        let mut camps: Vec<(String, f64, P)> = vec![];
         for &n in &walk {
             for &ci in self.camp_near.get(&n).map(|v| &v[..]).unwrap_or(&[]) {
                 let c = &self.camps[ci as usize];
@@ -709,6 +726,7 @@ impl<'a> Ctx<'a> {
             lc_variety,
             open_high: alpine_share * high,
             passed,
+            along,
             camps,
             road,
             bike,
@@ -3239,6 +3257,8 @@ pub fn eval_json(ev: &Eval) -> Value {
         "min_ele": ev.min_ele.round(),
         "landcover": ev.lc_shares.iter().map(|(k, v)| json!([k, (v * 100.0).round() / 100.0])).collect::<Vec<_>>(),
         "passes": ev.passed.iter().map(|(k, v)| json!([k.name(), v])).collect::<Vec<_>>(),
+        // [kind, name, km, [lon, lat]]: what it passes, in order.
+        "along": ev.along.iter().map(|(k, n, m, p)| json!([k.name(), n, (m / 100.0).round() / 10.0, geo::round_ll(*p)])).collect::<Vec<_>>(),
         "stopovers": ev.camps.iter().map(|(n, m, p)| json!({"name": n, "km": (m / 100.0).round() / 10.0, "at": geo::round_ll(*p)})).collect::<Vec<_>>(),
         "via": ev.via,
         "road_share": (ev.road * 100.0).round() / 100.0,
@@ -3321,7 +3341,7 @@ mod tests {
         use super::*;
         let ev = Eval {
             one_way: 0.0, total: 0.0, gain: 0.0, loss: 0.0, max_ele: 0.0, min_ele: 0.0,
-            lc_shares: vec![], lc_variety: 0.0, open_high: 0.0, passed: vec![], camps: vec![],
+            lc_shares: vec![], lc_variety: 0.0, open_high: 0.0, passed: vec![], along: vec![], camps: vec![],
             road: 0.0, bike: 0.0, known: 0.0, via: vec![], max_sac: 0, line: vec![],
         };
         let c = |from: &str, dest: &str, k: Kind| Cand {
@@ -3345,7 +3365,7 @@ mod tests {
         let ev = |passed: Vec<(Kind, Vec<String>)>| Eval {
             one_way: 6000.0, total: 12000.0, gain: 100.0, loss: 100.0,
             max_ele: 100.0, min_ele: 0.0, lc_shares: vec![], lc_variety: 1.0,
-            open_high: 0.0, passed, camps: vec![], road: 0.0, bike: 0.0, known: 0.0,
+            open_high: 0.0, passed, along: vec![], camps: vec![], road: 0.0, bike: 0.0, known: 0.0,
             via: vec![], max_sac: 0, line: vec![],
         };
         let trail = Dest {
