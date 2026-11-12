@@ -15,7 +15,7 @@ Without --write it prints what it would set. Proposals that already have
 `near_bbox`, or aren't open, are left alone, so it can be run again as
 proposals are added. Nominatim's policy: at most one request a second.
 """
-import argparse, json, math, os, re, sys, time, urllib.parse, urllib.request
+import argparse, json, math, os, re, sys, time, urllib.error, urllib.parse, urllib.request
 
 from proposals import DIR
 
@@ -54,8 +54,15 @@ def get(path, params):
     time.sleep(max(0.0, 1.1 - (time.time() - _last[0])))
     _last[0] = time.time()
     url = f'https://nominatim.openstreetmap.org/{path}?' + urllib.parse.urlencode(params)
-    with urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': UA}), timeout=60) as r:
-        return json.load(r)
+    # Nominatim answers 429 when it's busy: back off and try again.
+    for wait in (5, 30, 120, 300, None):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': UA}), timeout=60) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            if e.code != 429 or wait is None:
+                raise
+            time.sleep(wait)
 
 
 def park_shape(park_id):
