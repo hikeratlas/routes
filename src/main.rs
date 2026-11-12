@@ -514,6 +514,88 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> (Vec<Park>, Vec<Valu
     (v, small)
 }
 
+/// Points an outline (park_outline) is cut down to, at most.
+const OUTLINE_POINTS: usize = 80;
+
+/// A park's outline, small enough for a thumbnail (hikeratlas/website#110):
+/// its pieces' rings simplified (Douglas-Peucker) until there are at most
+/// OUTLINE_POINTS points, from 1% of its box, leaving out rings under 3% of
+/// it across, in [lon, lat] to 4 decimals. The pieces are as the tiles cut
+/// them, overlapping at tile edges: filled nonzero, they're one area.
+fn park_outline(p: &Park) -> Vec<Vec<[f64; 2]>> {
+    let size = (p.max.0 - p.min.0).max(p.max.1 - p.min.1);
+    if !(size > 0.0) {
+        return vec![];
+    }
+    let big: Vec<&Vec<geo::P>> = p
+        .rings
+        .iter()
+        .filter(|r| {
+            let (w, e) = r.iter().fold((f64::MAX, f64::MIN), |(w, e), q| (w.min(q.0), e.max(q.0)));
+            let (n, s) = r.iter().fold((f64::MAX, f64::MIN), |(n, s), q| (n.min(q.1), s.max(q.1)));
+            r.len() >= 3 && (e - w).max(s - n) >= 0.03 * size
+        })
+        .collect();
+    let mut tol = 0.01 * size;
+    loop {
+        // Not twice: a park mapped twice (merge_pieces) has each ring twice.
+        let mut rings: Vec<Vec<geo::P>> = vec![];
+        for r in big.iter().map(|r| simplify(r, tol)) {
+            if r.len() >= 3 && !rings.contains(&r) {
+                rings.push(r);
+            }
+        }
+        if rings.iter().map(|r| r.len()).sum::<usize>() <= OUTLINE_POINTS || tol > size {
+            let r4 = |v: f64| (v * 1e4).round() / 1e4;
+            return rings
+                .iter()
+                .map(|r| {
+                    r.iter()
+                        .map(|&q| {
+                            let (lon, lat) = geo::lonlat(q);
+                            [r4(lon), r4(lat)]
+                        })
+                        .collect()
+                })
+                .collect();
+        }
+        tol *= 1.5;
+    }
+}
+
+/// Douglas-Peucker: the points of `r` within `tol` of the line kept.
+fn simplify(r: &[geo::P], tol: f64) -> Vec<geo::P> {
+    if r.len() < 3 {
+        return r.to_vec();
+    }
+    let mut keep = vec![false; r.len()];
+    keep[0] = true;
+    keep[r.len() - 1] = true;
+    let mut stack = vec![(0, r.len() - 1)];
+    while let Some((a, b)) = stack.pop() {
+        let (pa, pb) = (r[a], r[b]);
+        let (dx, dy) = (pb.0 - pa.0, pb.1 - pa.1);
+        let len = dx.hypot(dy);
+        let (mut far, mut at) = (0.0, 0);
+        for (i, q) in r.iter().enumerate().take(b).skip(a + 1) {
+            let d = if len > 0.0 {
+                ((q.0 - pa.0) * dy - (q.1 - pa.1) * dx).abs() / len
+            } else {
+                (q.0 - pa.0).hypot(q.1 - pa.1)
+            };
+            if d > far {
+                (far, at) = (d, i);
+            }
+        }
+        if far > tol {
+            keep[at] = true;
+            stack.push((a, at));
+            stack.push((at, b));
+        }
+    }
+    r.iter().zip(keep).filter(|(_, k)| *k).map(|(q, _)| *q).collect()
+}
+
 /// How close (m, box to box) same-named parks are to be pieces of one park.
 const PIECE_GAP_M: f64 = 1000.0;
 
@@ -863,6 +945,11 @@ fn main() {
             }
             if !p.operator.is_empty() {
                 doc["park"]["operator"] = json!(p.operator);
+            }
+            // Its shape, for its card in a state's list (website#110).
+            let outline = park_outline(p);
+            if !outline.is_empty() {
+                doc["park"]["outline"] = json!(outline);
             }
             // Kept apart from the park's routes (write_outputs moves it to
             // known.jsonl), so the website's files don't grow.
@@ -1382,6 +1469,27 @@ mod tests {
     // Same-named parks that touch are one park (basemap#296): merged into the
     // biggest, the others' ids in `also`; a same-named park far away, and a
     // differently named one beside it, stay their own.
+    // A park's outline is cut to OUTLINE_POINTS, keeps its shape, and leaves
+    // out specks.
+    #[test]
+    fn outline_is_small() {
+        let mut p = shard_park("o");
+        let (cx, cy, r) = (geo::WORLD / 2.0, geo::WORLD / 2.0, 5000.0);
+        let circle: Vec<geo::P> = (0..2000)
+            .map(|i| {
+                let a = i as f64 / 2000.0 * std::f64::consts::TAU;
+                (cx + r * a.cos(), cy + r * a.sin())
+            })
+            .collect();
+        let speck = vec![(cx + 2.0 * r, cy), (cx + 2.0 * r + 10.0, cy), (cx + 2.0 * r, cy + 10.0)];
+        p.rings = vec![circle, speck];
+        p.min = (cx - r, cy - r);
+        p.max = (cx + 2.0 * r + 10.0, cy + r);
+        let o = park_outline(&p);
+        assert_eq!(o.len(), 1);
+        assert!(o[0].len() <= OUTLINE_POINTS && o[0].len() >= 12, "{}", o[0].len());
+    }
+
     #[test]
     fn same_named_pieces_are_one_park() {
         // World units: at y = 0 (mpu ~ 0.6 m/unit near the top of the world),
