@@ -52,6 +52,14 @@
 # says what became of the route of that key: renamed, longer or shorter,
 # moved, or gone.
 #
+# "featured": the park's featured hike on the homepage, picked as the
+# website picks it (fixtures/featured.py: the best easy or moderate day
+# hike near the park's best score). `not`: names it mustn't be (Killarney's
+# "Lake Huron", a 3 km walk to the shore of a lake mostly outside the park,
+# routes#192); `one_of`: names it should be, for a park whose right picks
+# are known. Either matches the hike's name or its destination, as "trail"
+# entries do. `name` labels the entry ("Featured hike").
+#
 # ROUTES_OUT is any routes output: one run's (parks/<id>.json, trails.jsonl,
 # listed.jsonl) or the fixtures' (<fixture>/parks/<id>.json, ...). Each
 # entry's park, by listed.jsonl (every park routes found in its area, and
@@ -74,6 +82,7 @@ import glob, json, math, os, re, sys
 from functools import lru_cache
 
 from expectations import load, norm
+from featured import describe as describe_featured, featured, title as featured_title
 
 WALKS = 0.7
 TRACE_WITHIN_M, TRACE_COVER, TRACE_START_M, TRACE_END_M = 50, 0.7, 150, 150
@@ -95,6 +104,31 @@ proposals.load()  # a malformed proposal fails here too, as an entry would
 def metres(a, b):
     dx = (b[0] - a[0]) * 111320 * math.cos(math.radians(a[1]))
     return math.hypot(dx, (b[1] - a[1]) * 110570)
+
+
+@lru_cache(maxsize=None)
+def park_doc(park_id):
+    """The park's routes document, or None if this output doesn't have it."""
+    paths = glob.glob(os.path.join(root, 'parks', f'{park_id}.json')) + \
+        glob.glob(os.path.join(root, '*', 'parks', f'{park_id}.json'))
+    return json.load(open(paths[0])) if paths else None
+
+
+def check_featured(e, doc):
+    """A featured entry: the park's featured hike isn't one of `not`, and is
+    one of `one_of` where that's given."""
+    h = featured(doc)
+    if h is None:
+        return ['the park has no day hikes'], {'featured': False}, []
+    names = {norm(featured_title(h)), norm(h.get('dest'))}
+    problems = []
+    bad = [n for n in e.get('not', []) if norm(n) in names]
+    if bad:
+        problems.append(f"the featured hike is {describe_featured(h)}, which it shouldn't be")
+    if e.get('one_of') and not any(norm(n) in names for n in e['one_of']):
+        problems.append(f"the featured hike is {describe_featured(h)}, not one of {', '.join(e['one_of'])}")
+    notes = [] if problems else [f"featured: {describe_featured(h)}"]
+    return problems, {'featured': not problems}, notes
 
 
 @lru_cache(maxsize=None)
@@ -375,7 +409,9 @@ for e in expects:
         pid = other(found)
         rs = park_routes(pid)
     if rs is not None:
-        if kind == 'trail':
+        if kind == 'featured':
+            problems, checks, notes = check_featured(e, park_doc(pid))
+        elif kind == 'trail':
             problems, checks, notes = check_traces(e, rs, park_trails(pid))
         else:
             problems, checks, notes = check_dest(e, rs)

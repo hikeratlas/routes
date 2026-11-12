@@ -102,6 +102,18 @@ route of that key: called something else, longer or shorter, starting or
 ending elsewhere, on another line, or gone. Bless it again to accept a
 change.
 
+A third kind, `featured`, checks the park's featured hike on the homepage,
+picked as the website picks it (`featured.py`, after the website's
+`app/featured.ts`: the best-scoring easy or moderate day hike within 70% of
+the park's best score, else the best): `not`, names it mustn't be
+(Killarney's "Lake Huron", a 3 km walk to the shore of a Great Lake,
+routes#192), and `one_of`, names it should be where the right picks are
+known. Names match the hike's name or its destination. The homepage's
+showcase parks (the website's `SHOWCASE`) are all fixtures for this, and
+`compare.py` lists each fixture park's featured hike, main's and the
+change's, so a change to one shows in the PR whether or not an entry
+guards it. Keep `featured.py` in step with the website.
+
 To see why routes doesn't offer a hike, `routes --candidates` writes every
 day hike each park considered, `picked` or not, to `candidates.geojsonl`
 (one GeoJSON feature per line, with its park, trailhead, destination, km

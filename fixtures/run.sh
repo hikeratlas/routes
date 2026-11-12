@@ -9,6 +9,8 @@
 # set, is passed on to routes (e.g. --no-known-bonus); so is --trails, for
 # fixtures/expect.py, if the build has it. ONLY, if set, runs just those
 # fixtures (keys, space-separated), e.g. ONLY="cape-split killarney".
+# SHARD, if set ("i/n"), runs every n-th fixture from the i-th (from 0), so n
+# jobs can share the list: CI runs parks.json in two.
 set -uo pipefail
 bin=$1 tiles=$2 out=$3 qrank=$4 dem=$5 limit=${6:-600}
 here=$(dirname "$(readlink -f "$0")")
@@ -30,8 +32,11 @@ keys=$(jq -r '.[].key' "$list")
 for k in ${ONLY:-}; do
   grep -qx -- "$k" <<< "$keys" || { echo "run.sh: no fixture $k in $list" >&2; exit 2; }
 done
+i=-1
 for key in $keys; do
+  i=$((i + 1))
   if [ -n "${ONLY:-}" ] && [[ " $ONLY " != *" $key "* ]]; then continue; fi
+  if [ -n "${SHARD:-}" ] && [ $((i % ${SHARD#*/})) -ne "${SHARD%/*}" ]; then continue; fi
   id=$(jq -r --arg k "$key" '.[] | select(.key == $k) | .id // ""' "$list")
   if [ -n "$id" ]; then
     pick=(--park-id "$id")
