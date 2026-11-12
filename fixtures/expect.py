@@ -57,8 +57,9 @@
 # entry's park, by listed.jsonl (every park routes found in its area, and
 # what became of it, routes#109):
 #   - written: checked;
-#   - a twin (the same park mapped twice, its routes in the other), or a
-#     small park inside a bigger one: checked on that park's routes;
+#   - a twin (the same park mapped twice, its routes in the other), a
+#     small park inside a bigger one, or a piece of a park curated with it
+#     (same-named pieces that touch): checked on that park's routes;
 #   - found but not curated (under --min-area, over --max-tiles, no routes):
 #     failing, as nothing is offered there;
 #   - not found: skipped, as the park isn't in this output's area (Killarney
@@ -131,6 +132,13 @@ trail_files = glob.glob(os.path.join(root, 'trails.jsonl')) + glob.glob(os.path.
 _trails = None
 
 
+def other(found):
+    """The park whose document has a listed park's routes: its twin (the
+    same park mapped twice), the bigger park it's in, or the park it's a
+    piece of (routes curates same-named pieces that touch as one, #178)."""
+    return found.get('twin') or found.get('in') or found.get('of')
+
+
 def park_trails(park_id):
     """The park's named trails from trails.jsonl, by norm(name), or None if
     this output has no trails.jsonl. Only the parks with trail entries are
@@ -140,8 +148,7 @@ def park_trails(park_id):
         return None
     if _trails is None:
         want = {e['park_id'] for e in expects if e.get('kind') == 'trail'}
-        want |= {listed[i].get('twin') or listed[i]['in'] for i in want
-                 if listed.get(i, {}).get('twin') or listed.get(i, {}).get('in')}
+        want |= {other(listed[i]) for i in want if other(listed.get(i, {}))}
         _trails = {}
         for path in trail_files:
             for line in open(path):
@@ -361,10 +368,11 @@ for e in expects:
     rs = park_routes(pid)
     problems, checks, notes = [], None, []
     found = listed.get(pid)
-    if rs is None and found and (found.get('twin') or found.get('in')):
-        # The same park mapped twice, or a small park inside a bigger one:
-        # its routes are in the other's document.
-        pid = found.get('twin') or found['in']
+    if rs is None and found and other(found):
+        # The same park mapped twice, a small park inside a bigger one, or a
+        # piece of a park curated with it: its routes are in the other's
+        # document.
+        pid = other(found)
         rs = park_routes(pid)
     if rs is not None:
         if kind == 'trail':
