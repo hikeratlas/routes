@@ -454,7 +454,10 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> (Vec<Park>, Vec<Valu
             p
         })
         .collect();
-    v.sort_by(|a, b| b.area.partial_cmp(&a.area).unwrap());
+    // Ties by id: a park mapped twice has two equal areas (Cape Breton
+    // Highlands National Park), and which comes first picks the id
+    // merge_pieces keeps, so the order must not hang on the map's.
+    v.sort_by(|a, b| b.area.total_cmp(&a.area).then_with(|| a.id.cmp(&b.id)));
     let v = merge_pieces(v);
     // A park under the minimums is curated if an OSM hiking route runs
     // through it: a trail is evidence the park is for walking, whatever its
