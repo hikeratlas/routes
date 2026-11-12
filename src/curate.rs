@@ -1564,14 +1564,18 @@ impl<'a> Ctx<'a> {
         // tour turns at one of these, not at a stub of the trail mapped
         // apart (Granite Ridge Trail's 160 m piece), which it would have to
         // walk back from.
-        // Across short bits of other trail too: a footbridge often lacks
-        // the trail's name (MacIntosh Brook Trail's, 11-17 m, routes#155),
-        // or has another's (Freshwater Lake Trail crosses between ponds on
-        // 20 m of the Old Keltic Road, a track, routes#95).
-        // Nodes by the least other trail walked since the trail itself.
+        // Across short unnamed bits of trail too: a footbridge often lacks
+        // the trail's name (MacIntosh Brook Trail's, 11-17 m, routes#155).
+        // And short bits of track: Freshwater Lake Trail crosses between
+        // ponds on 20 m of the Old Keltic Road (routes#95). Not another
+        // named trail: two side by side, joined at their ends, would make
+        // one tour (Lake Louise's Tram Line and Louise Creek trails).
+        // Nodes by the least of these walked since the trail itself.
         let unnamed = |w: u32| {
             let way = &g.ways[w as usize];
-            matches!(way.class, Class::Trail | Class::Track) && !way.bike
+            !way.bike
+                && (way.class == Class::Track
+                    || (way.class == Class::Trail && way.name.is_empty()))
         };
         let mut gap_at: HashMap<u32, f64> = HashMap::default();
         let mut stack = vec![(entry, 0.0)];
@@ -2687,11 +2691,14 @@ fn mostly(hike: &Cand, trail: &Cand) -> bool {
 /// turns back short of its end, by SHORT_OF_MIN_M to SHORT_OF_MAX_M: a
 /// sight along the trail, near its end. Farther from the end, the sight is
 /// the hike (Johnston Canyon's Upper Falls, not the Ink Pots past them).
+/// And a trail named for it is the way to it: Wedgemount Lake Trail runs on
+/// past the lake's near shore, but the hike is to Wedgemount Lake.
 fn short_of(hike: &Cand, trail: &Cand) -> bool {
     // Out and back, both: the extra is there and back.
     let extra = (trail.ev.total - hike.ev.total) / 2.0;
     hike.from == trail.from
         && hike.dest_kind != Kind::Trail
+        && !named_for(&trail.dest, &hike.dest)
         && trail.kind == "out-and-back"
         && hike.kind == "out-and-back"
         && (SHORT_OF_MIN_M..=SHORT_OF_MAX_M).contains(&extra)
