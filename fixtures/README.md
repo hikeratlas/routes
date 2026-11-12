@@ -44,8 +44,9 @@ A park the output doesn't have is checked by routes' `listed.jsonl`, every
 park it found in its area and what became of it. If routes found the park
 but didn't curate it (under `--min-area`, over `--max-tiles`, or nothing to
 offer), its entries fail: nothing is offered there (Cape Split, routes#109).
-If the park is the same park mapped twice, its entries are checked on the
-twin's routes. Only a park routes didn't find at all is skipped, as outside
+If the park is the same park mapped twice, a small park inside a bigger
+one, or a piece of a park curated with it (same-named pieces that touch,
+routes#178), its entries are checked on the other park's routes. Only a park routes didn't find at all is skipped, as outside
 the output's area (Killarney in a Nova Scotia build). A park with entries
 should be a fixture too (`parks.json`), so CI always runs it.
 
