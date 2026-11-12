@@ -216,5 +216,17 @@
       -123.065,
       49.395
     ]
+  },
+  {
+    "key": "northern-rocky-mountains",
+    "id": "2226566",
+    "park": "Northern Rocky Mountains Provincial Park",
+    "why": "quality: the Wokkpash Valley-MacDonald Creek loop, park-listed trails as named regressions (routes#95); the park's north end, where its trails are",
+    "bbox": [
+      -125.1,
+      58.25,
+      -124.6,
+      58.72
+    ]
   }
 ]
