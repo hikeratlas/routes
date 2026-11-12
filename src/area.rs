@@ -240,7 +240,7 @@ fn read_tile(
     archives: &[PmTiles],
     tx: u32,
     ty: u32,
-    park_id: &str,
+    park_ids: &[String],
     lake_ids: &std::sync::Mutex<HashMap<(String, i64), u32>>,
 ) -> Raw {
     let mut raw = Raw {
@@ -481,7 +481,7 @@ fn read_tile(
                             });
                         }
                     }
-                    "park" | "trail_area" if f.typ == 3 && l.str(f, "osm_id") == park_id => {
+                    "park" | "trail_area" if f.typ == 3 && park_ids.iter().any(|i| i == l.str(f, "osm_id")) => {
                         raw.data.park.push(Poly::new(
                             geo::rings(f.geometry(), tx, ty, l.extent),
                             tx,
@@ -783,11 +783,13 @@ impl Graph {
 const ON_OUTLINE: f64 = 2.0;
 
 impl Area {
-    pub fn load(archives: &[PmTiles], park_id: &str, tiles: &[(u32, u32)]) -> Area {
+    /// park_ids: the park's OSM ids, any of whose polygons is the park (one
+    /// park mapped as several same-named pieces is curated as one).
+    pub fn load(archives: &[PmTiles], park_ids: &[String], tiles: &[(u32, u32)]) -> Area {
         let lake_ids = std::sync::Mutex::new(HashMap::new());
         let raws: Vec<Raw> = tiles
             .par_iter()
-            .map(|&(x, y)| read_tile(archives, x, y, park_id, &lake_ids))
+            .map(|&(x, y)| read_tile(archives, x, y, park_ids, &lake_ids))
             .collect();
         let graph = Graph::build(&raws);
         let mut area = Area {
