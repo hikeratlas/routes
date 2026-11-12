@@ -2560,6 +2560,45 @@ fn popular_dests(day: &mut Vec<Cand>, cands: &[Cand], popular: &HashSet<&str>, n
     day.sort_by(|a, b| b.score.total_cmp(&a.score));
 }
 
+/// A hike that another start makes the same way, shorter, scoring about as
+/// well, is that hike with a walk between starts added: the shorter stands.
+/// Cascade Amphitheatre from the Norquay road loop is 700 m longer than from
+/// the lodge, where its trail starts, and scored 0.16 more only for what the
+/// extra 700 m crosses (routes#156).
+fn shortest_approaches(cands: &mut Vec<Cand>) {
+    let mut by_dest: HashMap<(&str, &str), Vec<usize>> = HashMap::default();
+    for (i, c) in cands.iter().enumerate() {
+        by_dest.entry((c.dest.as_str(), c.kind)).or_default().push(i);
+    }
+    let mut drop: HashSet<usize> = HashSet::default();
+    for is in by_dest.values() {
+        for &i in is {
+            let c = &cands[i];
+            let shorter = is.iter().any(|&j| {
+                let d = &cands[j];
+                j != i
+                    && d.ev.total < c.ev.total
+                    && c.score - d.score <= APPROACH_SLACK
+                    && d.edges.intersection(&c.edges).count() as f64
+                        >= APPROACH_SHARED * d.edges.len().max(1) as f64
+            });
+            if shorter {
+                drop.insert(i);
+            }
+        }
+    }
+    let mut i = 0;
+    cands.retain(|_| {
+        i += 1;
+        !drop.contains(&(i - 1))
+    });
+}
+
+/// See shortest_approaches: how much more a longer way to the same hike may
+/// score and still give way, and how much of the shorter it must walk.
+const APPROACH_SLACK: f64 = 0.25;
+const APPROACH_SHARED: f64 = 0.9;
+
 /// A named trail that's a trail people walk, not a scramble or climbing
 /// route ("Mount Ishbel Route", SAC T4 and up).
 fn real_trail(c: &Cand) -> bool {
@@ -2910,6 +2949,7 @@ pub fn curate(
         cands.retain(|c| c.kind != "out-and-back" || c.edges.is_disjoint(&oneway));
         trails.retain(|c| c.kind != "out-and-back" || c.edges.is_disjoint(&oneway));
     }
+    shortest_approaches(&mut cands);
     let mut day = select(&cands, n_day, true);
     // Destinations many sites write about, each with its own hike even past
     // the budget (basemap#281): Banff's 15 went to peaks scoring higher on

@@ -11,11 +11,15 @@
 #
 # "trail": a trail the park itself lists (e.g. on its website, `source`),
 # by its `name` there and its length there, `km`. Three checks, on the same
-# hike: one is offered under that name (or `trail`, or one of `aka`;
+# hike: one is offered under that name (or `trail`, or one of `aka`), as
+# its own name or where it goes (its destination;
 # ignoring case, punctuation, "the" and "trail"); it is within `km_tolerance` (default 0.3)
 # of `km`; and it walks at least 70% of the OSM trail `trail` (default:
 # `name`), from routes' trails.jsonl (routes --trails). Outputs without
 # trails.jsonl check the first two only.
+#
+# A hike made more than one way (from either of two lots) gives the others
+# as `traces`, a list of traces: the entry passes on any one (routes#152).
 #
 # A `trail` entry with a `trace` (a rough line of the hike that's meant,
 # [[lon, lat], ...]: a dozen points on the hike, spread along it) checks
@@ -286,7 +290,10 @@ def check_trail(e, rs, trails):
     tol = e.get('km_tolerance', BLESSED_TOLERANCE if blessed else 0.3)
     lo, hi = e['km'] * (1 - tol), e['km'] * (1 + tol)
     fits = lambda r: lo <= r['route']['km'] <= hi
-    named = [r for r in rs if norm(title(r) if blessed else r.get('name')) in names]
+    # Offered under the name: the hike's own (an OSM relation's), or where
+    # it goes, as the site titles it ("Cascade Amphitheatre from ...").
+    named = [r for r in rs if norm(title(r)) in names] if blessed else \
+        [r for r in rs if norm(r.get('name')) in names or norm(r.get('dest')) in names]
     notes = []
     want = f"{lo:.1f}-{hi:.1f} km"
     if e.get('trace') and not blessed:
@@ -330,6 +337,23 @@ def check_trail(e, rs, trails):
     return problems, checks, notes
 
 
+def check_traces(e, rs, trails):
+    """check_trail against each of the entry's traces (`trace`, then
+    `traces`: the same hike another way, e.g. from another lot, routes#152),
+    keeping the best: passing, else the fewest failed checks, then the
+    fewest problems."""
+    ts = [e['trace']] + e.get('traces', []) if e.get('trace') else []
+    if len(ts) < 2:
+        return check_trail(e, rs, trails)
+    tried = []
+    for i, t in enumerate(ts):
+        problems, checks, notes = check_trail(e | {'trace': t}, rs, trails)
+        failed = sum(v is False for v in (checks or {}).values())
+        tried.append(((bool(problems), failed, len(problems), i), (problems, checks, notes)))
+    (_, _, _, i), (problems, checks, notes) = min(tried, key=lambda x: x[0])
+    return problems, checks, notes + [f"against trace {i + 1} of {len(ts)}"]
+
+
 results = []
 for e in expects:
     kind = e.get('kind', 'dest')
@@ -344,7 +368,7 @@ for e in expects:
         rs = park_routes(pid)
     if rs is not None:
         if kind == 'trail':
-            problems, checks, notes = check_trail(e, rs, park_trails(pid))
+            problems, checks, notes = check_traces(e, rs, park_trails(pid))
         else:
             problems, checks, notes = check_dest(e, rs)
     elif found:
