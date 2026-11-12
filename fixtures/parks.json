@@ -66,6 +66,17 @@
     ]
   },
   {
+    "key": "golden-ears",
+    "park": "Golden Ears Provincial Park",
+    "why": "quality: its top easy hike was a dyke walk to Pitt Lake, outside the park (routes#186)",
+    "bbox": [
+      -122.66,
+      49.2,
+      -122.25,
+      49.75
+    ]
+  },
+  {
     "key": "joffre",
     "park": "Joffre Lakes",
     "why": "quality: a trailhead lot just outside the park",

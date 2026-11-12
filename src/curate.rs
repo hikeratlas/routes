@@ -2571,6 +2571,22 @@ fn popular_dests(day: &mut Vec<Cand>, cands: &[Cand], popular: &HashSet<&str>, n
 /// Cascade Amphitheatre from the Norquay road loop is 700 m longer than from
 /// the lodge, where its trail starts, and scored 0.16 more only for what the
 /// extra 700 m crosses (routes#156).
+/// The share of a line's length in the park (by its segments' midpoints).
+fn in_park_share(area: &Area, line: &[P]) -> f64 {
+    let (mut m, mut inp) = (0.0, 0.0);
+    for w in line.windows(2) {
+        let d = metres(w[0], w[1]);
+        m += d;
+        if area.in_park(((w[0].0 + w[1].0) / 2.0, (w[0].1 + w[1].1) / 2.0)) {
+            inp += d;
+        }
+    }
+    if m > 0.0 { inp / m } else { 1.0 }
+}
+
+/// How much of a day hike must be in the park (see curate).
+const DAY_IN_PARK: f64 = 0.25;
+
 fn shortest_approaches(cands: &mut Vec<Cand>) {
     let mut by_dest: HashMap<(&str, &str), Vec<usize>> = HashMap::default();
     for (i, c) in cands.iter().enumerate() {
@@ -2987,6 +3003,10 @@ pub fn curate(
         cands.retain(|c| c.kind != "out-and-back" || c.edges.is_disjoint(&oneway));
         trails.retain(|c| c.kind != "out-and-back" || c.edges.is_disjoint(&oneway));
     }
+    // A day hike that's mostly outside the park isn't the park's: Golden
+    // Ears' top easy hike was a dyke walk to Pitt Lake, none of it in the
+    // park (routes#186).
+    cands.retain(|c| in_park_share(area, &c.ev.line) >= DAY_IN_PARK);
     shortest_approaches(&mut cands);
     let mut day = select(&cands, n_day, true);
     // Destinations many sites write about, each with its own hike even past
