@@ -18,9 +18,10 @@
 # `name`), from routes' trails.jsonl (routes --trails). Outputs without
 # trails.jsonl check the first two only.
 #
+# A hike made more than one way (from either of two lots) gives the others
+# as `traces`, a list of traces: the entry passes on any one (routes#152).
+#
 # A `trail` entry with a `trace` (a rough line of the hike that's meant,
-# or several: `traces` gives the same hike other ways, e.g. from another
-# lot, and the entry passes on any one, routes#152;
 # [[lon, lat], ...]: a dozen points on the hike, spread along it) checks
 # that instead of the OSM trail: the named hike of the right length must
 # pass within `trace_within_m` (default 50) of at least `trace_cover`
