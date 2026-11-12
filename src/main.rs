@@ -898,6 +898,9 @@ fn main() {
             if let Some(m) = &mentions {
                 m.apply(&mut area);
             }
+            // A lake mostly beyond the park isn't the park's draw: its fame
+            // is the whole lake's (Killarney's Lake Huron, routes#192).
+            area.outside_lakes_unknown();
             // Day hikes: by the park's size, or by how much trail it has if
             // that's more (#38). Small parks with dense networks got 3:
             // Letchworth, 149 km of trail and 12 OSM hiking routes, found 1.

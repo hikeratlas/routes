@@ -112,6 +112,13 @@ impl Kind {
     }
 }
 
+/// See Area::outside_lakes_unknown: the share of a lake's area that must be
+/// in the tiles loaded for the park for its fame to count, and the size
+/// from which that's checked. A smaller lake is all near where a hike
+/// reaches it.
+const LAKE_LOADED: f64 = 0.5;
+const LAKE_WIDE_M2: f64 = 1e7;
+
 /// Appeal of a named trail walked for itself (Kind::Trail). Tuned on the
 /// oracle sample's tuning half (fixtures/oracle.py).
 pub const TRAIL_APPEAL: f64 = 0.6;
@@ -966,6 +973,47 @@ impl Area {
         }
         let m = best * mpu(p.1);
         (m <= max).then_some(m)
+    }
+
+    /// Takes the popularity (QRank) and mentions from lakes of LAKE_WIDE_M2
+    /// or more that are mostly beyond the tiles loaded for the park (less
+    /// than LAKE_LOADED of their area in them): what's written about Lake
+    /// Huron is about all of it, not the shore a park's hike reaches
+    /// (Killarney's top easy hike was 3 km to it, routes#192). Not lakes at
+    /// the park's edge: Golden Ears' Alouette Lake, outside its outline, is
+    /// its beaches and the hikes along its shore.
+    pub fn outside_lakes_unknown(&mut self) {
+        let want: HashSet<u32> = self
+            .dests
+            .iter()
+            .filter(|d| d.kind == Kind::Lake && d.area >= LAKE_WIDE_M2 && (d.qrank > 1.0 || d.mentions > 0))
+            .filter_map(|d| d.lake)
+            .collect();
+        if want.is_empty() {
+            return;
+        }
+        // Each lake's loaded area (m²): its pieces' by the shoelace formula.
+        let mut loaded: HashMap<u32, f64> = HashMap::new();
+        for t in self.tiles.values() {
+            for (id, poly) in t.lakes.iter().filter(|(id, _)| want.contains(id)) {
+                let m = mpu((poly.min.1 + poly.max.1) / 2.0);
+                let a: f64 = poly
+                    .rings
+                    .iter()
+                    .map(|r| r.windows(2).map(|w| w[0].0 * w[1].1 - w[1].0 * w[0].1).sum::<f64>() / 2.0)
+                    .sum::<f64>()
+                    .abs();
+                *loaded.entry(*id).or_default() += a * m * m;
+            }
+        }
+        for d in &mut self.dests {
+            if let Some(id) = d.lake.filter(|id| want.contains(id)) {
+                if loaded.get(&id).copied().unwrap_or(0.0) < LAKE_LOADED * d.area {
+                    d.qrank = 1.0;
+                    d.mentions = 0;
+                }
+            }
+        }
     }
 
     /// Nodes within `max_m` metres of the lake's shore (or in it).
