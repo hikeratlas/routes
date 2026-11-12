@@ -3005,8 +3005,10 @@ pub fn curate(
     }
     // A day hike that's mostly outside the park isn't the park's: Golden
     // Ears' top easy hike was a dyke walk to Pitt Lake, none of it in the
-    // park (routes#186).
-    cands.retain(|c| in_park_share(area, &c.ev.line) >= DAY_IN_PARK);
+    // park (routes#186). Not a named trail's own hike: its trail is in the
+    // park, or at its edge (named_pieces), and it's the park's (Killarney's
+    // Lake of The Woods Trail, routes#104, mostly in the park next door).
+    cands.retain(|c| c.dest_kind == Kind::Trail || in_park_share(area, &c.ev.line) >= DAY_IN_PARK);
     shortest_approaches(&mut cands);
     let mut day = select(&cands, n_day, true);
     // Destinations many sites write about, each with its own hike even past
