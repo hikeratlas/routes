@@ -227,6 +227,8 @@ struct Park {
     /// Its outline in the z8 park layer, piece by piece (each tile's), for
     /// whether a small park is inside it.
     rings: Vec<Vec<geo::P>>,
+    /// The OSM ids of other pieces of it, curated with it (merge_pieces).
+    also: Vec<String>,
 }
 
 /// A small notable park is another's when that one is at least this many
@@ -421,6 +423,7 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> (Vec<Park>, Vec<Valu
                             min: (f64::MAX, f64::MAX),
                             max: (f64::MIN, f64::MIN),
                             rings: vec![],
+                            also: vec![],
                         });
                     for ring in f.geometry() {
                         let mut r = vec![];
@@ -452,6 +455,7 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> (Vec<Park>, Vec<Valu
         })
         .collect();
     v.sort_by(|a, b| b.area.partial_cmp(&a.area).unwrap());
+    let v = merge_pieces(v);
     // A park under the minimums is curated if an OSM hiking route runs
     // through it: a trail is evidence the park is for walking, whatever its
     // size. Grouse Mountain Regional Park (0.73 km², routes#163) is the
@@ -505,6 +509,83 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> (Vec<Park>, Vec<Valu
         .collect();
     small.sort_by(|x, y| x["id"].as_str().cmp(&y["id"].as_str()));
     (v, small)
+}
+
+/// How close (m, box to box) same-named parks are to be pieces of one park.
+const PIECE_GAP_M: f64 = 1000.0;
+
+/// Same-named parks that touch or nearly do (PIECE_GAP_M) are one park mapped
+/// as several pieces: Jefferson Memorial Forest is four OSM areas, Boulder
+/// Open Space and Mountain Parks three, Redwood National and State Parks two
+/// (basemap#296). Each was curated as a park of its own, so the park was
+/// listed several times, with routes repeated between them. They're one park
+/// now, under the biggest piece's id, the others' ids in `also`. Not trail
+/// areas: bin/trail-areas.py makes those one per trail already. `v` is
+/// sorted biggest first, and stays so.
+fn merge_pieces(v: Vec<Park>) -> Vec<Park> {
+    let n = v.len();
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn find(p: &mut [usize], mut a: usize) -> usize {
+        while p[a] != a {
+            p[a] = p[p[a]];
+            a = p[a];
+        }
+        a
+    }
+    let gap = |a: &Park, b: &Park| {
+        let dx = (a.min.0.max(b.min.0) - a.max.0.min(b.max.0)).max(0.0);
+        let dy = (a.min.1.max(b.min.1) - a.max.1.min(b.max.1)).max(0.0);
+        dx.hypot(dy) * geo::mpu((a.min.1 + a.max.1) / 2.0)
+    };
+    let mut by_name: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, p) in v.iter().enumerate() {
+        if !p.trail_area {
+            by_name.entry(p.name.as_str()).or_default().push(i);
+        }
+    }
+    for is in by_name.values().filter(|is| is.len() > 1) {
+        for (k, &i) in is.iter().enumerate() {
+            for &j in &is[k + 1..] {
+                if gap(&v[i], &v[j]) <= PIECE_GAP_M {
+                    let (a, b) = (find(&mut parent, i), find(&mut parent, j));
+                    if a != b {
+                        // The bigger (earlier) piece is the park.
+                        parent[a.max(b)] = a.min(b);
+                    }
+                }
+            }
+        }
+    }
+    let roots: Vec<usize> = (0..n).map(|i| find(&mut parent, i)).collect();
+    let mut out: Vec<Option<Park>> = v.into_iter().map(Some).collect();
+    for i in 0..n {
+        let r = roots[i];
+        if r == i {
+            continue;
+        }
+        let piece = out[i].take().unwrap();
+        let p = out[r].as_mut().unwrap();
+        p.area += piece.area;
+        p.min = (p.min.0.min(piece.min.0), p.min.1.min(piece.min.1));
+        p.max = (p.max.0.max(piece.max.0), p.max.1.max(piece.max.1));
+        p.rings.extend(piece.rings);
+        p.also.push(piece.id);
+        p.also.extend(piece.also);
+        p.small_notable &= piece.small_notable;
+        p.needs_route &= piece.needs_route;
+        if p.website.is_empty() {
+            p.website = piece.website;
+        }
+        if p.operator.is_empty() {
+            p.operator = piece.operator;
+        }
+    }
+    let merged: Vec<Park> = out.into_iter().flatten().collect();
+    let pieces: usize = merged.iter().map(|p| p.also.len()).sum();
+    if pieces > 0 {
+        eprintln!("{pieces} parks are pieces of another of the same name, curated with it");
+    }
+    merged
 }
 
 /// The OSM hiking routes' lines over a (small) park, from its z14 tiles.
@@ -710,7 +791,8 @@ fn main() {
                 );
                 return None;
             }
-            let mut area = Area::load(&archives, &p.id, &tiles);
+            let ids: Vec<String> = std::iter::once(p.id.clone()).chain(p.also.iter().cloned()).collect();
+            let mut area = Area::load(&archives, &ids, &tiles);
             area.worldcover = worldcover.clone().map(landcover::Lookup::new);
             if let Some(q) = &qrank {
                 let q = q.lock().unwrap();
@@ -767,6 +849,11 @@ fn main() {
                 doc["candidates"] = json!(c.candidates);
             }
             doc["park"] = json!({"id": p.id, "name": p.name});
+            // Other pieces of it (merge_pieces): --merge points their ids at
+            // its routes, as a twin's.
+            if !p.also.is_empty() {
+                doc["park"]["also"] = json!(p.also);
+            }
             // For the park panel (hikeratlas/website#72), when the park has them.
             if !p.website.is_empty() {
                 doc["park"]["website"] = json!(p.website);
@@ -1070,6 +1157,15 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>, skipped: Vec<Value>)
             continue;
         }
         writeln!(listing, "{}", listed(&p_id, &p_name, km2, "written")).unwrap();
+        // Its other pieces' ids (merge_pieces) find its routes, as twins do.
+        if let Some(Value::Array(also)) = doc["park"].get("also") {
+            for a in also.iter().filter_map(|a| a.as_str()) {
+                let mut l = listed(a, &p_name, 0.0, "piece");
+                l["of"] = json!(p_id);
+                writeln!(listing, "{l}").unwrap();
+                twins.push((a.to_string(), p_id.clone()));
+            }
+        }
         kept.push(doc);
     }
 
@@ -1276,7 +1372,37 @@ mod tests {
             min: (0.0, 0.0),
             max: (0.0, 0.0),
             rings: vec![],
+            also: vec![],
         }
+    }
+
+    // Same-named parks that touch are one park (basemap#296): merged into the
+    // biggest, the others' ids in `also`; a same-named park far away, and a
+    // differently named one beside it, stay their own.
+    #[test]
+    fn same_named_pieces_are_one_park() {
+        // World units: at y = 0 (mpu ~ 0.6 m/unit near the top of the world),
+        // 10 units is a few metres; 1e7 is far.
+        let park = |id: &str, name: &str, area: f64, x: f64| {
+            let mut p = shard_park(id);
+            p.name = name.to_string();
+            p.area = area;
+            (p.min, p.max) = ((x, 1e6), (x + 100.0, 1e6 + 100.0));
+            p
+        };
+        let v = vec![
+            park("big", "Jefferson Memorial Forest", 3.0, 0.0),
+            park("piece", "Jefferson Memorial Forest", 2.0, 105.0),
+            park("far", "Jefferson Memorial Forest", 1.5, 1e7),
+            park("other", "Otter Creek Park", 1.0, 205.0),
+        ];
+        let m = merge_pieces(v);
+        let ids: Vec<&str> = m.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, vec!["big", "far", "other"]);
+        assert_eq!(m[0].also, vec!["piece".to_string()]);
+        assert_eq!(m[0].area, 5.0);
+        assert_eq!(m[0].max.0, 205.0);
+        assert!(m[1].also.is_empty() && m[2].also.is_empty());
     }
 
     // A park's outline, in pieces as the z8 tiles cut it: an L of two
