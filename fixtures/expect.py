@@ -19,6 +19,8 @@
 # trails.jsonl check the first two only.
 #
 # A `trail` entry with a `trace` (a rough line of the hike that's meant,
+# or several: `traces` gives the same hike other ways, e.g. from another
+# lot, and the entry passes on any one, routes#152;
 # [[lon, lat], ...]: a dozen points on the hike, spread along it) checks
 # that instead of the OSM trail: the named hike of the right length must
 # pass within `trace_within_m` (default 50) of at least `trace_cover`
@@ -334,6 +336,23 @@ def check_trail(e, rs, trails):
     return problems, checks, notes
 
 
+def check_traces(e, rs, trails):
+    """check_trail against each of the entry's traces (`trace`, then
+    `traces`: the same hike another way, e.g. from another lot, routes#152),
+    keeping the best: passing, else the fewest failed checks, then the
+    fewest problems."""
+    ts = [e['trace']] + e.get('traces', []) if e.get('trace') else []
+    if len(ts) < 2:
+        return check_trail(e, rs, trails)
+    tried = []
+    for i, t in enumerate(ts):
+        problems, checks, notes = check_trail(e | {'trace': t}, rs, trails)
+        failed = sum(v is False for v in (checks or {}).values())
+        tried.append(((bool(problems), failed, len(problems), i), (problems, checks, notes)))
+    (_, _, _, i), (problems, checks, notes) = min(tried, key=lambda x: x[0])
+    return problems, checks, notes + [f"against trace {i + 1} of {len(ts)}"]
+
+
 results = []
 for e in expects:
     kind = e.get('kind', 'dest')
@@ -348,7 +367,7 @@ for e in expects:
         rs = park_routes(pid)
     if rs is not None:
         if kind == 'trail':
-            problems, checks, notes = check_trail(e, rs, park_trails(pid))
+            problems, checks, notes = check_traces(e, rs, park_trails(pid))
         else:
             problems, checks, notes = check_dest(e, rs)
     elif found:

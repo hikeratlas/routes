@@ -48,12 +48,23 @@ def load(d=DIR):
             if missing:
                 errors.append(f"{where}: no {', '.join(missing)}")
                 continue
-            t = e.get('trace')
-            if t is not None and not (isinstance(t, list) and len(t) >= 2 and all(
+            def is_line(t):
+                return isinstance(t, list) and len(t) >= 2 and all(
                     isinstance(q, list) and len(q) == 2 and all(isinstance(v, (int, float)) for v in q)
-                    and -180 <= q[0] <= 180 and -90 <= q[1] <= 90 for q in t)):
+                    and -180 <= q[0] <= 180 and -90 <= q[1] <= 90 for q in t)
+            t = e.get('trace')
+            if t is not None and not is_line(t):
                 errors.append(f"{where}: trace must be [[lon, lat], ...], at least two points")
                 continue
+            # More traces: the same hike another way, e.g. from another lot
+            # (Tunnel Mountain's two, routes#152). Passes on any one.
+            ts = e.get('traces')
+            if ts is not None and not (isinstance(ts, list) and ts and all(is_line(x) for x in ts)):
+                errors.append(f"{where}: traces must be a list of traces, [[[lon, lat], ...], ...]")
+                continue
+            if t is None and ts:
+                t = e['trace'] = ts[0]
+                e['traces'] = ts[1:]
             if t is not None and e.get('kind', 'dest') != 'trail':
                 errors.append(f"{where}: trace is for trail entries")
                 continue

@@ -74,7 +74,11 @@ covers, so a hike from the wrong lot fails (routes#102). Its last point is
 where the hike ends, likewise (within 150 m, `trace_end_m`; `null` to skip):
 a loop's trace ends where it starts, and one that ends elsewhere (La Cloche
 Silhouette, 770 m apart) needs a hike that does too. Draw a trace from the
-trailhead, all the way to where the hike ends. With a trace, the length also passes within 0.85-1.4 times
+trailhead, all the way to where the hike ends. A hike made more than one
+way (Tunnel Mountain Summit Trail, from either of two lots) gives the
+others as `traces`, a list of traces: the entry passes when one hike
+passes every check against any one of them.
+With a trace, the length also passes within 0.85-1.4 times
 the trace's own length, not just the park's figure (Granite Ridge: the park
 says 2 km, the trail 2.8); the report notes a length that passes by the
 trace only. A trace's points cut corners, so it's shorter than the hike:
