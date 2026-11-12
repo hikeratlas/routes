@@ -1566,10 +1566,16 @@ impl<'a> Ctx<'a> {
         // walk back from.
         // Across short unnamed bits of trail too: a footbridge often lacks
         // the trail's name (MacIntosh Brook Trail's, 11-17 m, routes#155).
-        // Nodes by the least unnamed trail walked since the trail itself.
+        // And short bits of track: Freshwater Lake Trail crosses between
+        // ponds on 20 m of the Old Keltic Road (routes#95). Not another
+        // named trail: two side by side, joined at their ends, would make
+        // one tour (Lake Louise's Tram Line and Louise Creek trails).
+        // Nodes by the least of these walked since the trail itself.
         let unnamed = |w: u32| {
             let way = &g.ways[w as usize];
-            way.name.is_empty() && way.class == Class::Trail
+            !way.bike
+                && (way.class == Class::Track
+                    || (way.class == Class::Trail && way.name.is_empty()))
         };
         let mut gap_at: HashMap<u32, f64> = HashMap::default();
         let mut stack = vec![(entry, 0.0)];
@@ -2636,6 +2642,16 @@ fn real_trails(day: &mut Vec<Cand>, cands: &[Cand], trails: &[Cand]) {
         // And is mostly that trail: Algonquin's Centennial Ridges Trail
         // isn't offered by a 16 km hike to Rock Lake that walks it and then
         // a road (basemap#281).
+        // A hike that turns back just short of the trail's end, walking
+        // only the trail, gives way to the trail's own: Cape Breton's
+        // Salmon Pools trail is 4.6 km, to its end past Chance Pool, the
+        // hike to which turned back 650 m before (routes#95).
+        if let Some(i) = day.iter().position(|c| short_of(c, t)) {
+            if !day.iter().any(|d| d.from == t.from && d.edges == t.edges) {
+                day[i] = t.clone();
+            }
+            continue;
+        }
         let offered = day.iter().any(|c| mostly(c, t));
         if offered {
             continue;
@@ -2670,6 +2686,28 @@ fn mostly(hike: &Cand, trail: &Cand) -> bool {
     shared >= REAL_TRAIL_COVER * trail.edges.len().max(1) as f64
         && REAL_TRAIL_COVER * hike.ev.total <= trail.ev.total
 }
+
+/// Whether a hike walks only a trail's own hike (from the same start) and
+/// turns back short of its end, by SHORT_OF_MIN_M to SHORT_OF_MAX_M: a
+/// sight along the trail, near its end. Farther from the end, the sight is
+/// the hike (Johnston Canyon's Upper Falls, not the Ink Pots past them).
+/// And a trail named for it is the way to it: Wedgemount Lake Trail runs on
+/// past the lake's near shore, but the hike is to Wedgemount Lake.
+fn short_of(hike: &Cand, trail: &Cand) -> bool {
+    // Out and back, both: the extra is there and back.
+    let extra = (trail.ev.total - hike.ev.total) / 2.0;
+    hike.from == trail.from
+        && hike.dest_kind != Kind::Trail
+        && !named_for(&trail.dest, &hike.dest)
+        && trail.kind == "out-and-back"
+        && hike.kind == "out-and-back"
+        && (SHORT_OF_MIN_M..=SHORT_OF_MAX_M).contains(&extra)
+        && trail.edges.intersection(&hike.edges).count() as f64
+            >= SHORT_OF_SHARED * hike.edges.len().max(1) as f64
+}
+const SHORT_OF_MIN_M: f64 = 200.0;
+const SHORT_OF_MAX_M: f64 = 1000.0;
+const SHORT_OF_SHARED: f64 = 0.95;
 
 /// See real_trails.
 const REAL_TRAILS_MAX: usize = 100;
