@@ -65,6 +65,11 @@ def load(d=DIR):
             if t is None and ts:
                 t = e['trace'] = ts[0]
                 e['traces'] = ts[1:]
+            if e.get('kind') == 'featured':
+                lists = [e.get(k) for k in ('not', 'one_of') if e.get(k) is not None]
+                if not lists or not all(isinstance(x, list) and x and all(isinstance(n, str) and n for n in x) for x in lists):
+                    errors.append(f"{where}: a featured entry needs `not` or `one_of`, lists of names")
+                    continue
             if t is not None and e.get('kind', 'dest') != 'trail':
                 errors.append(f"{where}: trace is for trail entries")
                 continue

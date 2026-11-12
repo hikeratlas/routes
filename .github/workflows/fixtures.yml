@@ -66,9 +66,12 @@ jobs:
               if ! diff -rq "new/$p" "base/$p" > /dev/null 2>&1; then oracle=true; echo "changed: $p"; fi
             done
           fi
-          legs='[{"leg":"fixtures","title":"Curate","tiles":"tiles","limit":"","parks":"","args":"","base":"base"}'
+          # The fixtures in two halves (run.sh's SHARD), as the homepage's
+          # showcase parks made them too long for one job.
+          legs='[{"leg":"fixtures","shard":"0/2","title":"Curate","tiles":"tiles","limit":"","parks":"","args":"","base":"base"}'
+          legs+=',{"leg":"fixtures-2","shard":"1/2","title":"Curate","tiles":"tiles","limit":"","parks":"","args":"","base":"base"}'
           if [ "$oracle" = true ]; then
-            legs+=',{"leg":"oracle-new-bonus","title":"Oracle sample","tiles":"tiles/oracle","limit":"120","parks":"new/fixtures/oracle.json","args":"","base":"oracle-base-bonus"}'
+            legs+=',{"leg":"oracle-new-bonus","shard":"","title":"Oracle sample","tiles":"tiles/oracle","limit":"120","parks":"new/fixtures/oracle.json","args":"","base":"oracle-base-bonus"}'
           fi
           legs+=']'
           echo "oracle=$oracle" >> "$GITHUB_OUTPUT"
@@ -276,6 +279,7 @@ jobs:
         env:
           ROUTES_ARGS: ${{ matrix.args }}
           L: ${{ matrix.limit }}
+          SHARD: ${{ matrix.shard }}
           MENTIONS: ${{ needs.build.outputs.mentions != '' && 'mentions.tsv.gz' || '' }}
         run: |
           chmod +x bin/*
@@ -285,10 +289,11 @@ jobs:
         env:
           ROUTES_ARGS: ${{ matrix.args }}
           L: ${{ matrix.limit }}
+          SHARD: ${{ matrix.shard }}
           MENTIONS: ${{ needs.build.outputs.mentions != '' && 'mentions.tsv.gz' || '' }}
         run: |
           chmod +x bin/*
-          new/fixtures/run.sh bin/routes-new ${{ matrix.tiles }} out/new/${{ matrix.leg == 'fixtures' && 'new' || matrix.leg }} qrank.db dem "${L:-$LIMIT}" ${{ matrix.parks }}
+          new/fixtures/run.sh bin/routes-new ${{ matrix.tiles }} out/new/${{ startsWith(matrix.leg, 'fixtures') && 'new' || matrix.leg }} qrank.db dem "${L:-$LIMIT}" ${{ matrix.parks }}
 
       - uses: actions/upload-artifact@v4
         if: always()

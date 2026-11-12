@@ -5,7 +5,9 @@
 # each took and how its routes differ, as markdown for a CI job summary.
 # Each DIR holds <key>/routes.geojsonl, <key>.log and <key>.secs (wall time,
 # then the exit status: 124 if `timeout` stopped it).
-import json, os, sys
+import glob, json, os, sys
+
+from featured import describe as describe_featured, featured
 
 base_dir, new_dir = sys.argv[1], sys.argv[2]
 parks = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'parks.json')))
@@ -56,12 +58,30 @@ def fmt_time(r):
     return f'{secs}s' + (' (park timeout)' if timeouts else '')
 
 
+def park_featured(d, f):
+    """The fixture's park's featured hike on the homepage (featured.py), as
+    a line, or None if the run has no document for the park."""
+    for path in glob.glob(os.path.join(d, f['key'], 'parks', '*.json')):
+        doc = json.load(open(path))
+        p = doc.get('park', {})
+        if str(p.get('id')) == str(f.get('id')) or p.get('name') == f['park']:
+            h = featured(doc)
+            return describe_featured(h) if h else '—'
+    return None
+
+
 def describe(p):
     return f"{p['title']} ({p['type']}, {p.get('kind', '')}, {p['km']} km, {p['gain']:.0f} m)"
 
 
 rows, details, known_rows, known_details = [], [], [], []
+featured_rows, featured_changed = [], []
 for f in parks:
+    bf, nf = park_featured(base_dir, f), park_featured(new_dir, f)
+    if bf or nf:
+        featured_rows.append(f"| {f['key']} | {bf or '—'} | {'same' if bf == nf else nf or '—'} |")
+        if bf != nf:
+            featured_changed.append(f"- **{f['key']}**: {bf or '—'} → {nf or '—'}")
     bk_, nk_ = known(base_dir, f['key']), known(new_dir, f['key'])
     if bk_ or nk_:
         known_rows.append(f"| {f['key']} | {len(nk_)} | {found(bk_)} | {found(nk_)} |")
@@ -105,6 +125,15 @@ if known_rows:
     print('\n'.join(known_rows))
     if known_details:
         print('\nChanged:\n\n' + '\n'.join(known_details))
+if featured_rows:
+    print('\n### Featured hikes\n')
+    print("Each fixture park's featured hike on the homepage, as the website picks it (fixtures/featured.py).\n")
+    print('\n'.join(featured_changed) if featured_changed else 'No featured hike changed.')
+    print('\n<details><summary>All</summary>\n')
+    print('| fixture | main | this change |')
+    print('|---|---|---|')
+    print('\n'.join(featured_rows))
+    print('\n</details>')
 for d, label in ((base_dir, 'main'), (new_dir, 'this change')):
     for f in parks:
         r = run(d, f['key'])

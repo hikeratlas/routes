@@ -227,5 +227,281 @@
       -123.065,
       49.395
     ]
+  },
+  {
+    "key": "jasper",
+    "id": "6395738",
+    "park": "Jasper National Park",
+    "why": "showcase: one of the homepage's featured parks (Jasper); its featured hike is checked (featured.ts)",
+    "bbox": [
+      -118.293,
+      52.147,
+      -117.05,
+      53.196
+    ]
+  },
+  {
+    "key": "kootenay",
+    "id": "673733022",
+    "park": "Kootenay National Park",
+    "why": "showcase: one of the homepage's featured parks (Kootenay); its featured hike is checked (featured.ts)",
+    "bbox": [
+      -116.257,
+      50.605,
+      -115.775,
+      51.349
+    ]
+  },
+  {
+    "key": "e-c-manning",
+    "id": "2230176",
+    "park": "E.C. Manning Provincial Park",
+    "why": "showcase: one of the homepage's featured parks (Manning); its featured hike is checked (featured.ts)",
+    "bbox": [
+      -121.209,
+      48.932,
+      -120.615,
+      49.37
+    ]
+  },
+  {
+    "key": "strathcona",
+    "id": "2227855",
+    "park": "Strathcona Provincial Park",
+    "why": "showcase: one of the homepage's featured parks (Strathcona); its featured hike is checked (featured.ts)",
+    "bbox": [
+      -125.91,
+      49.372,
+      -125.136,
+      49.9
+    ]
+  },
+  {
+    "key": "mount-robson",
+    "id": "2235398",
+    "park": "Mount Robson Provincial Park",
+    "why": "showcase: one of the homepage's featured parks (Mount Robson); its featured hike is checked (featured.ts)",
+    "bbox": [
+      -119.277,
+      52.808,
+      -118.39,
+      53.253
+    ]
+  },
+  {
+    "key": "mont-tremblant",
+    "id": "8008857",
+    "park": "Parc national du Mont-Tremblant",
+    "why": "showcase: one of the homepage's featured parks (Mont-Tremblant); its featured hike is checked (featured.ts)",
+    "bbox": [
+      -74.737,
+      46.173,
+      -73.974,
+      46.544
+    ]
+  },
+  {
+    "key": "fundy",
+    "id": "6813178",
+    "park": "Fundy National Park",
+    "why": "showcase: one of the homepage's featured parks (Fundy); its featured hike is checked (featured.ts)",
+    "bbox": [
+      -65.243,
+      45.469,
+      -64.914,
+      45.716
+    ]
+  },
+  {
+    "key": "gros-morne",
+    "id": "6236296",
+    "park": "Gros Morne National Park",
+    "why": "showcase: one of the homepage's featured parks (Gros Morne); its featured hike is checked (featured.ts)",
+    "bbox": [
+      -58.138,
+      49.403,
+      -57.593,
+      49.959
+    ]
+  },
+  {
+    "key": "mount-rainier",
+    "id": "1399219",
+    "park": "Mount Rainier National Park",
+    "why": "showcase: one of the homepage's featured parks (Mount Rainier); its featured hike is checked (featured.ts)",
+    "bbox": [
+      -121.968,
+      46.711,
+      -121.427,
+      47.048
+    ]
+  },
+  {
+    "key": "olympic",
+    "id": "163769",
+    "park": "Olympic National Park",
+    "why": "showcase: one of the homepage's featured parks (Olympic); its featured hike is checked (featured.ts)",
+    "bbox": [
+      -124.752,
+      47.44,
+      -123.117,
+      48.181
+    ]
+  },
+  {
+    "key": "yosemite",
+    "id": "1643367",
+    "park": "Yosemite National Park",
+    "why": "showcase: one of the homepage's featured parks (Yosemite); its featured hike is checked (featured.ts)",
+    "bbox": [
+      -119.907,
+      37.434,
+      -119.194,
+      38.066
+    ]
+  },
+  {
+    "key": "sequoia",
+    "id": "175060",
+    "park": "Sequoia National Park",
+    "why": "showcase: one of the homepage's featured parks (Sequoia); its featured hike is checked (featured.ts)",
+    "bbox": [
+      -118.915,
+      36.311,
+      -118.529,
+      36.635
+    ]
+  },
+  {
+    "key": "zion",
+    "id": "5758583",
+    "park": "Zion National Park",
+    "why": "showcase: one of the homepage's featured parks (Zion); its featured hike is checked (featured.ts)",
+    "bbox": [
+      -113.224,
+      37.141,
+      -112.804,
+      37.485
+    ]
+  },
+  {
+    "key": "bryce-canyon",
+    "id": "4716641",
+    "park": "Bryce Canyon National Park",
+    "why": "showcase: one of the homepage's featured parks (Bryce Canyon); its featured hike is checked (featured.ts)",
+    "bbox": [
+      -112.311,
+      37.423,
+      -112.112,
+      37.676
+    ]
+  },
+  {
+    "key": "grand-canyon",
+    "id": "183377",
+    "park": "Grand Canyon National Park",
+    "why": "showcase: one of the homepage's featured parks (Grand Canyon); its featured hike is checked (featured.ts)",
+    "bbox": [
+      -113.084,
+      35.956,
+      -111.807,
+      36.49
+    ]
+  },
+  {
+    "key": "grand-teton",
+    "id": "1492555",
+    "park": "Grand Teton National Park",
+    "why": "showcase: one of the homepage's featured parks (Grand Teton); its featured hike is checked (featured.ts)",
+    "bbox": [
+      -110.954,
+      43.48,
+      -110.461,
+      43.951
+    ]
+  },
+  {
+    "key": "waterton-glacier",
+    "id": "7706586",
+    "park": "Waterton-Glacier International Peace Park",
+    "why": "showcase: one of the homepage's featured parks (Waterton-Glacier); its featured hike is checked (featured.ts)",
+    "bbox": [
+      -114.492,
+      48.254,
+      -113.205,
+      49.186
+    ]
+  },
+  {
+    "key": "rocky-mountain",
+    "id": "390960",
+    "park": "Rocky Mountain National Park",
+    "why": "showcase: one of the homepage's featured parks (Rocky Mountain); its featured hike is checked (featured.ts)",
+    "bbox": [
+      -105.976,
+      40.133,
+      -105.48,
+      40.618
+    ]
+  },
+  {
+    "key": "great-smokies",
+    "id": "2131838",
+    "park": "Great Smoky Mountains National Park",
+    "why": "showcase: one of the homepage's featured parks (Great Smokies); its featured hike is checked (featured.ts)",
+    "bbox": [
+      -83.956,
+      35.39,
+      -83.025,
+      35.804
+    ]
+  },
+  {
+    "key": "shenandoah",
+    "id": "5548542",
+    "park": "Shenandoah National Park",
+    "why": "showcase: one of the homepage's featured parks (Shenandoah); its featured hike is checked (featured.ts)",
+    "bbox": [
+      -78.831,
+      38.065,
+      -78.131,
+      38.926
+    ]
+  },
+  {
+    "key": "white-mountains",
+    "id": "331880",
+    "park": "White Mountain National Forest",
+    "why": "showcase: one of the homepage's featured parks (White Mountains); its featured hike is checked (featured.ts)",
+    "bbox": [
+      -71.926,
+      43.808,
+      -70.815,
+      44.641
+    ]
+  },
+  {
+    "key": "adirondacks",
+    "id": "1695394",
+    "park": "Adirondack Park",
+    "why": "showcase: one of the homepage's featured parks (Adirondacks); its featured hike is checked (featured.ts)",
+    "bbox": [
+      -75.121,
+      43.226,
+      -73.413,
+      44.744
+    ]
+  },
+  {
+    "key": "acadia",
+    "id": "2176999",
+    "park": "Acadia National Park",
+    "why": "showcase: one of the homepage's featured parks (Acadia); its featured hike is checked (featured.ts)",
+    "bbox": [
+      -68.68,
+      43.987,
+      -68.023,
+      44.43
+    ]
   }
 ]
