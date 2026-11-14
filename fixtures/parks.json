@@ -503,5 +503,17 @@
       -68.023,
       44.43
     ]
+  },
+  {
+    "key": "bruce-peninsula",
+    "id": "13080574",
+    "park": "Bruce Peninsula National Park",
+    "why": "quality: park-listed trails as named regressions (routes#95)",
+    "bbox": [
+      -81.67,
+      45.13,
+      -81.28,
+      45.27
+    ]
   }
 ]
