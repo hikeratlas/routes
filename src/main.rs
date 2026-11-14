@@ -1101,12 +1101,27 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>, skipped: Vec<Value>)
     // Each route key, and the park that has it (the first, biggest, to).
     let mut seen: HashMap<String, String> = HashMap::new();
     let s = |v: &serde_json::Value, k: &str| v[k].as_str().unwrap_or("").to_string();
+    // A route's first or last point, rounded as campsites are below: routes
+    // are matched across parks by place as well as name (#198). By name
+    // alone, Midland Provincial Park (Alberta) was a twin of Coopers Rock
+    // State Forest (West Virginia), whose routes had the same names. A park
+    // mapped twice, or two that overlap, make the same route from the same
+    // trailhead, so they still match.
+    let end = |r: &serde_json::Value, last: bool| -> String {
+        let line = r["line"].as_array();
+        let p = line.and_then(|l| if last { l.last() } else { l.first() });
+        match p.and_then(|p| Some((p[0].as_f64()?, p[1].as_f64()?))) {
+            Some((x, y)) => format!("@{x:.3},{y:.3}"),
+            None => String::new(),
+        }
+    };
     let multi_key = |t: &serde_json::Value| {
         let (a, b) = (s(t, "from"), s(t, "to"));
+        let (pa, pb) = (end(&t["route"], false), end(&t["route"], true));
         if a < b {
-            format!("multi|{a}|{b}")
+            format!("multi|{a}{pa}|{b}{pb}")
         } else {
-            format!("multi|{b}|{a}")
+            format!("multi|{b}{pb}|{a}{pa}")
         }
     };
     let camps = |t: &serde_json::Value| -> std::collections::HashSet<String> {
@@ -1231,9 +1246,9 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>, skipped: Vec<Value>)
             v.len()
         };
         let n = keep("day_hikes", &|h| {
-            format!("day|{}|{}|{}", s(h, "from"), s(h, "dest"), s(h, "kind"))
-        }) + keep("stops", &|h| format!("stop|{}", s(h, "dest")))
-            + keep("base_camps", &|b| format!("base|{}", s(b, "camp")))
+            format!("day|{}|{}|{}|{}", s(h, "from"), s(h, "dest"), s(h, "kind"), end(&h["route"], false))
+        }) + keep("stops", &|h| format!("stop|{}|{}", s(h, "dest"), end(&h["route"], false)))
+            + keep("base_camps", &|b| format!("base|{}|{}", s(b, "camp"), end(&b["approach"], true)))
             + keep("point_to_points", &multi_key);
         let km2 = area;
         if n == 0 {
@@ -1678,6 +1693,21 @@ mod tests {
         );
         assert_eq!(written(&dir, "a").unwrap()["point_to_points"].as_array().unwrap().len(), 1);
         assert_eq!(written(&dir, "b").unwrap()["point_to_points"].as_array().unwrap().len(), 1);
+    }
+
+    // #198: routes with the same names in parks far apart aren't the same
+    // routes, and the parks aren't twins (Midland Provincial Park, Alberta,
+    // was Coopers Rock State Forest's, West Virginia).
+    #[test]
+    fn routes_match_by_place_not_just_name() {
+        let dir = tmp("far");
+        let mut far = park("far", 1.0, &["Raven Rock", "Lake"], vec![]);
+        for h in far.doc["day_hikes"].as_array_mut().unwrap() {
+            h["route"]["line"] = json!([[-112.8, 51.5], [-112.7, 51.6]]);
+        }
+        write_outputs(&dir, vec![park("near", 2.0, &["Raven Rock", "Lake"], vec![]), far], vec![]);
+        assert_eq!(written(&dir, "near").unwrap()["day_hikes"].as_array().unwrap().len(), 2);
+        assert_eq!(written(&dir, "far").unwrap()["day_hikes"].as_array().unwrap().len(), 2);
     }
 }
 
