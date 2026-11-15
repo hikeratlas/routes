@@ -114,6 +114,24 @@ def park_doc(park_id):
     return json.load(open(paths[0])) if paths else None
 
 
+def starts_inside(pt, park_id):
+    """Whether pt is in the park's outline (its document's simplified rings,
+    filled nonzero as routes draws them); True if there's no outline."""
+    doc = park_doc(park_id)
+    rings = (doc or {}).get('park', {}).get('outline') or []
+    if not rings:
+        return True
+    x, y = pt
+    winding = 0
+    for r in rings:
+        for (x1, y1), (x2, y2) in zip(r, r[1:] + r[:1]):
+            if y1 <= y < y2 and (x2 - x1) * (y - y1) - (x - x1) * (y2 - y1) > 0:
+                winding += 1
+            elif y2 <= y < y1 and (x2 - x1) * (y - y1) - (x - x1) * (y2 - y1) < 0:
+                winding -= 1
+    return winding != 0
+
+
 def check_featured(e, doc):
     """A featured entry: the park's featured hike isn't one of `not`, and is
     one of `one_of` where that's given."""
@@ -133,8 +151,8 @@ def check_featured(e, doc):
 
 @lru_cache(maxsize=None)
 def park_routes(park_id):
-    """The park's offered routes (day hikes, multi-day routes, base camps'
-    hikes; not their approaches), each with the `from` and `dest` that
+    """The park's offered routes (day hikes, quick stops, multi-day routes,
+    base camps' walks in and hikes), each with the `from` and `dest` that
     trails.jsonl names it by, or None if this output doesn't have the park."""
     paths = glob.glob(os.path.join(root, 'parks', f'{park_id}.json')) + \
         glob.glob(os.path.join(root, '*', 'parks', f'{park_id}.json'))
@@ -143,8 +161,16 @@ def park_routes(park_id):
     doc = json.load(open(paths[0]))
     rs = [r | {'type': 'day'} for r in doc.get('day_hikes', [])]
     rs += [r | {'type': 'multi-day', 'dest': r.get('to')} for r in doc.get('point_to_points', [])]
+    # Quick stops, a short walk from the car (Bruce Peninsula's Halfway Log Dump).
+    rs += [r | {'type': 'stop'} for r in doc.get('stops', [])]
     for b in doc.get('base_camps', []):
         rs += [r | {'type': 'from-camp', 'from': b.get('camp')} for r in b.get('hikes', [])]
+        # The walk in, "<camp> from <trailhead>": a hike out to a base camp
+        # and back is the base camp's (Bruce Peninsula's High Dump).
+        a = b.get('approach')
+        if a and a.get('line'):
+            rs.append({'type': 'approach', 'from': b.get('from'), 'dest': b.get('camp'),
+                       'start': a['line'][0], 'route': a})
     return rs
 
 
@@ -420,6 +446,13 @@ for e in expects:
                'over --max-tiles': "it's over --max-tiles",
                'no routes': 'routes found nothing to offer there'}.get(found['status'], found['status'])
         problems = [f"the park isn't curated: {why}"]
+    # A trace that starts outside the park's outline (routes' park document's
+    # outline): a gap in the park's boundary in OSM, or land another area holds
+    # (Bruce Peninsula's visitor centre, in Fathom Five National Marine Park;
+    # routes' PART_OF).
+    if problems and e.get('trace') and pid and not starts_inside(e['trace'][0], pid):
+        notes.append("the trace starts outside the park's outline: is that land part of another park "
+                     "(routes' PART_OF), or missing from the park's boundary in OSM?")
     status = 'skipped' if rs is None and not found else 'failing' if problems else 'ok'
     results.append({k: e[k] for k in ('name', 'park', 'park_id', 'file')}
                    | {'issue': e.get('issue') or 'blessed'}

@@ -821,7 +821,9 @@ pub fn score(ev: &Eval, d: &Dest, is_loop: bool) -> (f64, Vec<(&'static str, f64
     if d.minor {
         appeal = MINOR_PEAK_APPEAL;
     }
-    if d.kind == Kind::Lake {
+    // A lake mostly beyond the park (Area::outside_lakes_unknown) is minor:
+    // its shore is everywhere, and reaching it says little.
+    if d.kind == Kind::Lake && !d.minor {
         // bigger lakes are bigger draws: 0.1 km² -> 0.7, 10 km² -> 1.0
         appeal = (0.7 + 0.15 * (d.area.max(1e5) / 1e5).log10()).min(1.1);
     }
@@ -2800,8 +2802,14 @@ fn stop_name(name: &str) -> String {
 /// A base camp's hike with this share of its edges on the walk in goes back
 /// the way you came (#61).
 const BASE_BACKTRACK_MAX: f64 = 0.5;
+/// The shortest walk in to a base camp: a campsite nearer its trailhead is a
+/// campground. Bruce Peninsula's Stormhaven, 1.9 km from Horse Lake Trail's
+/// trailhead, is an easy backcountry night.
+const BASE_MIN_M: f64 = 1500.0;
+/// How near a base camp's campsite a hut or shelter is part of it (see curate).
+const CAMP_HUT_M: f64 = 200.0;
 
-/// Stops (#70): a viewpoint, peak or waterfall a short walk (STOP_MAX_M)
+/// Stops (#70): a viewpoint, peak, waterfall or sight a short walk (STOP_MAX_M)
 /// from where a car can get to, which a day hike can't be, as those start
 /// 1.5 km or more away. Terra Nova's Ochre Hill Fire Tower is 100 m from the
 /// turning circle at the end of its road; Banff's Peyto Lake View, 600 m
@@ -2816,7 +2824,7 @@ fn stops(ctx: &Ctx, starts: &[Start], targets: &[(usize, Vec<u32>)]) -> Vec<Cand
         .iter()
         .filter(|(di, _)| {
             let d = &ctx.dests[*di];
-            matches!(d.kind, Kind::Viewpoint | Kind::Peak | Kind::Waterfall) && !d.minor
+            matches!(d.kind, Kind::Viewpoint | Kind::Peak | Kind::Waterfall | Kind::Sight) && !d.minor
         })
         .cloned()
         .collect();
@@ -3056,7 +3064,7 @@ pub fn curate(
                 .keys()
                 .filter_map(|&n| s.reached(n).map(|m| (n, m)))
                 .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())?;
-            if m < 2000.0 {
+            if m < BASE_MIN_M {
                 return None;
             }
             let (mut path, mut ways) = s.path(snode);
@@ -3106,6 +3114,15 @@ pub fn curate(
         .collect();
     bases.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
     bases.truncate((n_day / 3).max(1) + 1);
+    // A day hike out to a base camp's shelter and back is the base camp's
+    // walk in and out again: anyone can turn back at camp. Bruce Peninsula's
+    // "Emergency Shelter" was High Dump's campsite, 40 m off, as a 14.3 km
+    // day hike beside High Dump's base camp.
+    day.retain(|c| {
+        !(c.dest_kind == Kind::Hut
+            && c.kind == "out-and-back"
+            && bases.iter().any(|b| metres(b.camp_pt, c.dest_pt) <= CAMP_HUT_M))
+    });
     stats += &format!(", base {:.1}s", t.elapsed().as_secs_f64());
 
     // multi-day point-to-points: trailhead to trailhead via 2+ campsites. A

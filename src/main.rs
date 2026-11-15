@@ -374,10 +374,15 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> (Vec<Park>, Vec<Valu
                     continue;
                 }
                 let trail_area = l.name == "trail_area";
-                if l.name != "park" && !trail_area {
+                let marine = l.name == "marine_park";
+                if l.name != "park" && !trail_area && !marine {
                     continue;
                 }
                 for f in &l.features {
+                    // A marine park only as a part of a land park (PART_OF).
+                    if marine && !PART_OF.iter().any(|(id, _)| *id == l.str(f, "osm_id")) {
+                        continue;
+                    }
                     let boundary = l.str(f, "boundary");
                     if f.typ != 3
                         || !(trail_area
@@ -613,6 +618,11 @@ const PART_OF: &[(&str, &str)] = &[
     // north and east, and its trails are Killarney's: Lake of The Woods
     // Trail, wholly in it, is one of Killarney's hikes (routes#195).
     ("19140506", "14107244"),
+    // Fathom Five National Marine Park, Bruce Peninsula's twin at Tobermory:
+    // its shore holds the visitor centre and the Bruce Trail's start, to the
+    // Little Dunks Bay lookout and round Burnt Point. A marine park, so read
+    // from the basemap's marine_park layer, which only parts are read from.
+    ("148006001", "13080574"),
 ];
 
 /// Same-named parks that touch or nearly do (PIECE_GAP_M) are one park mapped
