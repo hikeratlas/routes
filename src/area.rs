@@ -80,9 +80,11 @@ pub enum Kind {
     Waterfall,
     Spring,
     Hut,
-    /// A named sight that isn't one of the above: an attraction, a natural
-    /// arch, a beach or a cave entrance (Bruce Peninsula's Grotto, a cave
-    /// on the shore; Halfway Log Dump, a cobble beach under cliffs).
+    /// A named sight that isn't one of the above: a natural arch, a beach or
+    /// a cave entrance (Bruce Peninsula's Grotto, a cave on the shore), or a
+    /// natural feature tagged an attraction (Halfway Log Dump, a bay). Not
+    /// any attraction: Minneapolis' water taxi and Lake Louise's bear sign
+    /// are tourism=attraction too.
     Sight,
     /// A named trail walked for itself (see Ctx::named_trails): a loop, or
     /// out and back to its far end, with no destination on it needed.
@@ -555,8 +557,8 @@ fn read_tile(
                             || amenity == "shelter"
                         {
                             Some(Kind::Hut)
-                        } else if tourism == "attraction"
-                            || matches!(l.str(f, "natural"), "arch" | "beach" | "cave_entrance")
+                        } else if matches!(l.str(f, "natural"), "arch" | "beach" | "cave_entrance")
+                            || (tourism == "attraction" && !l.str(f, "natural").is_empty())
                         {
                             Some(Kind::Sight)
                         } else {
