@@ -394,13 +394,14 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> (Vec<Park>, Vec<Valu
                     }
                     let area = l.get(f, "area").map(|v| v.as_f64()).unwrap_or(0.0);
                     let name = l.str(f, "name");
+                    // A part of another park (PART_OF) is read whatever
+                    // --park or --park-id picks: it's dropped after
+                    // merge_pieces unless its park was picked.
+                    let part = PART_OF.iter().any(|(id, _)| *id == l.str(f, "osm_id"));
                     if name.is_empty()
-                        || a.park
-                            .as_ref()
-                            .is_some_and(|p| !name.to_lowercase().contains(p))
-                        || a.park_id
-                            .as_ref()
-                            .is_some_and(|id| l.str(f, "osm_id") != id)
+                        || !part
+                            && (a.park.as_ref().is_some_and(|p| !name.to_lowercase().contains(p))
+                                || a.park_id.as_ref().is_some_and(|id| l.str(f, "osm_id") != id))
                     {
                         continue;
                     }
@@ -458,7 +459,12 @@ fn parks(archives: &[PmTiles], bbox: [f64; 4], a: &Args) -> (Vec<Park>, Vec<Valu
     // Highlands National Park), and which comes first picks the id
     // merge_pieces keeps, so the order must not hang on the map's.
     v.sort_by(|a, b| b.area.total_cmp(&a.area).then_with(|| a.id.cmp(&b.id)));
-    let v = merge_pieces(v);
+    let mut v = merge_pieces(v);
+    // Parts read only for their park (see above), whose park wasn't picked.
+    v.retain(|p| {
+        a.park.as_ref().is_none_or(|n| p.name.to_lowercase().contains(n))
+            && a.park_id.as_ref().is_none_or(|id| p.id == *id)
+    });
     // A park under the minimums is curated if an OSM hiking route runs
     // through it: a trail is evidence the park is for walking, whatever its
     // size. Grouse Mountain Regional Park (0.73 km², routes#163) is the
@@ -599,15 +605,30 @@ fn simplify(r: &[geo::P], tol: f64) -> Vec<geo::P> {
 /// How close (m, box to box) same-named parks are to be pieces of one park.
 const PIECE_GAP_M: f64 = 1000.0;
 
+/// Parks that are part of another park, by OSM id, (the part, the park):
+/// curated as pieces of it (merge_pieces), their routes the park's. For a
+/// park that's its own area in OSM but one park to its visitors.
+const PART_OF: &[(&str, &str)] = &[
+    // Killarney Lakelands and Headwaters Provincial Park rings Killarney's
+    // north and east, and its trails are Killarney's: Lake of The Woods
+    // Trail, wholly in it, is one of Killarney's hikes (routes#195).
+    ("19140506", "14107244"),
+];
+
 /// Same-named parks that touch or nearly do (PIECE_GAP_M) are one park mapped
 /// as several pieces: Jefferson Memorial Forest is four OSM areas, Boulder
 /// Open Space and Mountain Parks three, Redwood National and State Parks two
 /// (basemap#296). Each was curated as a park of its own, so the park was
 /// listed several times, with routes repeated between them. They're one park
 /// now, under the biggest piece's id, the others' ids in `also`. Not trail
-/// areas: bin/trail-areas.py makes those one per trail already. `v` is
-/// sorted biggest first, and stays so.
+/// areas: bin/trail-areas.py makes those one per trail already. And the
+/// parks PART_OF says are part of another, under the other's id whichever is
+/// bigger. `v` is sorted biggest first, and stays so.
 fn merge_pieces(v: Vec<Park>) -> Vec<Park> {
+    merge_parks(v, PART_OF)
+}
+
+fn merge_parks(v: Vec<Park>, part_of: &[(&str, &str)]) -> Vec<Park> {
     let n = v.len();
     let mut parent: Vec<usize> = (0..n).collect();
     fn find(p: &mut [usize], mut a: usize) -> usize {
@@ -641,6 +662,16 @@ fn merge_pieces(v: Vec<Park>) -> Vec<Park> {
             }
         }
     }
+    // A part joins its park (and the park's pieces), the park the root.
+    let at: HashMap<&str, usize> = v.iter().enumerate().map(|(i, p)| (p.id.as_str(), i)).collect();
+    for &(part, park) in part_of {
+        if let (Some(&i), Some(&j)) = (at.get(part), at.get(park)) {
+            let (a, b) = (find(&mut parent, i), find(&mut parent, j));
+            if a != b {
+                parent[a] = b;
+            }
+        }
+    }
     let roots: Vec<usize> = (0..n).map(|i| find(&mut parent, i)).collect();
     let mut out: Vec<Option<Park>> = v.into_iter().map(Some).collect();
     for i in 0..n {
@@ -665,10 +696,12 @@ fn merge_pieces(v: Vec<Park>) -> Vec<Park> {
             p.operator = piece.operator;
         }
     }
-    let merged: Vec<Park> = out.into_iter().flatten().collect();
+    let mut merged: Vec<Park> = out.into_iter().flatten().collect();
+    // A park that took in a bigger part is bigger now.
+    merged.sort_by(|a, b| b.area.total_cmp(&a.area).then_with(|| a.id.cmp(&b.id)));
     let pieces: usize = merged.iter().map(|p| p.also.len()).sum();
     if pieces > 0 {
-        eprintln!("{pieces} parks are pieces of another of the same name, curated with it");
+        eprintln!("{pieces} parks are pieces or parts of another, curated with it");
     }
     merged
 }
@@ -1532,6 +1565,28 @@ mod tests {
         assert_eq!(m[0].area, 5.0);
         assert_eq!(m[0].max.0, 205.0);
         assert!(m[1].also.is_empty() && m[2].also.is_empty());
+    }
+
+    #[test]
+    fn a_part_of_a_park_is_curated_with_it_bigger_or_not() {
+        let park = |id: &str, name: &str, area: f64, x: f64| {
+            let mut p = shard_park(id);
+            p.name = name.to_string();
+            p.area = area;
+            (p.min, p.max) = ((x, 1e6), (x + 100.0, 1e6 + 100.0));
+            p
+        };
+        let v = vec![
+            park("ring", "Lakelands", 3.0, 1e5),
+            park("core", "Killarney", 2.0, 0.0),
+            park("other", "Otter Creek Park", 1.0, 205.0),
+        ];
+        let m = merge_parks(v, &[("ring", "core"), ("missing", "core")]);
+        let ids: Vec<&str> = m.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, vec!["core", "other"]);
+        assert_eq!(m[0].name, "Killarney");
+        assert_eq!(m[0].also, vec!["ring".to_string()]);
+        assert_eq!(m[0].area, 5.0);
     }
 
     // A park's outline, in pieces as the z8 tiles cut it: an L of two
