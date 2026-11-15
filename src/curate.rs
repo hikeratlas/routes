@@ -2800,6 +2800,8 @@ fn stop_name(name: &str) -> String {
 /// A base camp's hike with this share of its edges on the walk in goes back
 /// the way you came (#61).
 const BASE_BACKTRACK_MAX: f64 = 0.5;
+/// How near a base camp's campsite a hut or shelter is part of it (see curate).
+const CAMP_HUT_M: f64 = 200.0;
 
 /// Stops (#70): a viewpoint, peak or waterfall a short walk (STOP_MAX_M)
 /// from where a car can get to, which a day hike can't be, as those start
@@ -3106,6 +3108,15 @@ pub fn curate(
         .collect();
     bases.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
     bases.truncate((n_day / 3).max(1) + 1);
+    // A day hike out to a base camp's shelter and back is the base camp's
+    // walk in and out again: anyone can turn back at camp. Bruce Peninsula's
+    // "Emergency Shelter" was High Dump's campsite, 40 m off, as a 14.3 km
+    // day hike beside High Dump's base camp.
+    day.retain(|c| {
+        !(c.dest_kind == Kind::Hut
+            && c.kind == "out-and-back"
+            && bases.iter().any(|b| metres(b.camp_pt, c.dest_pt) <= CAMP_HUT_M))
+    });
     stats += &format!(", base {:.1}s", t.elapsed().as_secs_f64());
 
     // multi-day point-to-points: trailhead to trailhead via 2+ campsites. A

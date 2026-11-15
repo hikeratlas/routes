@@ -134,7 +134,7 @@ def check_featured(e, doc):
 @lru_cache(maxsize=None)
 def park_routes(park_id):
     """The park's offered routes (day hikes, multi-day routes, base camps'
-    hikes; not their approaches), each with the `from` and `dest` that
+    walks in and hikes), each with the `from` and `dest` that
     trails.jsonl names it by, or None if this output doesn't have the park."""
     paths = glob.glob(os.path.join(root, 'parks', f'{park_id}.json')) + \
         glob.glob(os.path.join(root, '*', 'parks', f'{park_id}.json'))
@@ -145,6 +145,12 @@ def park_routes(park_id):
     rs += [r | {'type': 'multi-day', 'dest': r.get('to')} for r in doc.get('point_to_points', [])]
     for b in doc.get('base_camps', []):
         rs += [r | {'type': 'from-camp', 'from': b.get('camp')} for r in b.get('hikes', [])]
+        # The walk in, "<camp> from <trailhead>": a hike out to a base camp
+        # and back is the base camp's (Bruce Peninsula's High Dump).
+        a = b.get('approach')
+        if a and a.get('line'):
+            rs.append({'type': 'approach', 'from': b.get('from'), 'dest': b.get('camp'),
+                       'start': a['line'][0], 'route': a})
     return rs
 
 
