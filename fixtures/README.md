@@ -114,6 +114,14 @@ showcase parks (the website's `SHOWCASE`) are all fixtures for this, and
 change's, so a change to one shows in the PR whether or not an entry
 guards it. Keep `featured.py` in step with the website.
 
+Entries are checked against every route a park offers: day hikes, quick
+stops, multi-day trips, base camps' hikes and their walks in ("<camp> from
+<trailhead>": a hike out to a base camp and back is the base camp's). A
+failing entry whose trace starts outside the park's outline gets a note:
+that land may be part of another park in OSM (routes' `PART_OF`, e.g.
+Bruce Peninsula's visitor centre, in Fathom Five National Marine Park), or
+missing from the park's boundary.
+
 To see why routes doesn't offer a hike, `routes --candidates` writes every
 day hike each park considered, `picked` or not, to `candidates.geojsonl`
 (one GeoJSON feature per line, with its park, trailhead, destination, km

@@ -80,6 +80,10 @@ pub enum Kind {
     Waterfall,
     Spring,
     Hut,
+    /// A named sight that isn't one of the above: an attraction, a natural
+    /// arch, a beach or a cave entrance (Bruce Peninsula's Grotto, a cave
+    /// on the shore; Halfway Log Dump, a cobble beach under cliffs).
+    Sight,
     /// A named trail walked for itself (see Ctx::named_trails): a loop, or
     /// out and back to its far end, with no destination on it needed.
     Trail,
@@ -94,6 +98,7 @@ impl Kind {
             Kind::Waterfall => "waterfall",
             Kind::Spring => "spring",
             Kind::Hut => "hut",
+            Kind::Sight => "sight",
             Kind::Trail => "trail",
         }
     }
@@ -107,6 +112,7 @@ impl Kind {
             // natural=spring) and the like.
             Kind::Spring => 0.6,
             Kind::Hut => 0.4,
+            Kind::Sight => 0.75,
             Kind::Trail => TRAIL_APPEAL,
         }
     }
@@ -141,7 +147,8 @@ pub struct Dest {
     pub lake: Option<u32>, // for lakes: which lake (index into Area::lakes)
     /// A peak with neither an elevation nor a Wikidata item: often a
     /// climbing crag mapped as a peak (Joshua Tree's Cyclops Rock, Sports
-    /// Challenge Rock), less of a draw than a summit.
+    /// Challenge Rock), less of a draw than a summit. Or a lake mostly
+    /// beyond the park (Area::outside_lakes_unknown).
     pub minor: bool,
 }
 
@@ -488,7 +495,7 @@ fn read_tile(
                             });
                         }
                     }
-                    "park" | "trail_area" if f.typ == 3 && park_ids.iter().any(|i| i == l.str(f, "osm_id")) => {
+                    "park" | "trail_area" | "marine_park" if f.typ == 3 && park_ids.iter().any(|i| i == l.str(f, "osm_id")) => {
                         raw.data.park.push(Poly::new(
                             geo::rings(f.geometry(), tx, ty, l.extent),
                             tx,
@@ -548,6 +555,10 @@ fn read_tile(
                             || amenity == "shelter"
                         {
                             Some(Kind::Hut)
+                        } else if tourism == "attraction"
+                            || matches!(l.str(f, "natural"), "arch" | "beach" | "cave_entrance")
+                        {
+                            Some(Kind::Sight)
                         } else {
                             None
                         };
@@ -1011,6 +1022,9 @@ impl Area {
                 if loaded.get(&id).copied().unwrap_or(0.0) < LAKE_LOADED * d.area {
                     d.qrank = 1.0;
                     d.mentions = 0;
+                    // And it's no big draw (curate::score): Bruce Peninsula's
+                    // loop to the Grotto was "Lake Huron", the shore it's on.
+                    d.minor = true;
                 }
             }
         }
