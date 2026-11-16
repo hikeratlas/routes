@@ -59,6 +59,12 @@
 # lollipop called an out-and-back). It's stated, never inferred from the
 # trace: a proposer may suggest one, and a person signs it off.
 #
+# Any entry can say it's a known failure: `known`, the open issue that
+# tracks it ("routes#149": Barachois Pond isn't curated). Failing, it's
+# reported as known, not failing, with its problems still listed, and isn't
+# counted among the failures; passing, the report says so, to close the
+# issue and drop `known`.
+#
 # "featured": the park's featured hike on the homepage, picked as the
 # website picks it (fixtures/featured.py: the best easy or moderate day
 # hike near the park's best score). `not`: names it mustn't be (Killarney's
@@ -83,8 +89,9 @@
 # finds: some of these aren't fixed yet, and a build shouldn't stop over one.
 # It does fail (exit 1) on a malformed or misnamed expectations file. --json
 # writes the results for basemap's build progress check: {"regressions":
-# [{name, park, park_id, file, issue, kind, status ("ok", "failing" or
-# "skipped"), problems, checks}], "failing": n, "checked": n}.
+# [{name, park, park_id, file, issue, kind, status ("ok", "failing", "known"
+# or "skipped"), known (its issue, where known), problems, checks}],
+# "failing": n, "known": n, "checked": n}.
 import glob, json, math, os, re, sys
 from functools import lru_cache
 
@@ -482,38 +489,50 @@ for e in expects:
         notes.append("the trace starts outside the park's outline: is that land part of another park "
                      "(routes' PART_OF), or missing from the park's boundary in OSM?")
     status = 'skipped' if rs is None and not found else 'failing' if problems else 'ok'
+    if status == 'failing' and e.get('known'):
+        status = 'known'
+    elif status == 'ok' and e.get('known'):
+        notes.append(f"passes now: close {e['known']} and drop `known`")
     results.append({k: e[k] for k in ('name', 'park', 'park_id', 'file')}
                    | {'issue': e.get('issue') or 'blessed'}
                    | {'kind': kind, 'status': status, 'problems': problems}
+                   | ({'known': e['known']} if e.get('known') else {})
                    | ({'checks': checks} if checks else {})
                    | ({'notes': notes} if notes else {}))
 
 checked = [r for r in results if r['status'] != 'skipped']
 failing = [r for r in checked if r['status'] == 'failing']
-mark = {'ok': '✅', 'failing': '❌', 'skipped': '➖'}
+known = [r for r in checked if r['status'] == 'known']
+mark = {'ok': '✅', 'failing': '❌', 'known': '⏸️', 'skipped': '➖'}
 tick = {True: '✓', False: '✗', None: '–'}
 by_file = {}
 for r in results:
     by_file.setdefault(r['file'], []).append(r)
 skipped = [f for f, rs in by_file.items() if all(r['status'] == 'skipped' for r in rs)]
 print(f"### Named regressions: {len(failing)} of {len(checked)} failing"
-      f" ({len(by_file) - len(skipped)} of {len(by_file)} parks in this output)\n")
+      + (f", {len(known)} known" if known else '')
+      + f" ({len(by_file) - len(skipped)} of {len(by_file)} parks in this output)\n")
 # Parks with failures first, then by file name.
 order = sorted((f for f in by_file if f not in skipped),
                key=lambda f: (not any(r['status'] == 'failing' for r in by_file[f]), f))
 for f in order:
     rs = by_file[f]
     n_fail = sum(r['status'] == 'failing' for r in rs)
-    print(f"#### {rs[0]['park']} ({f}): {n_fail} of {len(rs)} failing\n")
-    for r in sorted(rs, key=lambda r: (r['status'] != 'failing', r['kind'], r['name'])):
+    n_known = sum(r['status'] == 'known' for r in rs)
+    print(f"#### {rs[0]['park']} ({f}): {n_fail} of {len(rs)} failing"
+          + (f", {n_known} known" if n_known else '') + "\n")
+    rank = {'failing': 0, 'known': 1}
+    for r in sorted(rs, key=lambda r: (rank.get(r['status'], 2), r['kind'], r['name'])):
         detail = ''
         if r.get('checks'):
             detail = ' (' + ', '.join(f"{k} {tick[v]}" for k, v in r['checks'].items()) + ')'
-        print(f"- {mark[r['status']]} **{r['name']}** ({r['issue']}): {r['status']}{detail}"
+        status = f"known ({r['known']})" if r['status'] == 'known' else r['status']
+        print(f"- {mark[r['status']]} **{r['name']}** ({r['issue']}): {status}{detail}"
               + ''.join(f"\n  - {p}" for p in r['problems'])
               + ''.join(f"\n  - ℹ️ {n}" for n in r.get('notes', [])))
     print()
 if skipped:
     print(f"➖ Not in this output: {', '.join(sorted(skipped))}")
 if out_json:
-    json.dump({'regressions': results, 'failing': len(failing), 'checked': len(checked)}, open(out_json, 'w'), indent=1)
+    json.dump({'regressions': results, 'failing': len(failing), 'known': len(known), 'checked': len(checked)},
+              open(out_json, 'w'), indent=1)

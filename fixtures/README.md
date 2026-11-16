@@ -110,6 +110,12 @@ loop, was called an out-and-back). Give it where the park says, or where
 you've looked at the hike: it's stated, never inferred from the trace. A
 proposer may suggest one, for a person to sign off.
 
+An entry routes is known to fail, with an open issue tracking it, can say
+so: `known`, the issue (`"routes#149"`: Barachois Pond isn't curated, so its
+Erin Mountain trail fails). It's reported as known, not failing, its problems
+still listed, and isn't counted among the failures; when it passes, the
+report says to close the issue and drop `known`.
+
 A third kind, `featured`, checks the park's featured hike on the homepage,
 picked as the website picks it (`featured.py`, after the website's
 `app/featured.ts`: the best-scoring easy or moderate day hike within 70% of

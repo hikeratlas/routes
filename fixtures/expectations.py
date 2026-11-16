@@ -83,6 +83,12 @@ def load(d=DIR):
             if sh is not None and (sh not in SHAPES or e.get('kind') == 'featured'):
                 errors.append(f"{where}: shape is one of {', '.join(SHAPES)}, on a dest or trail entry")
                 continue
+            # A known failure: the open issue that tracks it ("routes#149"),
+            # reported as known rather than failing (expect.py).
+            kn = e.get('known')
+            if kn is not None and not (isinstance(kn, str) and re.fullmatch(r'([\w.-]+/)?[\w.-]+#\d+', kn)):
+                errors.append(f"{where}: known is the issue tracking the failure, e.g. \"routes#149\"")
+                continue
             b = e.get('blessed')
             if b is not None and not (isinstance(b, dict) and isinstance(b.get('key'), str) and b['key']
                                       and t is not None and isinstance(e.get('km'), (int, float))):
