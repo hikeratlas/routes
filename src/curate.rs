@@ -1432,6 +1432,12 @@ const NAMED_MIN_M: f64 = 1000.0;
 /// it, down to this long: the park signed it for visitors (routes#155).
 const SIGNED_MIN_M: f64 = 300.0;
 const SIGNED_NEAR_M: f64 = 100.0;
+/// How near a short named spur's dead end something worth walking to is
+/// (Ctx::spot_at): Jack Pine Trail's bench is 38 m from it.
+const SPOT_M: f64 = 75.0;
+/// A short named spur (named_pieces) starts this near a trailhead or lot:
+/// Jack Pine Trail's is 126 m from Achray's trailhead.
+const SIGNED_END_M: f64 = 150.0;
 const NAMED_MAX_M: f64 = 15000.0;
 /// How far a trailhead may be from a named trail to start it.
 const NAMED_ACCESS_M: f64 = 3000.0;
@@ -1501,7 +1507,7 @@ impl<'a> Ctx<'a> {
         let g = &self.area.graph;
         // Trailheads OSM names, for short trails the park signed.
         let signs: Vec<&crate::area::Place> = if signed {
-            self.area.parkings.iter().filter(|p| p.trailhead && !p.name.is_empty()).collect()
+            self.area.parkings.iter().filter(|p| p.trailhead).collect()
         } else {
             vec![]
         };
@@ -1714,18 +1720,42 @@ impl<'a> Ctx<'a> {
                 // trail_tour walks the rest.
                 let long_enough = long_enough
                     || (name_m >= SIGNED_MIN_M
-                        && signs.iter().any(|t| {
+                        && (signs.iter().any(|t| {
                             named_for(&t.name, name)
                                 && comp
                                     .iter()
                                     .any(|&n| metres(g.pts[n as usize], t.pt) <= SIGNED_NEAR_M)
-                        }));
+                        })
+                        // Or a spur: out from by a trailhead or lot to a dead
+                        // end at something worth walking to (spot_at), walked
+                        // there and back. Algonquin's Jack Pine Trail, 0.7 km
+                        // from by Achray's trailhead to a bench by the shore.
+                        || (signed && ends.len() == 2 && !branched && {
+                            let dead = |n: u32| g.adj[n as usize].len() == 1 && self.spot_at(n);
+                            let by_lot = |n: u32| {
+                                self.area.parkings.iter().any(|p| metres(g.pts[n as usize], p.pt) <= SIGNED_END_M)
+                            };
+                            (dead(ends[0]) && by_lot(ends[1])) || (dead(ends[1]) && by_lot(ends[0]))
+                        })));
                 if long_enough && m <= max_m {
                     pieces.push((name, path, ways, is_loop));
                 }
             }
         }
         pieces
+    }
+
+    /// Whether something worth walking to is at node n, within SPOT_M: a
+    /// destination (a peak, viewpoint, waterfall, spring, hut or sight), a
+    /// lake's shore, or a bench, viewpoint, picnic site, waterfall or beach
+    /// mapped without a name (Area::spots).
+    fn spot_at(&self, n: u32) -> bool {
+        let p = self.area.graph.pts[n as usize];
+        self.dests.iter().any(|d| {
+            matches!(d.kind, Kind::Peak | Kind::Viewpoint | Kind::Waterfall | Kind::Spring | Kind::Hut | Kind::Sight)
+                && metres(d.pt, p) <= SPOT_M
+        }) || self.lake_access.values().any(|ns| ns.contains(&n))
+            || self.area.spots.iter().any(|&q| metres(q, p) <= SPOT_M)
     }
 
     /// Every node of the trail named `name` joined to `from` by its own
