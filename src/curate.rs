@@ -42,6 +42,12 @@ pub struct Ctx<'a> {
     dests: Vec<Dest>,
     pub lake_access: HashMap<u32, Vec<u32>>,
     dest_near: Vec<Vec<u32>>, // nodes within 100 m of each destination
+    /// dest_near and lake_access the other way round, for evaluate: by
+    /// node, the destinations it's near (index into dests), and the lakes
+    /// whose shore it's on (index into dests, and its place in that lake's
+    /// lake_access, which breaks ties as before). Set by index_passing.
+    near_dests: HashMap<u32, Vec<u32>>,
+    near_shores: HashMap<u32, Vec<(u32, u32)>>,
     in_park: Vec<bool>,       // by node
     /// Edges (ekey) along an OSM hiking route: the scoring bump for
     /// following one (W_KNOWN), unless switched off (KNOWN_BONUS).
@@ -381,6 +387,8 @@ impl<'a> Ctx<'a> {
             dests,
             lake_access: HashMap::default(),
             dest_near: vec![],
+            near_dests: HashMap::default(),
+            near_shores: HashMap::default(),
             in_park: vec![],
             on_known: HashSet::default(),
             mpu_min: area
@@ -658,6 +666,28 @@ impl<'a> Ctx<'a> {
 
     /// Measure a route. `path` is the outward route; for an out-and-back the
     /// walk is out and back along it; otherwise `full` is the whole walk.
+    /// near_dests and near_shores, from dest_near and lake_access (routes#229:
+    /// evaluate looked at every destination's nodes and every lake's whole
+    /// shore for each route, 15 s of Mississippi's 47 s evaluating).
+    fn index_passing(&mut self) {
+        let mut near: HashMap<u32, Vec<u32>> = HashMap::default();
+        for (i, dn) in self.dest_near.iter().enumerate() {
+            for &n in dn {
+                near.entry(n).or_default().push(i as u32);
+            }
+        }
+        let mut shores: HashMap<u32, Vec<(u32, u32)>> = HashMap::default();
+        for (i, d) in self.dests.iter().enumerate() {
+            if let Some(ns) = d.lake.and_then(|id| self.lake_access.get(&id)) {
+                for (k, &n) in ns.iter().enumerate() {
+                    shores.entry(n).or_default().push((i as u32, k as u32));
+                }
+            }
+        }
+        self.near_dests = near;
+        self.near_shores = shores;
+    }
+
     pub fn evaluate(&self, path: &[u32], ways: &[u32], out_and_back: bool) -> Eval {
         let _t = Tm(&T_EVAL, std::time::Instant::now());
         let g = &self.area.graph;
@@ -731,27 +761,40 @@ impl<'a> Ctx<'a> {
             first.entry(n).or_insert(m);
         }
         let mut along: Vec<(Kind, String, f64, P)> = vec![];
-        // destinations passed within 100 m
-        let mut passed: HashMap<Kind, Vec<String>> = HashMap::default();
-        for (d, dn) in self.dests.iter().zip(&self.dest_near) {
-            if let Some(at) = dn.iter().filter_map(|n| first.get(n)).copied().reduce(f64::min) {
-                passed.entry(d.kind).or_default().push(d.name.clone());
-                along.push((d.kind, d.name.clone(), at, d.pt));
+        // destinations passed within 100 m, and lakes whose shore it comes
+        // within 75 m of: by the walk's nodes (near_dests, near_shores),
+        // then in the destinations' order, as before.
+        let mut near_at: HashMap<u32, f64> = HashMap::default();
+        // A lake's nearest shore node: where along, and its place in
+        // lake_access (the first of equals, as min_by gave).
+        let mut shore_at: HashMap<u32, (f64, u32, u32)> = HashMap::default();
+        for (&n, &m) in &first {
+            for &i in self.near_dests.get(&n).map(|v| &v[..]).unwrap_or(&[]) {
+                let e = near_at.entry(i).or_insert(m);
+                *e = e.min(m);
             }
-        }
-        // lakes: passed if the route comes within 75 m of the shore
-        for d in &self.dests {
-            if let Some(id) = d.lake {
-                let shore = self.lake_access.get(&id).and_then(|ns| {
-                    ns.iter()
-                        .filter_map(|n| first.get(n).map(|m| (*m, *n)))
-                        .min_by(|a, b| a.0.total_cmp(&b.0))
-                });
-                if let Some((at, n)) = shore {
-                    passed.entry(Kind::Lake).or_default().push(d.name.clone());
-                    along.push((Kind::Lake, d.name.clone(), at, g.pts[n as usize]));
+            for &(i, k) in self.near_shores.get(&n).map(|v| &v[..]).unwrap_or(&[]) {
+                let e = shore_at.entry(i).or_insert((m, k, n));
+                if m < e.0 || (m == e.0 && k < e.1) {
+                    *e = (m, k, n);
                 }
             }
+        }
+        let mut passed: HashMap<Kind, Vec<String>> = HashMap::default();
+        let mut hit: Vec<u32> = near_at.keys().copied().collect();
+        hit.sort_unstable();
+        for i in hit {
+            let d = &self.dests[i as usize];
+            passed.entry(d.kind).or_default().push(d.name.clone());
+            along.push((d.kind, d.name.clone(), near_at[&i], d.pt));
+        }
+        let mut lakes: Vec<u32> = shore_at.keys().copied().collect();
+        lakes.sort_unstable();
+        for i in lakes {
+            let d = &self.dests[i as usize];
+            let (at, _, n) = shore_at[&i];
+            passed.entry(Kind::Lake).or_default().push(d.name.clone());
+            along.push((Kind::Lake, d.name.clone(), at, g.pts[n as usize]));
         }
         let mut passed: Vec<(Kind, Vec<String>)> = passed.into_iter().collect();
         passed.sort_by_key(|(k, _)| k.name());
@@ -3554,6 +3597,7 @@ pub fn curate(
     }
     let mut ctx = Ctx::new(area, dem, dests, camps);
     ctx.lake_access = area.lake_access().into_iter().collect();
+    ctx.index_passing();
     let targets = ctx.targets(1000.0);
     let starts = ctx.starts(&area.parkings, &area.aisles, trail_area);
     let t = std::time::Instant::now();
