@@ -7,7 +7,7 @@
 //
 // Over Newfoundland, hikeratlas/nl-dem's tiles of the province's 5 m DEM come
 // first, as on the website: Mapterhorn only has 30 m data there.
-use crate::geo::{P, lonlat};
+use crate::geo::P;
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::PathBuf;
@@ -225,21 +225,33 @@ impl Dem {
     /// Elevations at many points; tiles are looked up once per call.
     pub fn profile(&self, pts: &[P]) -> Vec<f64> {
         let mut local: HashMap<(u8, u32, u32), Option<Grid>> = HashMap::new();
+        // The last tile asked for: a sample's four pixels, and the next
+        // sample's, are almost always on it.
+        let mut last: Option<((u8, u32, u32), Option<Grid>)> = None;
         pts.iter()
             .map(|&p| {
                 self.sample(p, &mut |z, x, y| {
-                    local.entry((z, x, y)).or_insert_with(|| self.tile(z, x, y)).clone()
+                    if let Some((k, g)) = &last {
+                        if *k == (z, x, y) {
+                            return g.clone();
+                        }
+                    }
+                    let g = local.entry((z, x, y)).or_insert_with(|| self.tile(z, x, y)).clone();
+                    last = Some(((z, x, y), g.clone()));
+                    g
                 })
             })
             .collect()
     }
 
     fn sample(&self, p: P, tile: &mut dyn FnMut(u8, u32, u32) -> Option<Grid>) -> f64 {
-        let (lon, lat) = lonlat(p);
+        // World units are Web Mercator, as the tiles' pixels are: a pixel is
+        // p scaled, without the round trip through longitude and latitude
+        // (four transcendental calls a sample; routes#229).
         let t = TILE as i64;
         let n = (1u64 << self.z) as f64 * TILE as f64;
-        let fx = (lon + 180.0) / 360.0 * n - 0.5;
-        let fy = (1.0 - lat.to_radians().tan().asinh() / std::f64::consts::PI) / 2.0 * n - 0.5;
+        let fx = p.0 / crate::geo::WORLD * n - 0.5;
+        let fy = p.1 / crate::geo::WORLD * n - 0.5;
         let (x0, y0) = (fx.floor() as i64, fy.floor() as i64);
         let (u, w) = (fx - x0 as f64, fy - y0 as f64);
         // A pixel at self.z, from the nearest zoom that has its tile.
