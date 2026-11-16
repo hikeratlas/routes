@@ -832,6 +832,49 @@ pub fn trail_stems<'a>(names: impl Iterator<Item = &'a str>) -> Vec<(String, Vec
         .collect()
 }
 
+/// How near a stem's trails come where they meet (through a road or
+/// another trail between them): North and South Gibson Trail, 115 m and 49 m.
+pub const STEM_JOIN_M: f64 = 150.0;
+/// Two places a stem's trails meet are this far apart.
+const STEM_PLACES_M: f64 = 1000.0;
+
+/// Whether a stem's trails are one: each meets another at two places,
+/// within STEM_JOIN_M, at least STEM_PLACES_M apart, so they make a loop
+/// together (North and South Gibson Trail). Not two trails that only touch
+/// end to end, or run apart: Olympic's North and South Coast Beach
+/// Travelway, North and South Kalaloch Beach.
+fn stem_meets(g: &Graph, names: &[String]) -> bool {
+    let pts: Vec<Vec<P>> = names
+        .iter()
+        .map(|n| {
+            let mut v = vec![];
+            for (a, es) in g.adj.iter().enumerate() {
+                if es.iter().any(|e| g.ways[e.way as usize].name == *n) {
+                    v.push(g.pts[a]);
+                }
+            }
+            v
+        })
+        .collect();
+    (0..pts.len()).all(|i| {
+        // Where trail i comes within STEM_JOIN_M of another of them.
+        let meets: Vec<P> = pts[i]
+            .iter()
+            .copied()
+            .filter(|&p| {
+                (0..pts.len()).any(|j| j != i && pts[j].iter().any(|&q| crate::geo::metres(p, q) <= STEM_JOIN_M))
+            })
+            .collect();
+        meets.iter().any(|&p| meets.iter().any(|&q| crate::geo::metres(p, q) >= STEM_PLACES_M))
+    })
+}
+
+/// Whether a way named `way` is part of the trail `name`: of that name, or
+/// one of its trail_stems'.
+pub fn of_trail(stems: &[(String, Vec<String>)], way: &str, name: &str) -> bool {
+    way == name || stems.iter().any(|(s, ns)| s == name && ns.iter().any(|n| n == way))
+}
+
 impl Area {
     /// park_ids: the park's OSM ids, any of whose polygons is the park (one
     /// park mapped as several same-named pieces is curated as one).
@@ -885,13 +928,14 @@ impl Area {
             area.tiles.insert((r.tx, r.ty), r.data);
         }
         area.lifts = lifts(lift_pieces);
-        area.trail_stems = trail_stems(
+        let stems = trail_stems(
             area.graph
                 .ways
                 .iter()
                 .filter(|w| matches!(w.class, Class::Trail | Class::Track) && !w.name.is_empty())
                 .map(|w| w.name.as_str()),
         );
+        area.trail_stems = stems.into_iter().filter(|(_, ns)| stem_meets(&area.graph, ns)).collect();
         area.known = known.into_values().collect();
         area.known.sort_by(|a, b| a.id.cmp(&b.id));
         for d in &mut area.dests {
