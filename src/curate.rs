@@ -1921,11 +1921,9 @@ impl<'a> Ctx<'a> {
                     let (back, bw) = sr.path(entry_at);
                     full.extend(back.iter().rev().skip(1));
                     fw.extend(bw.iter().rev());
-                    // The tour keeps to one-way trails' direction; the way in
-                    // and out may not.
-                    if !self.walkable(&full) {
-                        continue;
-                    }
+                    // trail_tour keeps to one-way trails' direction, and its
+                    // way back retraces only two-way edges: a lollipop's
+                    // stick, not its one-way loop.
                     let far = g.pts[tour[tour.len() / 2] as usize];
                     let ev = self.evaluate(&full, &fw, false);
                     let d = Dest {
@@ -1988,9 +1986,6 @@ impl<'a> Ctx<'a> {
                 let (back, bw) = sr.path(entry);
                 full.extend(back.iter().rev().skip(1));
                 fw.extend(bw.iter().rev());
-                if !self.walkable(&full) {
-                    continue;
-                }
                 self.evaluate(&full, &fw, false)
             } else {
                 // Out and back the same way: walkable both ways.
@@ -2992,9 +2987,10 @@ pub fn curate(
     let mut cands = cands;
     // An out-and-back can't use a one-way trail: it walks it both ways. The
     // Grouse Grind is up only; its hike comes down another way (routes#163).
-    // Not named trails' own hikes: named_trails checks each step of theirs,
-    // as a lollipop walks its stick both ways and its one-way loop once
-    // (Killarney's Chikanishing Trail, Algonquin's Fork Lake Trail).
+    // Not named trails' own hikes: a lollipop walks its stick both ways and
+    // its one-way loop once (Killarney's Chikanishing Trail, Algonquin's
+    // Fork Lake Trail), and named_trails checks its out-and-backs along a
+    // line itself.
     let oneway: HashSet<u64> = (0..area.graph.adj.len() as u32)
         .flat_map(|u| {
             area.graph.adj[u as usize]
