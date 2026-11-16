@@ -1726,11 +1726,13 @@ impl<'a> Ctx<'a> {
                                     .iter()
                                     .any(|&n| metres(g.pts[n as usize], t.pt) <= SIGNED_NEAR_M)
                         })
-                        // Or a spur: out from by a trailhead or lot to a dead
+                        // Or a spur, itself SIGNED_MIN_M or more (not a stub of
+                        // a longer trail: Minneapolis' The Gopher Way, 5 m out
+                        // and back): out from by a trailhead or lot to a dead
                         // end at something worth walking to (spot_at), walked
                         // there and back. Algonquin's Jack Pine Trail, 0.7 km
                         // from by Achray's trailhead to a bench by the shore.
-                        || (signed && ends.len() == 2 && !branched && {
+                        || (signed && ends.len() == 2 && !branched && m >= SIGNED_MIN_M && {
                             let dead = |n: u32| g.adj[n as usize].len() == 1 && self.spot_at(n);
                             let by_lot = |n: u32| {
                                 self.area.parkings.iter().any(|p| metres(g.pts[n as usize], p.pt) <= SIGNED_END_M)
