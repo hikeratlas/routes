@@ -1286,13 +1286,14 @@ fn named_tours<'s>(
         }
         // A trailhead named for it ("Highland Backpacking Trail parking"),
         // else its nearest, by its ends and every so often along it.
-        // To any of the trail's ways, not only this piece's: Highland's lot
-        // is on its 2.1 km stem, apart from the loops' piece.
+        // To this piece, by its other pieces if need be: Highland's lot is
+        // at the end of its 2.1 km stem, mapped apart from the loops' piece.
+        let piece: HashSet<u32> = nodes.iter().copied().collect();
         let own = starts.iter().filter(|s| named_for(&s.name, name)).find_map(|s| {
-            let sr = ctx.search(s.node, NAMED_ACCESS_M, None);
+            let sr = ctx.search(s.node, OWN_TOUR_ACCESS_M, None);
             let (_, n) = sr
                 .all_reached()
-                .filter(|&(n, _)| g.adj[n as usize].iter().any(|e| ctx.of_trail(&g.ways[e.way as usize].name, name)))
+                .filter(|(n, _)| piece.contains(n))
                 .map(|(n, m)| (m, n))
                 .min_by(|a, b| a.0.total_cmp(&b.0))?;
             let (mut p, mut w) = sr.path(n);
@@ -1340,13 +1341,19 @@ fn named_tours<'s>(
         if !(18000.0..=100000.0).contains(&m) || inp / m < 0.6 {
             continue;
         }
-        let mut passed: HashSet<u32> = HashSet::default();
-        for n in &tour {
-            if let Some(cs) = ctx.camp_near.get(n) {
-                passed.extend(cs.iter().copied());
-            }
-        }
-        if passed.len() < 2 {
+        // Places to sleep on it: any of OSM's campsites within TOUR_CAMP_M,
+        // named or not (curate's camps keep one unnamed site a park, as
+        // base camps; Algonquin's Highland passes dozens, all unnamed).
+        let line: Vec<P> = tour.iter().map(|&n| g.pts[n as usize]).collect();
+        let near = crate::geo::sample(&line, TOUR_CAMP_M);
+        let passed = ctx
+            .area
+            .camps
+            .iter()
+            .filter(|c| near.iter().any(|&p| metres(p, c.pt) <= TOUR_CAMP_M))
+            .take(2)
+            .count();
+        if passed < 2 {
             continue;
         }
         let ev = ctx.evaluate(&full, &fw, false);
@@ -1379,6 +1386,11 @@ fn named_tours<'s>(
 /// named_tours looks for a trail's trailhead from every this many of its
 /// nodes (each a search of NAMED_ACCESS_M).
 const TOUR_START_STEP: usize = 25;
+/// How far a trailhead named for a trail may be from the piece toured
+/// (named_tours), along the trail's other pieces.
+const OWN_TOUR_ACCESS_M: f64 = 6000.0;
+/// How near a trail a campsite is on it, for named_tours.
+const TOUR_CAMP_M: f64 = 150.0;
 
 fn metres_of(g: &crate::area::Graph, p: &[u32]) -> f64 {
     p.windows(2).map(|w| metres(g.pts[w[0] as usize], g.pts[w[1] as usize])).sum()
@@ -3392,13 +3404,12 @@ pub fn curate(
     );
     let mut camps: Vec<Place> = vec![];
     for c in &area.camps {
-        // A hut and the campground beside it are one stopover. Unnamed
-        // sites aren't one by their (empty) name: that kept one per park,
-        // and Algonquin's Highland Backpacking Trail, past dozens, passed
-        // none.
+        // A hut and the campground beside it are one stopover. (Unnamed
+        // sites are one by their empty name: a park keeps one of them as
+        // a base camp. named_tours counts them all, area.camps.)
         if camps
             .iter()
-            .all(|u| (u.name.is_empty() || u.name != c.name) && metres(u.pt, c.pt) >= 800.0)
+            .all(|u| u.name != c.name && metres(u.pt, c.pt) >= 800.0)
         {
             camps.push(Place {
                 name: c.name.clone(),
