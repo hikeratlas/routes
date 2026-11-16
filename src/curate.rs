@@ -1262,6 +1262,9 @@ const LIFT_NEAR_M: f64 = 400.0;
 const TOUR_GAIN: f64 = 1.1;
 /// ...or when it's a loop where the piece is a line, walking this much of it.
 const TOUR_KEEP: f64 = 0.95;
+/// A tour that walks this share of its length once is a loop, though it
+/// walks a stick both ways to get there: a lollipop.
+const LOLLIPOP_LOOP: f64 = 0.5;
 /// How much of a trail a tour from where the way in reaches it must walk, of
 /// what the tour from the piece's entry walks, to start there instead.
 const TOUR_REACH_KEEP: f64 = 0.95;
@@ -1630,9 +1633,23 @@ impl<'a> Ctx<'a> {
         let back_edges = edge_set(&back_p);
         let shared =
             back_edges.intersection(&out_edges).count() as f64 / back_edges.len().max(1) as f64;
-        let is_loop = shared < 0.5;
         let mut tour = out_p.clone();
         tour.extend(back_p.iter().skip(1));
+        // A loop, or a lollipop: a stick walked both ways to a loop walked
+        // once (Killarney's Chikanishing Trail), which hikers call a loop too.
+        let mut times: HashMap<u64, u32> = HashMap::default();
+        for w in tour.windows(2) {
+            *times.entry(ekey(w[0], w[1])).or_default() += 1;
+        }
+        let (mut once_m, mut tour_m) = (0.0, 0.0);
+        for w in tour.windows(2) {
+            let m = metres(g.pts[w[0] as usize], g.pts[w[1] as usize]);
+            tour_m += m;
+            if times[&ekey(w[0], w[1])] == 1 {
+                once_m += m;
+            }
+        }
+        let is_loop = shared < 0.5 || once_m >= LOLLIPOP_LOOP * tour_m;
         let mut tour_w = out_w;
         tour_w.extend(back_w);
         // Metres of the trail walked, each edge once.
