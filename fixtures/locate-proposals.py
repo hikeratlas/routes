@@ -54,13 +54,14 @@ def get(path, params):
     time.sleep(max(0.0, 1.1 - (time.time() - _last[0])))
     _last[0] = time.time()
     url = f'https://nominatim.openstreetmap.org/{path}?' + urllib.parse.urlencode(params)
-    # Nominatim answers 429 when it's busy: back off and try again.
+    # Nominatim answers 429 when it's busy, or a 5xx when overloaded: back
+    # off and try again.
     for wait in (5, 30, 120, 300, None):
         try:
             with urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': UA}), timeout=60) as r:
                 return json.load(r)
         except urllib.error.HTTPError as e:
-            if e.code != 429 or wait is None:
+            if (e.code != 429 and e.code < 500) or wait is None:
                 raise
             time.sleep(wait)
 
