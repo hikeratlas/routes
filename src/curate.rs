@@ -1262,6 +1262,9 @@ const LIFT_NEAR_M: f64 = 400.0;
 const TOUR_GAIN: f64 = 1.1;
 /// ...or when it's a loop where the piece is a line, walking this much of it.
 const TOUR_KEEP: f64 = 0.95;
+/// A tour that walks this share of its length once is a loop, though it
+/// walks a stick both ways to get there: a lollipop.
+const LOLLIPOP_LOOP: f64 = 0.5;
 /// How much of a trail a tour from where the way in reaches it must walk, of
 /// what the tour from the piece's entry walks, to start there instead.
 const TOUR_REACH_KEEP: f64 = 0.95;
@@ -1630,9 +1633,23 @@ impl<'a> Ctx<'a> {
         let back_edges = edge_set(&back_p);
         let shared =
             back_edges.intersection(&out_edges).count() as f64 / back_edges.len().max(1) as f64;
-        let is_loop = shared < 0.5;
         let mut tour = out_p.clone();
         tour.extend(back_p.iter().skip(1));
+        // A loop, or a lollipop: a stick walked both ways to a loop walked
+        // once (Killarney's Chikanishing Trail), which hikers call a loop too.
+        let mut times: HashMap<u64, u32> = HashMap::default();
+        for w in tour.windows(2) {
+            *times.entry(ekey(w[0], w[1])).or_default() += 1;
+        }
+        let (mut once_m, mut tour_m) = (0.0, 0.0);
+        for w in tour.windows(2) {
+            let m = metres(g.pts[w[0] as usize], g.pts[w[1] as usize]);
+            tour_m += m;
+            if times[&ekey(w[0], w[1])] == 1 {
+                once_m += m;
+            }
+        }
+        let is_loop = shared < 0.5 || once_m >= LOLLIPOP_LOOP * tour_m;
         let mut tour_w = out_w;
         tour_w.extend(back_w);
         // Metres of the trail walked, each edge once.
@@ -1801,6 +1818,14 @@ impl<'a> Ctx<'a> {
         (out, downs)
     }
 
+    /// Whether a walk can go node to node as `path` runs: no step against a
+    /// one-way trail.
+    fn walkable(&self, path: &[u32]) -> bool {
+        let g = &self.area.graph;
+        path.windows(2)
+            .all(|w| g.adj[w[0] as usize].iter().any(|e| e.to == w[1] && e.cost.is_finite()))
+    }
+
     pub fn named_trails(&self, starts: &[Start]) -> Vec<Cand> {
         let g = &self.area.graph;
         let pieces = self.named_pieces(NAMED_MIN_M, NAMED_MAX_M, true);
@@ -1913,6 +1938,9 @@ impl<'a> Ctx<'a> {
                     let (back, bw) = sr.path(entry_at);
                     full.extend(back.iter().rev().skip(1));
                     fw.extend(bw.iter().rev());
+                    // trail_tour keeps to one-way trails' direction, and its
+                    // way back retraces only two-way edges: a lollipop's
+                    // stick, not its one-way loop.
                     let far = g.pts[tour[tour.len() / 2] as usize];
                     let ev = self.evaluate(&full, &fw, false);
                     let d = Dest {
@@ -1977,6 +2005,11 @@ impl<'a> Ctx<'a> {
                 fw.extend(bw.iter().rev());
                 self.evaluate(&full, &fw, false)
             } else {
+                // Out and back the same way: walkable both ways.
+                let back: Vec<u32> = full.iter().rev().copied().collect();
+                if !self.walkable(&full) || !self.walkable(&back) {
+                    continue;
+                }
                 self.evaluate(&full, &fw, true)
             };
             let d = Dest {
@@ -2969,6 +3002,23 @@ pub fn curate(
         })
         .collect();
     let mut cands = cands;
+    // An out-and-back can't use a one-way trail: it walks it both ways. The
+    // Grouse Grind is up only; its hike comes down another way (routes#163).
+    // Not named trails' own hikes: a lollipop walks its stick both ways and
+    // its one-way loop once (Killarney's Chikanishing Trail, Algonquin's
+    // Fork Lake Trail), and named_trails checks its out-and-backs along a
+    // line itself.
+    let oneway: HashSet<u64> = (0..area.graph.adj.len() as u32)
+        .flat_map(|u| {
+            area.graph.adj[u as usize]
+                .iter()
+                .filter(|e| !e.cost.is_finite())
+                .map(move |e| ekey(u, e.to))
+        })
+        .collect();
+    if !oneway.is_empty() {
+        cands.retain(|c| c.kind != "out-and-back" || c.edges.is_disjoint(&oneway));
+    }
     // Every named trail's own hike, for real_trails below.
     let mut trails: Vec<Cand> = vec![];
     if !late() {
@@ -2996,20 +3046,6 @@ pub fn curate(
             })
             .collect();
         cands.extend(named);
-    }
-    // An out-and-back can't use a one-way trail: it walks it both ways. The
-    // Grouse Grind is up only; its hike comes down another way (routes#163).
-    let oneway: HashSet<u64> = (0..area.graph.adj.len() as u32)
-        .flat_map(|u| {
-            area.graph.adj[u as usize]
-                .iter()
-                .filter(|e| !e.cost.is_finite())
-                .map(move |e| ekey(u, e.to))
-        })
-        .collect();
-    if !oneway.is_empty() {
-        cands.retain(|c| c.kind != "out-and-back" || c.edges.is_disjoint(&oneway));
-        trails.retain(|c| c.kind != "out-and-back" || c.edges.is_disjoint(&oneway));
     }
     // A day hike that's mostly outside the park isn't the park's: Golden
     // Ears' top easy hike was a dyke walk to Pitt Lake, none of it in the
