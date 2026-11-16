@@ -739,6 +739,14 @@ impl<'a> Ctx<'a> {
             .filter(|(_, m)| *m >= TRAIL_MENTION_SHARE * one_way)
             .map(|(n, _)| n.to_lowercase())
             .unwrap_or_default();
+        // Whether the walk's far point (where it turns back, or halfway round
+        // a loop) is on the trail: the sight is on it, not on another trail
+        // the walk reaches it by (Killarney's The Crack viewpoint, reached
+        // mostly along La Cloche Silhouette Trail).
+        let far_on = |name: &str| {
+            let far = if out_and_back { ways.last() } else { ways.get(ways.len() / 2) };
+            far.is_some_and(|&w| g.ways[w as usize].name.to_lowercase() == name)
+        };
         let (trail_mentions, trail_mentions_to_sight) = if self.area.trail_mentions.is_empty() {
             (0, 0)
         } else {
@@ -749,8 +757,19 @@ impl<'a> Ctx<'a> {
             // that goes on past the Ink Pots (see score).
             main_trail_share(g, path, ways)
                 .filter(|(_, m)| *m >= TRAIL_MENTION_SHARE * one_way)
-                .and_then(|(n, m)| self.area.trail_mentions.get(&n.to_lowercase()).map(|v| (m, *v)))
-                .map(|(m, (sites, len))| if m >= TRAIL_MENTION_COVER * len { (sites, sites) } else { (0, sites) })
+                .and_then(|(n, m)| self.area.trail_mentions.get(&n.to_lowercase()).map(|v| (n.to_lowercase(), m, *v)))
+                .map(|(n_lower, m, (sites, len))| {
+                    if m >= TRAIL_MENTION_COVER * len {
+                        (sites, sites)
+                    } else if total <= 2.0 * len && far_on(&n_lower) {
+                        // Not a long way round to the sight: Killarney's walk
+                        // to The Crack's viewpoint from Cranberry Bog Trail's
+                        // trailhead (17.3 km) is longer than The Crack and back.
+                        (0, sites)
+                    } else {
+                        (0, 0)
+                    }
+                })
                 .unwrap_or((0, 0))
         };
         let mut via: Vec<String> = vec![];
@@ -2663,14 +2682,14 @@ fn merge_lots(mut lots: Vec<Lot>) -> Vec<Start> {
     kept.into_iter().map(|l| l.start).collect()
 }
 
-/// A famous trail is famous for its sights: the walk to its best one (the
-/// best-scoring walk to a waterfall or viewpoint on it that takes the
-/// trail's mentions, see score) keeps them, and the trail's other walks
-/// don't. Johnston Canyon Trail's 48 sites are about its falls: the walk to
-/// the Upper Falls keeps them, not the walk the length of the trail past the
-/// Ink Pots (15.2 km), nor those to the Lower, Tunnel, Stella and Marguerite
-/// Falls on the way. Returns the sights that keep POPULAR_SITES or more, as
-/// popular destinations (popular_dests).
+/// A famous trail's best sight: of the walks to a waterfall or viewpoint on
+/// a famous trail that take its mentions (score), only the best-scoring one
+/// keeps them, and with POPULAR_SITES or more it's a popular destination
+/// (popular_dests), offered past the budget. Johnston Canyon Trail's 48
+/// sites are about its falls: the walk to the Upper Falls keeps them, not
+/// those to the Lower, Tunnel, Stella and Marguerite Falls on the way. The
+/// trail's own walks keep theirs: Skyline Trail and Alum Cave Trail are
+/// famous as whole walks, not for a viewpoint along them.
 fn sights_take_mentions(cands: &mut [Cand]) -> HashSet<String> {
     let sight = |k: Kind| matches!(k, Kind::Waterfall | Kind::Viewpoint);
     let takes = |c: &Cand| sight(c.dest_kind) && c.ev.trail_mentions_to_sight > 0 && c.ev.trail_mentions == 0;
@@ -2682,14 +2701,11 @@ fn sights_take_mentions(cands: &mut [Cand]) -> HashSet<String> {
             *e = (c.score, c.dest.clone(), c.ev.trail_mentions_to_sight);
         }
     }
-    if best.is_empty() {
-        return HashSet::default();
-    }
     for c in cands.iter_mut() {
-        let Some((_, keep, _)) = best.get(&c.ev.mentions_trail) else { continue };
-        if takes(c) && c.dest == *keep {
+        if !takes(c) || best.get(&c.ev.mentions_trail).is_some_and(|b| b.1 == c.dest) {
             continue;
         }
+        // Another sight on the trail: its mentions were the trail's, not its own.
         if let Some(i) = c.parts.iter().position(|p| p.0 == "mentions") {
             c.score -= c.parts[i].1;
             c.parts.remove(i);
