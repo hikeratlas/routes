@@ -1268,6 +1268,11 @@ const LOLLIPOP_LOOP: f64 = 0.5;
 /// How much of a trail a tour from where the way in reaches it must walk, of
 /// what the tour from the piece's entry walks, to start there instead.
 const TOUR_REACH_KEEP: f64 = 0.95;
+/// How near a trail's dead end another start must be for the stick to it to
+/// be that start's way in (see sticks_to_starts).
+const STICK_START_M: f64 = 300.0;
+/// The most of a trail sticks_to_starts trims: more, and none is.
+const STICK_SHARE: f64 = 0.25;
 
 impl<'a> Ctx<'a> {
     /// Named trails as hikes in themselves: a trail with a name, in the park,
@@ -1504,6 +1509,97 @@ impl<'a> Ctx<'a> {
         pieces
     }
 
+    /// Every node of the trail named `name` joined to `from` by its own
+    /// ways in the park: a forked trail's, where its piece is a line.
+    fn trail_nodes(&self, name: &str, from: u32) -> Vec<u32> {
+        let g = &self.area.graph;
+        let mut seen: HashSet<u32> = HashSet::default();
+        let mut stack = vec![from];
+        seen.insert(from);
+        while let Some(u) = stack.pop() {
+            for e in &g.adj[u as usize] {
+                if g.ways[e.way as usize].name == name
+                    && self.in_park[e.to as usize]
+                    && seen.insert(e.to)
+                {
+                    stack.push(e.to);
+                }
+            }
+        }
+        let mut v: Vec<u32> = seen.into_iter().collect();
+        v.sort();
+        v
+    }
+
+    /// The edges (ekey) of the trail's sticks that lead only to another
+    /// start: a dead end of the trail, STICK_START_M from a lot or trailhead
+    /// mapped in OSM other than `own`, back to where it forks. None if
+    /// they're over STICK_SHARE of the trail. Not the stick `entry` is on, and not a
+    /// spur to anywhere else (a viewpoint's, walked out and back for it).
+    fn sticks_to_starts(&self, name: &str, entry: u32, starts: &[Start], own: usize) -> HashSet<u64> {
+        let g = &self.area.graph;
+        let nodes = self.trail_nodes(name, entry);
+        let set: HashSet<u32> = nodes.iter().copied().collect();
+        let nbrs = |u: u32| -> Vec<u32> {
+            let mut v: Vec<u32> = g.adj[u as usize]
+                .iter()
+                .filter(|e| g.ways[e.way as usize].name == name && set.contains(&e.to))
+                .map(|e| e.to)
+                .collect();
+            v.sort();
+            v.dedup();
+            v
+        };
+        let mut out: HashSet<u64> = HashSet::default();
+        for &tip in &nodes {
+            if nbrs(tip).len() != 1 {
+                continue;
+            }
+            let pt = g.pts[tip as usize];
+            let other = starts
+                .iter()
+                .enumerate()
+                .any(|(i, s)| i != own && !s.osm_id.is_empty() && metres(s.pt, pt) <= STICK_START_M);
+            if !other || metres(starts[own].pt, pt) <= STICK_START_M {
+                continue;
+            }
+            // Back from the tip to the fork, where the trail branches.
+            let (mut prev, mut cur) = (u32::MAX, tip);
+            let mut stick: Vec<u64> = vec![];
+            let mut has_entry = false;
+            let forked = loop {
+                has_entry |= cur == entry;
+                let ns: Vec<u32> = nbrs(cur).into_iter().filter(|&n| n != prev).collect();
+                if ns.len() != 1 {
+                    break ns.len() > 1;
+                }
+                stick.push(ekey(cur, ns[0]));
+                prev = cur;
+                cur = ns[0];
+            };
+            // Not a line (no fork: another dead end), nor the entry's stick.
+            if forked && !has_entry {
+                out.extend(stick);
+            }
+        }
+        // A way in is short beside the trail: Fenland Trail's stick is a fifth
+        // of it. Raystown's Old Logger's Trail has long legs to other lots,
+        // and is the whole trail, not what's left without them.
+        let m = |k: &u64| metres(g.pts[(k >> 32) as usize], g.pts[(k & 0xffff_ffff) as usize]);
+        let mut total = 0.0;
+        for &u in &nodes {
+            for e in &g.adj[u as usize] {
+                if u < e.to && g.ways[e.way as usize].name == name && set.contains(&e.to) {
+                    total += m(&ekey(u, e.to));
+                }
+            }
+        }
+        if out.iter().map(m).sum::<f64>() > STICK_SHARE * total {
+            out.clear();
+        }
+        out
+    }
+
     /// A named trail walked whole from `entry`: out to its farthest point and
     /// back another way where there is one, as (nodes, ways, whether it's a
     /// loop, metres of the trail it walks). Edges of the trail cost their
@@ -1511,13 +1607,20 @@ impl<'a> Ctx<'a> {
     /// where the trail is mapped in pieces, or shares another's ways); roads
     /// TOUR_ROAD_X. The way back costs TOUR_BACK_X more on the way out's
     /// edges, so it comes back the other side of a loop, and the same way
-    /// only when it must (a spur, a line).
-    fn trail_tour(&self, name: &str, entry: u32) -> Option<(Vec<u32>, Vec<u32>, bool, f64)> {
+    /// only when it must (a spur, a line). `skip`'s edges (ekey) don't count
+    /// as the trail's: a stick that's another start's way in
+    /// (sticks_to_starts).
+    fn trail_tour(
+        &self,
+        name: &str,
+        entry: u32,
+        skip: &HashSet<u64>,
+    ) -> Option<(Vec<u32>, Vec<u32>, bool, f64)> {
         let g = &self.area.graph;
-        let is_trail = |w: u32| g.ways[w as usize].name == name;
+        let is_trail_edge = |w: u32, k: u64| g.ways[w as usize].name == name && !skip.contains(&k);
         let cost = |w: u32, m: f64, back: Option<&HashSet<u64>>, k: u64| -> f64 {
             let way = &g.ways[w as usize];
-            let base = if way.name == name || way.class == Class::Join {
+            let base = if (way.name == name && !skip.contains(&k)) || way.class == Class::Join {
                 m
             } else if matches!(way.class, Class::Trail | Class::Track) && !way.bike {
                 m * TOUR_OTHER_X
@@ -1591,7 +1694,7 @@ impl<'a> Ctx<'a> {
                 continue;
             }
             for e in &g.adj[u as usize] {
-                let gv = if is_trail(e.way) {
+                let gv = if is_trail_edge(e.way, ekey(u, e.to)) {
                     trail_edges.insert(ekey(u, e.to));
                     0.0
                 } else if unnamed(e.way) && gu + e.m as f64 <= TOUR_GAP_M {
@@ -1656,7 +1759,7 @@ impl<'a> Ctx<'a> {
         let mut seen: HashSet<u64> = HashSet::default();
         let mut covered = 0.0;
         for (k, w) in tour.windows(2).zip(&tour_w) {
-            if is_trail(*w) && seen.insert(ekey(k[0], k[1])) {
+            if is_trail_edge(*w, ekey(k[0], k[1])) && seen.insert(ekey(k[0], k[1])) {
                 covered += metres(g.pts[k[0] as usize], g.pts[k[1] as usize]);
             }
         }
@@ -1832,53 +1935,96 @@ impl<'a> Ctx<'a> {
         if pieces.is_empty() {
             return vec![];
         }
-        // The nearest trailhead to each piece: to any node of a loop, to
-        // either end of a line.
-        let entries: Vec<Vec<u32>> = pieces
+        // The nearest trailhead to each piece: to any node of a loop, or of
+        // a trail that forks (its piece is only its longest line: Banff's
+        // Fenland Trail is a loop with a stick to the town's station lot, and
+        // its own lot is by the loop, not at either end of the line); to
+        // either end of a simple line.
+        // Only for a lot or trailhead mapped in OSM: routes adds a start
+        // wherever a trail meets a road, and one where a forked trail crosses
+        // a road part way along isn't where its hike begins (Susquehanna's
+        // Rock Run Trail, from the Historic Trail's trailhead).
+        let ends: Vec<Vec<u32>> = pieces
             .iter()
-            .map(|(_, p, _, l)| {
+            .map(|(_, p, _, l)| if *l { p.clone() } else { vec![p[0], *p.last().unwrap()] })
+            .collect();
+        let forked: Vec<Vec<u32>> = pieces
+            .iter()
+            .map(|(name, p, _, l)| {
                 if *l {
-                    p.clone()
-                } else {
-                    vec![p[0], *p.last().unwrap()]
+                    return p.clone();
                 }
+                let all = self.trail_nodes(name, p[0]);
+                if all.len() > p.len() { all } else { vec![p[0], *p.last().unwrap()] }
             })
             .collect();
-        let near: Vec<Vec<(f64, usize, u32)>> = starts
-            .par_iter()
-            .enumerate()
-            .map(|(si, s)| {
-                let sr = self.search(s.node, NAMED_ACCESS_M, None);
-                entries
-                    .iter()
-                    .map(|es| {
-                        es.iter()
-                            .filter_map(|&n| {
-                                sr.reached(n).map(|m| {
-                                    // A lot over the driveways a trail
-                                    // leaves, where they're comparable:
-                                    // Killarney's Cranberry Bog Trail from
-                                    // its lot, not a campsite driveway 190 m
-                                    // up the trail (routes#156).
-                                    let h = if s.lot_exit { LOT_EXIT_HANDICAP_M } else { 0.0 };
-                                    (m + h, si, n)
+        // Each start's nearest entry to each piece, by the ends (every
+        // start) and, for a lot or trailhead, by any node of a forked trail.
+        let nearest = |sets: &[Vec<u32>], mapped_only: bool| -> Vec<Vec<(f64, usize, u32)>> {
+            starts
+                .par_iter()
+                .enumerate()
+                .map(|(si, s)| {
+                    if mapped_only && s.osm_id.is_empty() {
+                        return vec![(f64::MAX, si, u32::MAX); sets.len()];
+                    }
+                    let sr = self.search(s.node, NAMED_ACCESS_M, None);
+                    sets.iter()
+                        .map(|es| {
+                            es.iter()
+                                .filter_map(|&n| {
+                                    sr.reached(n).map(|m| {
+                                        // A lot over the driveways a trail
+                                        // leaves, where they're comparable:
+                                        // Killarney's Cranberry Bog Trail from
+                                        // its lot, not a campsite driveway 190 m
+                                        // up the trail (routes#156).
+                                        let h = if s.lot_exit { LOT_EXIT_HANDICAP_M } else { 0.0 };
+                                        (m + h, si, n)
+                                    })
                                 })
-                            })
-                            .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
-                            .unwrap_or((f64::MAX, si, u32::MAX))
-                    })
-                    .collect()
-            })
-            .collect();
+                                .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
+                                .unwrap_or((f64::MAX, si, u32::MAX))
+                        })
+                        .collect()
+                })
+                .collect()
+        };
+        let near_end = nearest(&ends, false);
+        let near_fork = nearest(&forked, true);
+        let best = |near: &Vec<Vec<(f64, usize, u32)>>, pi: usize| {
+            near.iter()
+                .map(|v| v[pi])
+                .filter(|x| x.0 < f64::MAX)
+                .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
+        };
         let mut out = vec![];
         let mut lifted: Vec<(Cand, Vec<u32>, Vec<u32>)> = vec![];
         for (pi, (name, path, ways, is_loop)) in pieces.iter().enumerate() {
-            let Some(&(m, si, entry)) = near
-                .iter()
-                .map(|v| &v[pi])
-                .filter(|x| x.0 < f64::MAX)
-                .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
-            else {
+            let by_end = best(&near_end, pi);
+            let by_fork = best(&near_fork, pi).filter(|f| by_end.is_none_or(|e| f.0 < e.0));
+            // A lot part way along a forked trail, nearer than any end, where
+            // its tour walks as much of the trail as the end's start's: not
+            // Raystown's Old Logger's Trail from its lot, where one-way
+            // stretches leave a 3 km tour of an 8.8 km trail.
+            let pick = match (by_end, by_fork) {
+                (Some(e), Some(f)) => {
+                    // Less the sticks the lot's hike leaves to other starts
+                    // (Fenland Trail's, to the station lot).
+                    let g = &self.area.graph;
+                    let sticks = self.sticks_to_starts(name, f.2, starts, f.1);
+                    let stick_m: f64 = sticks
+                        .iter()
+                        .map(|&k| metres(g.pts[(k >> 32) as usize], g.pts[(k & 0xffff_ffff) as usize]))
+                        .sum();
+                    let f_cover = self.trail_tour(name, f.2, &sticks).map_or(0.0, |t| t.3);
+                    let e_sticks = self.sticks_to_starts(name, e.2, starts, e.1);
+                    let e_cover = self.trail_tour(name, e.2, &e_sticks).map_or(0.0, |t| t.3);
+                    if f_cover >= TOUR_KEEP * (e_cover - stick_m) { Some(f) } else { Some(e) }
+                }
+                (e, f) => f.or(e),
+            };
+            let Some((m, si, entry)) = pick else {
                 continue;
             };
             let _ = m;
@@ -1887,8 +2033,25 @@ impl<'a> Ctx<'a> {
             // A trail up to a lift that comes back down near where the trail
             // started: walked one way, returning by lift (routes#165). The
             // Grouse Grind is up only, and its hikers ride the Skyride down.
+            // The trail's nearer end, for what walks the piece's line from an
+            // end (a lift hike, the line out and back): a forked trail's entry
+            // may be part way along.
+            let end = if *is_loop || entry == path[0] || entry == *path.last().unwrap() {
+                None
+            } else {
+                [path[0], *path.last().unwrap()]
+                    .into_iter()
+                    .map(|n| (self.search_to(s.node, NAMED_ACCESS_M, None, n), n))
+                    .filter_map(|(r, n)| r.reached(n).map(|m| (m, r, n)))
+                    .min_by(|a, b| a.0.total_cmp(&b.0))
+                    .map(|(_, r, n)| (r, n))
+            };
             if !*is_loop {
-                if let Some(l) = self.lift_hike(s, &sr, name, path, ways, entry) {
+                let lift = match &end {
+                    Some((r, n)) => self.lift_hike(s, r, name, path, ways, *n),
+                    None => self.lift_hike(s, &sr, name, path, ways, entry),
+                };
+                if let Some(l) = lift {
                     out.push(l.0.clone());
                     lifted.push(l);
                     continue;
@@ -1916,9 +2079,14 @@ impl<'a> Ctx<'a> {
                     })
                     .unwrap_or(entry)
             };
-            let from_entry = self.trail_tour(name, entry);
+            // A stick of the trail that leads only to another start is that
+            // start's way in, not part of the hike from this one: from
+            // Fenland Trail's lot, by its loop, the hike is the loop, not the
+            // loop and the stick to the station lot and back.
+            let sticks = self.sticks_to_starts(name, entry, starts, si);
+            let from_entry = self.trail_tour(name, entry, &sticks);
             let (entry_at, tour) = match (reach != entry)
-                .then(|| self.trail_tour(name, reach))
+                .then(|| self.trail_tour(name, reach, &sticks))
                 .flatten()
             {
                 Some(t) if from_entry.as_ref().is_none_or(|e| t.3 >= e.3 * TOUR_REACH_KEEP) => {
@@ -1929,6 +2097,17 @@ impl<'a> Ctx<'a> {
             if let Some((tour, tour_w, is_loop_tour, covered)) = tour {
                 // More of the trail, or as much as a loop where the piece is a
                 // line (Cranberry Bog Trail, closed by 261 m of another trail).
+                // Against the piece less the sticks the tour leaves to other
+                // starts: E.C. Manning's Lightning Lake Trail, its loop
+                // without the leg to another lot, was 7.2 km of an 8 km line
+                // that ran down that leg, and fell back to the line walked
+                // out and back (16.4 km).
+                let stick_m: f64 = path
+                    .windows(2)
+                    .filter(|w| sticks.contains(&ekey(w[0], w[1])))
+                    .map(|w| metres(g.pts[w[0] as usize], g.pts[w[1] as usize]))
+                    .sum();
+                let piece_m = piece_m - stick_m;
                 if covered > piece_m * TOUR_GAIN
                     || (is_loop_tour && !*is_loop && covered >= piece_m * TOUR_KEEP)
                 {
@@ -1974,6 +2153,10 @@ impl<'a> Ctx<'a> {
                     continue;
                 }
             }
+            let (sr, entry) = match end {
+                Some((r, n)) => (r, n),
+                None => (sr, entry),
+            };
             let (mut full, mut fw) = sr.path(entry);
             // Along the trail from where we joined it.
             let (tp, tw): (Vec<u32>, Vec<u32>) = if *is_loop {
