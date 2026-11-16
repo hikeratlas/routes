@@ -42,6 +42,15 @@
 # draw one in more detail if that's not enough. The report notes a length
 # that passes by the trace only.
 #
+# The checks above ask whether the hike passes the trace's points, not
+# whether it keeps to them: a detour the trace doesn't take passes. An
+# entry can give `trace_off_m`, the most metres of the hike allowed more
+# than `trace_within_m` from the trace's line (the straight lines between
+# its points): a sixth check, `stays`, on the same hike. E.C. Manning's
+# Gibson loop went down to Spruce Bay Parking Lot and back (750 m), the
+# trace doesn't. Draw the trace in enough detail that the hike's corners
+# stay within `trace_within_m` of it.
+#
 # A blessed entry is a `trail` entry with a trace made from a hike routes
 # offered (the website's /dev/regressions: "Bless"), to keep it as it is:
 # `blessed` says which ({key: the route's key, km, date, build}), and `km`
@@ -273,6 +282,10 @@ def check_dest(e, rs):
     return problems, checks or None, []
 
 
+# off_trace's step along a route: finer than TRACE_WITHIN_M.
+OFF_STEP_M = 25
+
+
 def near_line(p, line, within):
     """Whether point p is within `within` metres of the polyline."""
     kx = 111320 * math.cos(math.radians(p[1]))
@@ -309,10 +322,28 @@ def end_off(trace, r):
     return metres(trace[-1], line[-1]) if line else math.inf
 
 
+def off_trace(trace, r, within):
+    """How many metres of route r are more than `within` from the trace's
+    line (the straight lines between its points, here: a detour is off
+    them however the trace cuts corners). Long segments are cut into
+    pieces of at most OFF_STEP_M, each judged by its middle."""
+    line = r['route'].get('line') or []
+    off = 0.0
+    for a, b in zip(line, line[1:]):
+        m = metres(a, b)
+        n = max(1, math.ceil(m / OFF_STEP_M))
+        for i in range(n):
+            t = (i + 0.5) / n
+            mid = (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
+            if not near_line(mid, trace, within):
+                off += m / n
+    return off
+
+
 def check_trace(e, rs, named, sized, problems):
     """The start, end and follows checks, as {'start': ..., 'end': ...,
     'follows': ...} ('start' or 'end' left out where the entry turns it
-    off)."""
+    off), and 'stays' with `trace_off_m`."""
     within, need = e.get('trace_within_m', TRACE_WITHIN_M), e.get('trace_cover', TRACE_COVER)
     start_m = e.get('trace_start_m', TRACE_START_M)
     end_m = e.get('trace_end_m', TRACE_END_M)
@@ -323,9 +354,12 @@ def check_trace(e, rs, named, sized, problems):
     # of the ones that follow it (if any do, else any under the name), the
     # one that fails fewest of the two, then is nearest.
     pool = [r for c, r in got if c >= need] or [r for _, r in got]
-    ends = [(start_off(e['trace'], r), end_off(e['trace'], r)) for r in pool]
-    lim = (math.inf if start_m is None else start_m, math.inf if end_m is None else end_m)
-    best = min(ends, key=lambda o: ((o[0] > lim[0]) + (o[1] > lim[1]), o[0] + o[1]), default=None)
+    off_m = e.get('trace_off_m')
+    ends = [(start_off(e['trace'], r), end_off(e['trace'], r),
+             off_trace(e['trace'], r, within) if off_m is not None else 0.0) for r in pool]
+    lim = (math.inf if start_m is None else start_m, math.inf if end_m is None else end_m,
+           math.inf if off_m is None else off_m)
+    best = min(ends, key=lambda o: (sum(v > l for v, l in zip(o, lim)), o[0] + o[1]), default=None)
     for k, i, m, what in (('start', 0, start_m, "starts {off:.0f} m from the trace's trailhead (its first point"),
                           ('end', 1, end_m, "ends {off:.0f} m from where the trace ends (its last point")):
         if m is None:
@@ -333,6 +367,11 @@ def check_trace(e, rs, named, sized, problems):
         checks[k] = None if best is None else best[i] <= m
         if checks[k] is False:
             problems.append("the named hike " + what.format(off=best[i]) + f"; needs {m} m)")
+    if off_m is not None:
+        checks['stays'] = None if best is None else best[2] <= off_m
+        if checks['stays'] is False:
+            problems.append(f"the named hike goes {best[2]:.0f} m off the trace (more than {within} m from it;"
+                            f" allows {off_m} m)")
     checks['follows'] = follows
     if checks['follows'] or not rs:
         return checks

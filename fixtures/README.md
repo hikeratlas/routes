@@ -79,6 +79,13 @@ trailhead, all the way to where the hike ends. A hike made more than one
 way (Tunnel Mountain Summit Trail, from either of two lots) gives the
 others as `traces`, a list of traces: the entry passes when one hike
 passes every check against any one of them.
+Those checks ask whether the hike passes the trace, not whether it keeps
+to it: a detour the trace doesn't take still passes. `trace_off_m` caps
+how many metres of the hike may be more than `trace_within_m` from the
+trace's line (the straight lines between its points), as a `stays` check
+on the same hike: E.C. Manning's Gibson loop, `"trace_off_m": 200`, failed
+it for going down to Spruce Bay Parking Lot and back (750 m). Draw such a
+trace closely enough that the hike's corners stay within `trace_within_m`.
 With a trace, the length also passes within 0.85-1.4 times
 the trace's own length, not just the park's figure (Granite Ridge: the park
 says 2 km, the trail 2.8); the report notes a length that passes by the
