@@ -1446,6 +1446,10 @@ const TOUR_LIMIT_M: f64 = 15000.0;
 /// Up to this much unnamed trail joins a trail's pieces for its tour (a
 /// footbridge without the trail's name).
 const TOUR_GAP_M: f64 = 30.0;
+/// A named trail's hike reached along this much road comes home another
+/// way where the trail can (named_trails): Brent Crater Trail's 390 m of
+/// Brent Road. Not a lot's few metres of service road.
+const ROAD_IN_MIN_M: f64 = 200.0;
 /// A destination this far from a named loop is a detour off it.
 const DETOUR_M: f64 = 150.0;
 /// The most a stem's tour may walk on other ways between its trails
@@ -2364,7 +2368,14 @@ impl<'a> Ctx<'a> {
                         .filter(|(_, w)| g.ways[**w as usize].class == Class::Road)
                         .map(|(k, _)| ekey(k[0], k[1]))
                         .collect();
-                    let home = (!road_in.is_empty())
+                    let road_in_m: f64 = road_in
+                        .iter()
+                        .map(|&k| metres(g.pts[(k >> 32) as usize], g.pts[(k & 0xffff_ffff) as usize]))
+                        .sum();
+                    // What the hike walks the usual way: in, the tour, and out
+                    // the way it came in.
+                    let usual_m = 2.0 * metres_of(g, &full) + metres_of(g, &tour);
+                    let home = (road_in_m >= ROAD_IN_MIN_M)
                         .then(|| {
                             self.trail_tour_within(
                                 name,
@@ -2375,7 +2386,9 @@ impl<'a> Ctx<'a> {
                             )
                         })
                         .flatten()
-                        .filter(|t| t.3 >= covered * TOUR_KEEP && t.2);
+                        .filter(|t| t.3 >= covered * TOUR_KEEP && t.2)
+                        // And no longer: the point is not walking the road twice.
+                        .filter(|t| metres_of(g, &full) + metres_of(g, &t.0) <= usual_m);
                     if let Some((ht, hw, _, _)) = &home {
                         full.extend(ht.iter().skip(1));
                         fw.extend(hw.iter());
