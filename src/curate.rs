@@ -1315,7 +1315,7 @@ fn named_tours<'s>(
         // sp runs from the trail to the trailhead.
         let entry = sp[0];
         let Some((tour, tour_w, tour_loop, covered)) =
-            ctx.trail_tour_within(name, entry, &HashSet::default(), 100000.0)
+            ctx.trail_tour_within(name, entry, &HashSet::default(), 100000.0, None)
         else {
                 continue;
         };
@@ -1512,11 +1512,16 @@ impl<'a> Ctx<'a> {
         // name is part of it: Grouse Mountain's BCMC Route is a track for
         // 180 m, which cut it into pieces under NAMED_MIN_M (routes#165).
         let mut by_name: HashMap<&'a str, Vec<(u32, u32, u32)>> = HashMap::default();
+        // Not a ski trail, unless a hiking route of its name says it's
+        // walked too: Algonquin's Leaf Lake Ski Trail, a cross-country ski
+        // network mapped as paths, was offered as a 30 km backpacking loop.
+        let hiked: HashSet<String> = self.area.known.iter().map(|k| k.name.to_lowercase()).collect();
         let named = |w: &crate::area::Way| {
             (w.class == Class::Trail
                 || (w.class == Class::Track && trail_names.contains(w.name.as_str())))
                 && !w.bike
                 && !w.name.is_empty()
+                && !(ski_trail(&w.name) && !hiked.contains(&w.name.to_lowercase()))
         };
         for (u, adj) in g.adj.iter().enumerate() {
             let u = u as u32;
@@ -1826,17 +1831,20 @@ impl<'a> Ctx<'a> {
         entry: u32,
         skip: &HashSet<u64>,
     ) -> Option<(Vec<u32>, Vec<u32>, bool, f64)> {
-        self.trail_tour_within(name, entry, skip, TOUR_LIMIT_M)
+        self.trail_tour_within(name, entry, skip, TOUR_LIMIT_M, None)
     }
 
     /// trail_tour, its searches bounded by `max_m` (a multi-day trail's
-    /// tour, named_throughs, runs past a day's TOUR_LIMIT_M).
+    /// tour, named_throughs, runs past a day's TOUR_LIMIT_M). With `home`,
+    /// (a node, edges), the way back goes there instead of to `entry`,
+    /// those edges costing TOUR_BACK_X more, as the way out's do.
     fn trail_tour_within(
         &self,
         name: &str,
         entry: u32,
         skip: &HashSet<u64>,
         max_m: f64,
+        home: Option<(u32, &HashSet<u64>)>,
     ) -> Option<(Vec<u32>, Vec<u32>, bool, f64)> {
         let g = &self.area.graph;
         let is_trail_edge = |w: u32, k: u64| self.of_trail(&g.ways[w as usize].name, name) && !skip.contains(&k);
@@ -1958,9 +1966,13 @@ impl<'a> Ctx<'a> {
         }
         let (out_p, out_w) = path_to(&prev, entry, far);
         let out_edges = edge_set(&out_p);
-        let (dist2, prev2) = dijkstra(far, Some(&out_edges), limit * TOUR_BACK_X, Some(entry));
-        dist2.get(&entry)?;
-        let (back_p, back_w) = path_to(&prev2, far, entry);
+        let (target, avoid) = match home {
+            Some((h, a)) => (h, out_edges.union(a).copied().collect()),
+            None => (entry, out_edges.clone()),
+        };
+        let (dist2, prev2) = dijkstra(far, Some(&avoid), limit * TOUR_BACK_X, Some(target));
+        dist2.get(&target)?;
+        let (back_p, back_w) = path_to(&prev2, far, target);
         let back_edges = edge_set(&back_p);
         let shared =
             back_edges.intersection(&out_edges).count() as f64 / back_edges.len().max(1) as f64;
@@ -2340,11 +2352,41 @@ impl<'a> Ctx<'a> {
                     || (is_loop_tour && !*is_loop && covered >= piece_m * TOUR_KEEP)
                 {
                     let (mut full, mut fw) = sr.path(entry_at);
-                    full.extend(tour.iter().skip(1));
-                    fw.extend(tour_w.iter());
-                    let (back, bw) = sr.path(entry_at);
-                    full.extend(back.iter().rev().skip(1));
-                    fw.extend(bw.iter().rev());
+                    // A way in along a road isn't walked back as well where
+                    // the trail can lead home another way: Algonquin's Brent
+                    // Crater Trail is named from a junction 390 m up Brent
+                    // Road from its trailhead, and its hike walked the road
+                    // there and back, while an unnamed leg of the trail
+                    // comes back to the trailhead.
+                    let road_in: HashSet<u64> = full
+                        .windows(2)
+                        .zip(&fw)
+                        .filter(|(_, w)| g.ways[**w as usize].class == Class::Road)
+                        .map(|(k, _)| ekey(k[0], k[1]))
+                        .collect();
+                    let home = (!road_in.is_empty())
+                        .then(|| {
+                            self.trail_tour_within(
+                                name,
+                                entry_at,
+                                &sticks,
+                                TOUR_LIMIT_M,
+                                Some((s.node, &road_in)),
+                            )
+                        })
+                        .flatten()
+                        .filter(|t| t.3 >= covered * TOUR_KEEP && t.2);
+                    if let Some((ht, hw, _, _)) = &home {
+                        full.extend(ht.iter().skip(1));
+                        fw.extend(hw.iter());
+                    } else {
+                        full.extend(tour.iter().skip(1));
+                        fw.extend(tour_w.iter());
+                        let (back, bw) = sr.path(entry_at);
+                        full.extend(back.iter().rev().skip(1));
+                        fw.extend(bw.iter().rev());
+                    }
+                    let tour = home.as_ref().map_or(&tour, |h| &h.0);
                     // trail_tour keeps to one-way trails' direction, and its
                     // way back retraces only two-way edges: a lollipop's
                     // stick, not its one-way loop.
@@ -2915,6 +2957,13 @@ pub fn own_trail(c: &Cand) -> bool {
 
 /// Whether a start's name is a trail's, or the trail's and more ("Granite
 /// Ridge Trail trailhead" for the Granite Ridge Trail), ignoring case.
+/// Whether a trail's name says it's for skiing: "Leaf Lake Ski Trail",
+/// "Ski Loop", "Nordic Ski Trails".
+fn ski_trail(name: &str) -> bool {
+    name.split(|c: char| !c.is_alphanumeric())
+        .any(|w| w.eq_ignore_ascii_case("ski") || w.eq_ignore_ascii_case("skiing"))
+}
+
 fn named_for(start: &str, trail: &str) -> bool {
     let (f, d) = (start.to_lowercase(), trail.to_lowercase());
     !d.is_empty() && (f == d || f.strip_prefix(&d).is_some_and(|rest| rest.starts_with(' ')))
@@ -4071,6 +4120,15 @@ impl Curated {
 mod tests {
     // A hike is its start's own trail when it walks a named trail (dest kind
     // Trail) from a start named for it (#102, #103).
+    #[test]
+    fn ski_trails_by_name() {
+        assert!(ski_trail("Leaf Lake Ski Trail"));
+        assert!(ski_trail("Ski Loop"));
+        assert!(ski_trail("Cross-country skiing trail"));
+        assert!(!ski_trail("Skiff Lake Trail"));
+        assert!(!ski_trail("Brent Crater Trail"));
+    }
+
     #[test]
     fn a_start_named_for_a_trail_owns_it() {
         use super::*;
