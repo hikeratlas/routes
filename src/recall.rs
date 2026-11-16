@@ -293,6 +293,35 @@ fn named_trails(area: &Area) -> HashMap<&str, (Vec<(P, P)>, f64, f64)> {
     by_name
 }
 
+/// Directions that tell trails of one name apart ("North Gibson Trail").
+const STEM_PREFIXES: [&str; 6] = ["North ", "South ", "East ", "West ", "Upper ", "Lower "];
+
+/// Names that differ only by a leading direction, by that shared name: two
+/// or more of them, and not where a trail already has the shared name
+/// (whose own trail it is). "North Gibson Trail" and "South Gibson Trail"
+/// are "Gibson Trail".
+fn trail_stems<'a>(names: impl Iterator<Item = &'a str>) -> Vec<(String, Vec<&'a str>)> {
+    let names: Vec<&str> = names.collect();
+    let lower: std::collections::HashSet<String> = names.iter().map(|n| n.to_lowercase()).collect();
+    let mut by_stem: HashMap<String, Vec<&str>> = HashMap::default();
+    for &n in &names {
+        for p in STEM_PREFIXES {
+            if let Some(rest) = n.strip_prefix(p) {
+                // A stem of more than a bare "Trail".
+                if rest.split_whitespace().filter(|w| !w.eq_ignore_ascii_case("trail")).count() > 0 {
+                    by_stem.entry(rest.to_string()).or_default().push(n);
+                }
+            }
+        }
+    }
+    let mut out: Vec<(String, Vec<&str>)> = by_stem
+        .into_iter()
+        .filter(|(s, ns)| ns.len() >= 2 && !lower.contains(&s.to_lowercase()))
+        .collect();
+    out.sort();
+    out
+}
+
 /// The named trail a route walks, if any: it covers NAME_RELATION of the
 /// trail, and NAME_ROUTE of the route is on it; the best by both.
 fn trail_walked<'t>(trails: &[(&'t str, Vec<P>, Vec<(P, P)>, [f64; 4])], line: &[P]) -> Option<&'t str> {
@@ -318,8 +347,22 @@ fn trail_walked<'t>(trails: &[(&'t str, Vec<P>, Vec<(P, P)>, [f64; 4])], line: &
 /// (#104). Relations name first; this only fills in.
 pub fn name_trails(area: &Area, doc: &mut Value) {
     let by_name = named_trails(area);
+    let stems = trail_stems(by_name.keys().copied());
+    // Trails that differ only by a direction (North and South Gibson Trail)
+    // are also one trail, by their shared name, for a loop that walks them
+    // both (E.C. Manning's Gibson loop was "Lightning Lake from Strawberry
+    // Flats Parking").
+    let mut joined: Vec<(String, Vec<(P, P)>)> = vec![];
+    for (stem, names) in &stems {
+        let segs: Vec<(P, P)> = names.iter().flat_map(|n| by_name[n].0.iter().copied()).collect();
+        joined.push((stem.clone(), segs));
+    }
     let trails: Vec<(&str, Vec<P>, Vec<(P, P)>, [f64; 4])> = by_name
         .into_iter()
+        .chain(joined.iter().map(|(n, segs)| {
+            let m = segs.iter().map(|&(a, b)| metres(a, b)).sum();
+            (n.as_str(), (segs.clone(), m, m))
+        }))
         .filter(|(_, (_, m, _))| *m >= TRAIL_MIN_M)
         .map(|(n, (segs, _, _))| {
             let pts: Vec<P> = segs.iter().flat_map(|&(a, b)| sample(&[a, b])).collect();
@@ -1017,6 +1060,18 @@ mod tests {
         .map(|(a, b, c, d)| (a.to_string(), b.to_string(), c.to_string(), d));
         assert_eq!(got, want);
         assert_eq!(offered(&doc)[2].0["name"], "Loop Trail");
+    }
+
+    #[test]
+    fn trails_by_direction_share_a_name() {
+        let stems = trail_stems(
+            ["North Gibson Trail", "South Gibson Trail", "Upper Falls Trail", "Lone Duck Trail",
+             "East Ridge", "West Ridge", "Ridge", "North Trail", "South Trail"]
+                .into_iter(),
+        );
+        // Not Upper Falls Trail (no Lower), not East/West Ridge (a trail is
+        // already Ridge), not North/South Trail (no name left).
+        assert_eq!(stems, vec![("Gibson Trail".to_string(), vec!["North Gibson Trail", "South Gibson Trail"])]);
     }
 }
 
