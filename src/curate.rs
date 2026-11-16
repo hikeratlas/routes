@@ -1446,10 +1446,10 @@ const TOUR_LIMIT_M: f64 = 15000.0;
 /// Up to this much unnamed trail joins a trail's pieces for its tour (a
 /// footbridge without the trail's name).
 const TOUR_GAP_M: f64 = 30.0;
-/// A named trail's hike reached along this much road comes home another
-/// way where the trail can (named_trails): Brent Crater Trail's 390 m of
-/// Brent Road. Not a lot's few metres of service road.
-const ROAD_IN_MIN_M: f64 = 200.0;
+/// A named trail's hike reached along this much way in comes home another
+/// way where the trail can, no longer (named_trails): Brent Crater Trail's
+/// 670 m along Brent Road.
+const WAY_IN_MIN_M: f64 = 200.0;
 /// A destination this far from a named loop is a detour off it.
 const DETOUR_M: f64 = 150.0;
 /// The most a stem's tour may walk on other ways between its trails
@@ -2356,33 +2356,25 @@ impl<'a> Ctx<'a> {
                     || (is_loop_tour && !*is_loop && covered >= piece_m * TOUR_KEEP)
                 {
                     let (mut full, mut fw) = sr.path(entry_at);
-                    // A way in along a road isn't walked back as well where
-                    // the trail can lead home another way: Algonquin's Brent
-                    // Crater Trail is named from a junction 390 m up Brent
-                    // Road from its trailhead, and its hike walked the road
-                    // there and back, while an unnamed leg of the trail
-                    // comes back to the trailhead.
-                    let road_in: HashSet<u64> = full
-                        .windows(2)
-                        .zip(&fw)
-                        .filter(|(_, w)| g.ways[**w as usize].class == Class::Road)
-                        .map(|(k, _)| ekey(k[0], k[1]))
-                        .collect();
-                    let road_in_m: f64 = road_in
-                        .iter()
-                        .map(|&k| metres(g.pts[(k >> 32) as usize], g.pts[(k & 0xffff_ffff) as usize]))
-                        .sum();
+                    // A long way in isn't walked back as well where the trail
+                    // can lead home another way, no longer: Algonquin's Brent
+                    // Crater Trail is named from a junction 670 m from its
+                    // trailhead, along Brent Road and a footway beside it, and
+                    // its hike walked there and back, while an unnamed leg of
+                    // the trail comes back to the trailhead.
+                    let way_in: HashSet<u64> = full.windows(2).map(|k| ekey(k[0], k[1])).collect();
+                    let way_in_m = metres_of(g, &full);
                     // What the hike walks the usual way: in, the tour, and out
                     // the way it came in.
                     let usual_m = 2.0 * metres_of(g, &full) + metres_of(g, &tour);
-                    let home = (road_in_m >= ROAD_IN_MIN_M)
+                    let home = (way_in_m >= WAY_IN_MIN_M)
                         .then(|| {
                             self.trail_tour_within(
                                 name,
                                 entry_at,
                                 &sticks,
                                 TOUR_LIMIT_M,
-                                Some((s.node, &road_in)),
+                                Some((s.node, &way_in)),
                             )
                         })
                         .flatten()
