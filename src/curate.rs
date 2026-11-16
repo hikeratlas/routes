@@ -1801,6 +1801,14 @@ impl<'a> Ctx<'a> {
         (out, downs)
     }
 
+    /// Whether a walk can go node to node as `path` runs: no step against a
+    /// one-way trail.
+    fn walkable(&self, path: &[u32]) -> bool {
+        let g = &self.area.graph;
+        path.windows(2)
+            .all(|w| g.adj[w[0] as usize].iter().any(|e| e.to == w[1] && e.cost.is_finite()))
+    }
+
     pub fn named_trails(&self, starts: &[Start]) -> Vec<Cand> {
         let g = &self.area.graph;
         let pieces = self.named_pieces(NAMED_MIN_M, NAMED_MAX_M, true);
@@ -1913,6 +1921,11 @@ impl<'a> Ctx<'a> {
                     let (back, bw) = sr.path(entry_at);
                     full.extend(back.iter().rev().skip(1));
                     fw.extend(bw.iter().rev());
+                    // The tour keeps to one-way trails' direction; the way in
+                    // and out may not.
+                    if !self.walkable(&full) {
+                        continue;
+                    }
                     let far = g.pts[tour[tour.len() / 2] as usize];
                     let ev = self.evaluate(&full, &fw, false);
                     let d = Dest {
@@ -1975,8 +1988,16 @@ impl<'a> Ctx<'a> {
                 let (back, bw) = sr.path(entry);
                 full.extend(back.iter().rev().skip(1));
                 fw.extend(bw.iter().rev());
+                if !self.walkable(&full) {
+                    continue;
+                }
                 self.evaluate(&full, &fw, false)
             } else {
+                // Out and back the same way: walkable both ways.
+                let back: Vec<u32> = full.iter().rev().copied().collect();
+                if !self.walkable(&full) || !self.walkable(&back) {
+                    continue;
+                }
                 self.evaluate(&full, &fw, true)
             };
             let d = Dest {
@@ -2969,6 +2990,22 @@ pub fn curate(
         })
         .collect();
     let mut cands = cands;
+    // An out-and-back can't use a one-way trail: it walks it both ways. The
+    // Grouse Grind is up only; its hike comes down another way (routes#163).
+    // Not named trails' own hikes: named_trails checks each step of theirs,
+    // as a lollipop walks its stick both ways and its one-way loop once
+    // (Killarney's Chikanishing Trail, Algonquin's Fork Lake Trail).
+    let oneway: HashSet<u64> = (0..area.graph.adj.len() as u32)
+        .flat_map(|u| {
+            area.graph.adj[u as usize]
+                .iter()
+                .filter(|e| !e.cost.is_finite())
+                .map(move |e| ekey(u, e.to))
+        })
+        .collect();
+    if !oneway.is_empty() {
+        cands.retain(|c| c.kind != "out-and-back" || c.edges.is_disjoint(&oneway));
+    }
     // Every named trail's own hike, for real_trails below.
     let mut trails: Vec<Cand> = vec![];
     if !late() {
@@ -2996,20 +3033,6 @@ pub fn curate(
             })
             .collect();
         cands.extend(named);
-    }
-    // An out-and-back can't use a one-way trail: it walks it both ways. The
-    // Grouse Grind is up only; its hike comes down another way (routes#163).
-    let oneway: HashSet<u64> = (0..area.graph.adj.len() as u32)
-        .flat_map(|u| {
-            area.graph.adj[u as usize]
-                .iter()
-                .filter(|e| !e.cost.is_finite())
-                .map(move |e| ekey(u, e.to))
-        })
-        .collect();
-    if !oneway.is_empty() {
-        cands.retain(|c| c.kind != "out-and-back" || c.edges.is_disjoint(&oneway));
-        trails.retain(|c| c.kind != "out-and-back" || c.edges.is_disjoint(&oneway));
     }
     // A day hike that's mostly outside the park isn't the park's: Golden
     // Ears' top easy hike was a dyke walk to Pitt Lake, none of it in the
