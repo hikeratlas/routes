@@ -183,6 +183,10 @@ pub struct Area {
     pub graph: Graph,
     pub dests: Vec<Dest>,
     pub camps: Vec<Place>,
+    /// Small things worth walking to, named or not: benches, viewpoints,
+    /// picnic sites, waterfalls, beaches (OSM nodes). For a short trail's
+    /// dead end (curate's named_pieces).
+    pub spots: Vec<P>,
     pub parkings: Vec<Place>,
     /// Lots mapped only by their aisles: the middle of each piece of
     /// service=parking_aisle road (the basemap's parking_aisle flag).
@@ -246,6 +250,7 @@ struct Raw {
     lines: Vec<(Way, Vec<P>)>,
     dests: Vec<Dest>,
     camps: Vec<Place>,
+    spots: Vec<P>,
     parkings: Vec<Place>,
     aisles: Vec<P>,
     /// Parking lots' outlines (the basemap's building layer, amenity=parking:
@@ -269,6 +274,7 @@ fn read_tile(
         lines: vec![],
         dests: vec![],
         camps: vec![],
+        spots: vec![],
         parkings: vec![],
         aisles: vec![],
         lots: vec![],
@@ -536,6 +542,13 @@ fn read_tile(
                             || tourism == "wilderness_hut"
                             || (amenity == "shelter"
                                 && matches!(l.str(f, "shelter_type"), "lean_to" | "basic_hut"));
+                        if amenity == "bench"
+                            || matches!(tourism, "viewpoint" | "picnic_site")
+                            || matches!(l.str(f, "natural"), "beach" | "cave_entrance")
+                            || l.str(f, "waterway") == "waterfall"
+                        {
+                            raw.spots.push(pt);
+                        }
                         if sleep {
                             raw.camps.push(Place {
                                 name: name.to_string(),
@@ -891,6 +904,7 @@ impl Area {
             graph,
             dests: vec![],
             camps: vec![],
+            spots: vec![],
             parkings: vec![],
             aisles: vec![],
             known: vec![],
@@ -915,6 +929,7 @@ impl Area {
             }
             area.dests.extend(r.dests);
             area.camps.extend(r.camps);
+            area.spots.extend(r.spots);
             area.parkings.extend(r.parkings);
             area.aisles.extend(r.aisles);
             lift_pieces.extend(r.lifts);
