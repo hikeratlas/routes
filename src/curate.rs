@@ -330,6 +330,11 @@ pub fn merge_dests(mut dests: Vec<Dest>) -> Vec<Dest> {
 }
 
 impl<'a> Ctx<'a> {
+    /// Whether a way named `way` is part of the trail `name` (area::of_trail).
+    fn of_trail(&self, way: &str, name: &str) -> bool {
+        crate::area::of_trail(&self.area.trail_stems, way, name)
+    }
+
     /// How many sites write about a named trail near the park (see
     /// Area::trail_mentions): 0 if none.
     pub fn trail_mentions(&self, name: &str) -> u32 {
@@ -1289,6 +1294,12 @@ const TOUR_LIMIT_M: f64 = 15000.0;
 /// Up to this much unnamed trail joins a trail's pieces for its tour (a
 /// footbridge without the trail's name).
 const TOUR_GAP_M: f64 = 30.0;
+/// A destination this far from a named loop is a detour off it.
+const DETOUR_M: f64 = 150.0;
+/// The most a stem's tour may walk on other ways between its trails
+/// (Area::trail_stems): they're signed as one trail, so where they meet
+/// counts as it.
+const STEM_GAP_M: f64 = crate::area::STEM_JOIN_M;
 /// How far outside the park a named trail's edges still count as the
 /// trail's (routes#165): it may cross the park's edge and come back.
 const NAMED_OUTSIDE_M: f64 = 250.0;
@@ -1395,6 +1406,16 @@ impl<'a> Ctx<'a> {
         }
         for (name, e) in outside {
             by_name.get_mut(name).unwrap().push(e);
+        }
+        // Trails told apart only by a direction are also one trail, by
+        // their shared name (Area::trail_stems): E.C. Manning's North and
+        // South Gibson Trail are the Gibson loop (routes#215).
+        for (stem, names) in &self.area.trail_stems {
+            let edges: Vec<(u32, u32, u32)> =
+                names.iter().filter_map(|n| by_name.get(n.as_str())).flatten().copied().collect();
+            if !edges.is_empty() {
+                by_name.insert(stem.as_str(), edges);
+            }
         }
         // Each name's connected pieces that are a simple loop or line, as
         // (name, nodes in order, ways between them, is a loop).
@@ -1555,7 +1576,7 @@ impl<'a> Ctx<'a> {
         seen.insert(from);
         while let Some(u) = stack.pop() {
             for e in &g.adj[u as usize] {
-                if g.ways[e.way as usize].name == name
+                if self.of_trail(&g.ways[e.way as usize].name, name)
                     && self.in_park[e.to as usize]
                     && seen.insert(e.to)
                 {
@@ -1580,7 +1601,7 @@ impl<'a> Ctx<'a> {
         let nbrs = |u: u32| -> Vec<u32> {
             let mut v: Vec<u32> = g.adj[u as usize]
                 .iter()
-                .filter(|e| g.ways[e.way as usize].name == name && set.contains(&e.to))
+                .filter(|e| self.of_trail(&g.ways[e.way as usize].name, name) && set.contains(&e.to))
                 .map(|e| e.to)
                 .collect();
             v.sort();
@@ -1626,7 +1647,7 @@ impl<'a> Ctx<'a> {
         let mut total = 0.0;
         for &u in &nodes {
             for e in &g.adj[u as usize] {
-                if u < e.to && g.ways[e.way as usize].name == name && set.contains(&e.to) {
+                if u < e.to && self.of_trail(&g.ways[e.way as usize].name, name) && set.contains(&e.to) {
                     total += m(&ekey(u, e.to));
                 }
             }
@@ -1654,10 +1675,10 @@ impl<'a> Ctx<'a> {
         skip: &HashSet<u64>,
     ) -> Option<(Vec<u32>, Vec<u32>, bool, f64)> {
         let g = &self.area.graph;
-        let is_trail_edge = |w: u32, k: u64| g.ways[w as usize].name == name && !skip.contains(&k);
+        let is_trail_edge = |w: u32, k: u64| self.of_trail(&g.ways[w as usize].name, name) && !skip.contains(&k);
         let cost = |w: u32, m: f64, back: Option<&HashSet<u64>>, k: u64| -> f64 {
             let way = &g.ways[w as usize];
-            let base = if (way.name == name && !skip.contains(&k)) || way.class == Class::Join {
+            let base = if (self.of_trail(&way.name, name) && !skip.contains(&k)) || way.class == Class::Join {
                 m
             } else if matches!(way.class, Class::Trail | Class::Track) && !way.bike {
                 m * TOUR_OTHER_X
@@ -1722,6 +1743,10 @@ impl<'a> Ctx<'a> {
                 && (way.class == Class::Track
                     || (way.class == Class::Trail && way.name.is_empty()))
         };
+        // A stem's trails are joined by other ways where they meet: North
+        // and South Gibson Trail by 31 m of Strawberry Flats Loop, by the
+        // lot.
+        let stem = self.area.trail_stems.iter().any(|(s, _)| s == name);
         let mut gap_at: HashMap<u32, f64> = HashMap::default();
         let mut stack = vec![(entry, 0.0)];
         gap_at.insert(entry, 0.0);
@@ -1734,7 +1759,9 @@ impl<'a> Ctx<'a> {
                 let gv = if is_trail_edge(e.way, ekey(u, e.to)) {
                     trail_edges.insert(ekey(u, e.to));
                     0.0
-                } else if unnamed(e.way) && gu + e.m as f64 <= TOUR_GAP_M {
+                } else if (unnamed(e.way) && gu + e.m as f64 <= TOUR_GAP_M)
+                    || (stem && !g.ways[e.way as usize].bike && gu + e.m as f64 <= STEM_GAP_M)
+                {
                     gu + e.m as f64
                 } else {
                     continue;
@@ -2112,7 +2139,7 @@ impl<'a> Ctx<'a> {
                 let (p, _) = sr.path(entry);
                 p.into_iter()
                     .find(|&n| {
-                        g.adj[n as usize].iter().any(|e| g.ways[e.way as usize].name == *name)
+                        g.adj[n as usize].iter().any(|e| self.of_trail(&g.ways[e.way as usize].name, name))
                     })
                     .unwrap_or(entry)
             };
@@ -3278,25 +3305,43 @@ pub fn curate(
         // already walks (Wapta Falls Trail to Wapta Falls) is the same hike:
         // keep the one named for where it goes.
         trails = ctx.named_trails(&starts);
+        // The same hike both ways: each walks most of the other. A loop that
+        // only shares a stretch with a destination hike stays (#103):
+        // Cranberry Bog Trail, though the hike to Freeland Lake from its
+        // trailhead walks much of it.
+        let same = |n: &Cand, c: &Cand| {
+            let shared = n.edges.intersection(&c.edges).count() as f64;
+            c.from == n.from
+                && shared >= 0.7 * n.edges.len().max(1) as f64
+                && shared >= 0.7 * c.edges.len().max(1) as f64
+        };
+        // A destination loop that leaves a named loop to reach its
+        // destination: the destination isn't on the trail.
+        let detour = |n: &Cand, c: &Cand| {
+            area.trail_stems.iter().any(|(st, _)| *st == n.dest)
+                && n.kind == "loop"
+                && c.kind == "loop"
+                && c.dest_kind != Kind::Trail
+                && crate::geo::sample(&n.ev.line, 20.0).iter().all(|&p| metres(p, c.dest_pt) > DETOUR_M)
+        };
         let named: Vec<Cand> = trails
             .iter()
             .cloned()
             .filter(|n| {
-                // The same hike both ways: each walks most of the other. A
-                // loop that only shares a stretch with a destination hike
-                // stays (#103): Cranberry Bog Trail, though the hike to
-                // Freeland Lake from its trailhead walks much of it.
                 // And a loop that's its start's own trail stays whatever
                 // walks it: "Cranberry Bog Trail trailhead" is there for it.
+                // A named loop stays over a destination loop that walks it
+                // and detours off it to its destination: a loop's
+                // destination is only where it turns (as
+                // recall::name_trails names loops). E.C. Manning's Gibson loop
+                // was the loop to Lightning Lake, down to Spruce Bay and back
+                // (routes#215).
                 (n.kind == "loop" && own_trail(n))
-                    || !cands.iter().any(|c| {
-                    let shared = n.edges.intersection(&c.edges).count() as f64;
-                    c.from == n.from
-                        && shared >= 0.7 * n.edges.len().max(1) as f64
-                        && shared >= 0.7 * c.edges.len().max(1) as f64
-                })
+                    || !cands.iter().any(|c| same(n, c) && !detour(n, c))
             })
             .collect();
+        // The destination loop gives way to the named one.
+        cands.retain(|c| !named.iter().any(|n| same(n, c) && detour(n, c)));
         cands.extend(named);
     }
     // A day hike that's mostly outside the park isn't the park's: Golden

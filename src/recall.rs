@@ -1045,6 +1045,9 @@ mod tests {
         // already Ridge), not North/South Trail (no name left).
         let gibson = vec!["North Gibson Trail".to_string(), "South Gibson Trail".to_string()];
         assert_eq!(stems, vec![("Gibson Trail".to_string(), gibson)]);
+        assert!(crate::area::of_trail(&stems, "South Gibson Trail", "Gibson Trail"));
+        assert!(crate::area::of_trail(&stems, "Ridge", "Ridge"));
+        assert!(!crate::area::of_trail(&stems, "East Ridge", "Ridge"));
     }
 }
 
