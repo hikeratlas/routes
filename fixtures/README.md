@@ -102,6 +102,14 @@ route of that key: called something else, longer or shorter, starting or
 ending elsewhere, on another line, or gone. Bless it again to accept a
 change.
 
+A `dest` or `trail` entry can also say the hike's `shape`: `loop`,
+`out-and-back` or `one-way`, as routes' `kind` for it. The hike that
+matches (named, the right length, following the trace where there is one)
+must be that shape, a fifth check (routes#205: a lollipop, a stick to a
+loop, was called an out-and-back). Give it where the park says, or where
+you've looked at the hike: it's stated, never inferred from the trace. A
+proposer may suggest one, for a person to sign off.
+
 A third kind, `featured`, checks the park's featured hike on the homepage,
 picked as the website picks it (`featured.py`, after the website's
 `app/featured.ts`: the best-scoring easy or moderate day hike within 70% of

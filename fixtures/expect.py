@@ -52,6 +52,13 @@
 # says what became of the route of that key: renamed, longer or shorter,
 # moved, or gone.
 #
+# Any "dest" or "trail" entry can give the hike's `shape`: "loop",
+# "out-and-back" or "one-way", as routes' `kind` for it. The hike that
+# matches (named, of the right length, following the trace where there is
+# one) must be that shape too: a fifth check, `shape` (routes#205: a
+# lollipop called an out-and-back). It's stated, never inferred from the
+# trace: a proposer may suggest one, and a person signs it off.
+#
 # "featured": the park's featured hike on the homepage, picked as the
 # website picks it (fixtures/featured.py: the best easy or moderate day
 # hike near the park's best score). `not`: names it mustn't be (Killarney's
@@ -229,6 +236,18 @@ def same(a, b):
         (b.get('type'), b.get('from'), b.get('dest'), b['route']['km'])
 
 
+def check_shape(e, pool, checks, problems):
+    """The shape check: one of the hikes that match is `shape` (routes'
+    kind). A walk in to a base camp has no kind, and is never one."""
+    want = e.get('shape')
+    if want is None or not pool:
+        return
+    checks['shape'] = any(r.get('kind') == want for r in pool)
+    if not checks['shape']:
+        got = sorted({r.get('kind') or r['type'] for r in pool})
+        problems.append(f"{label(pool[0])} is {' or '.join(got)}, not {want}")
+
+
 def check_dest(e, rs):
     problems = []
     want = [r for r in rs if r.get('dest') == e['dest']
@@ -242,7 +261,9 @@ def check_dest(e, rs):
     wrong = [label(r) for r in rs if r.get('name') == e['name'] and r not in want]
     if wrong:
         problems.append(f"{e['name']} names another route: {'; '.join(wrong)}")
-    return problems, None, []
+    checks = {}
+    check_shape(e, [r for r in want if r.get('name') == e['name']] or want, checks, problems)
+    return problems, checks or None, []
 
 
 def near_line(p, line, within):
@@ -383,6 +404,9 @@ def check_trail(e, rs, trails):
         problems.append(f"{e['name']} is {', '.join(label(r) for r in named)}; expected {want}")
     if e.get('trace'):
         checks = {'name': checks['name'], 'length': checks['length']} | check_trace(e, rs, named, sized, problems)
+        within, need = e.get('trace_within_m', TRACE_WITHIN_M), e.get('trace_cover', TRACE_COVER)
+        pool = sized or named
+        check_shape(e, [r for r in pool if cover(e['trace'], r, within) >= need] or pool, checks, problems)
         if blessed and problems:
             problems.append(became(e, rs))
         return problems, checks, notes
@@ -401,6 +425,10 @@ def check_trail(e, rs, trails):
             what = 'the named hike walks too little of it' if named else 'nothing offered under the name walks it'
             problems.append(f"{what} ({osm}, {t['km']} km in OSM); " +
                             (f"it's walked most by {'; '.join(desc(w) for w in best)}" if best else 'no hike walks it'))
+    pool = sized or named
+    if t is not None:
+        pool = [r for r in pool if any(same(w, r) for w in t['routes'] if w['coverage'] >= WALKS)] or pool
+    check_shape(e, pool, checks, problems)
     return problems, checks, notes
 
 

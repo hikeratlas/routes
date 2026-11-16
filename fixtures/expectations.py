@@ -6,6 +6,9 @@
 # appended, sorted or moved without the rest of the file.
 import glob, json, os, re, unicodedata
 
+# A hike's shape: routes' `kind` for a day hike or a base camp's hike.
+SHAPES = ('loop', 'out-and-back', 'one-way')
+
 DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'expect')
 
 
@@ -72,6 +75,13 @@ def load(d=DIR):
                     continue
             if t is not None and e.get('kind', 'dest') != 'trail':
                 errors.append(f"{where}: trace is for trail entries")
+                continue
+            # The hike's shape, as routes' kind for it: checked against the
+            # hike that matches, where given (routes#205). Stated, not
+            # inferred: a proposer may suggest one, a person signs it off.
+            sh = e.get('shape')
+            if sh is not None and (sh not in SHAPES or e.get('kind') == 'featured'):
+                errors.append(f"{where}: shape is one of {', '.join(SHAPES)}, on a dest or trail entry")
                 continue
             b = e.get('blessed')
             if b is not None and not (isinstance(b, dict) and isinstance(b.get('key'), str) and b['key']
