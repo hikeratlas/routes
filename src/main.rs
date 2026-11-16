@@ -802,6 +802,45 @@ fn listed(id: &str, name: &str, area: f64, status: &str) -> Value {
     json!({"id": id, "name": name, "km2": (area / 1e4).round() / 100.0, "status": status})
 }
 
+/// Whether at least half of outline `a`'s points are inside outline `b`
+/// (even-odd over its rings), as Park::has_inside judges a park inside
+/// another; outlines are documents' park.outline ([[[lon, lat], ...], ...]).
+/// None when either has no points.
+fn outline_inside(a: &Value, b: &Value) -> Option<bool> {
+    let pts = |v: &Value| -> Vec<Vec<geo::P>> {
+        v.as_array()
+            .into_iter()
+            .flatten()
+            .map(|r| {
+                r.as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|p| Some((p.get(0)?.as_f64()?, p.get(1)?.as_f64()?)))
+                    .collect::<Vec<_>>()
+            })
+            .filter(|r| !r.is_empty())
+            .collect()
+    };
+    let (a, b) = (pts(a), pts(b));
+    let a: Vec<geo::P> = a.into_iter().flatten().collect();
+    if a.is_empty() || b.is_empty() {
+        return None;
+    }
+    let inside = |p: geo::P| {
+        let mut odd = false;
+        for r in &b {
+            for k in 0..r.len() {
+                let (u, v) = (r[k], r[(k + 1) % r.len()]);
+                if (u.1 > p.1) != (v.1 > p.1) && p.0 < u.0 + (p.1 - u.1) / (v.1 - u.1) * (v.0 - u.0) {
+                    odd = !odd;
+                }
+            }
+        }
+        odd
+    };
+    Some(2 * a.iter().filter(|&&p| inside(p)).count() >= a.len())
+}
+
 /// Day hikes per square root of a park's km of trail (#38): 100 km of
 /// trail gets 10, 9 km gets 3.
 const DAY_HIKES_PER_SQRT_TRAIL_KM: f64 = 1.0;
@@ -1193,6 +1232,9 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>, skipped: Vec<Value>)
         })
         .collect();
     let ids: Vec<String> = docs.iter().map(|c| s(&c.doc["park"], "id")).collect();
+    // Each park's outline, to tell a twin from a neighbour (below).
+    let outlines: HashMap<String, Value> =
+        docs.iter().map(|c| (s(&c.doc["park"], "id"), c.doc["park"]["outline"].clone())).collect();
     // The parks with routes of their own, after the de-duplication below, in
     // order; parks whose routes are all another's (twin); and multi-day trips
     // given to a smaller park: (bigger park, smaller park's position, trip key).
@@ -1298,11 +1340,24 @@ fn write_outputs(out: &std::path::Path, docs: Vec<Curated>, skipped: Vec<Value>)
             // Every route is already another park's: the same park mapped
             // twice (Cape Breton Highlands is relations 4855583 and
             // 17879029). Point this park's entry at that one's routes, so the
-            // website finds them under either id.
+            // website finds them under either id. Only if it lies mostly
+            // inside that park, though (as the outlines tell; either way
+            // without them): a neighbour whose routes are all another's,
+            // trails just over its edge, isn't that park (basemap#336: La
+            // Verendrye Provincial Park, a strip along the Ontario shore of
+            // the border lakes, showed Superior National Forest). It has
+            // no routes of its own.
+            let (twin, near) = match twin {
+                Some(t) if outline_inside(&doc["park"]["outline"], &outlines[&t]) == Some(false) => (None, Some(t)),
+                t => (t, None),
+            };
             let mut l = listed(&p_id, &p_name, km2, if twin.is_some() { "twin" } else { "no routes" });
             if let Some(t) = twin {
                 l["twin"] = json!(t);
                 twins.push((p_id.clone(), t));
+            }
+            if let Some(t) = near {
+                l["routes_of"] = json!(t);
             }
             writeln!(listing, "{l}").unwrap();
             continue;
@@ -1742,6 +1797,39 @@ mod tests {
         assert_eq!(status("big"), Some(json!("written")));
         assert_eq!(status("small"), Some(json!("twin")));
         assert_eq!(listed.iter().find(|v| v["id"] == "small").unwrap()["twin"], "big");
+    }
+
+    // basemap#336: a neighbour whose routes are all another park's (trails
+    // just over its edge) isn't that park's twin; a park mostly inside it is.
+    #[test]
+    fn a_neighbour_with_the_same_routes_is_no_twin() {
+        let square = |x0: f64, y0: f64, d: f64| json!([[[x0, y0], [x0 + d, y0], [x0 + d, y0 + d], [x0, y0 + d]]]);
+        let dir = tmp("neighbour");
+        let mut forest = park("forest", 3.0, &["Lake"], vec![]);
+        forest.doc["park"]["outline"] = square(0.0, 0.0, 10.0);
+        let mut over = park("over", 1.0, &["Lake"], vec![]);
+        over.doc["park"]["outline"] = square(0.0, 10.0, 1.0); // just over its edge
+        let mut within = park("within", 2.0, &["Lake"], vec![]);
+        within.doc["park"]["outline"] = square(2.0, 2.0, 1.0);
+        write_outputs(&dir, vec![forest, within, over], vec![]);
+        assert_eq!(written(&dir, "forest").unwrap()["day_hikes"].as_array().unwrap().len(), 1);
+        assert!(written(&dir, "within").is_none());
+        assert!(written(&dir, "over").is_none());
+        let listed: Vec<Value> = std::fs::read_to_string(dir.join("listed.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let entry = |id: &str| listed.iter().find(|v| v["id"] == id).unwrap().clone();
+        assert_eq!(entry("within")["status"], "twin");
+        assert_eq!(entry("within")["twin"], "forest");
+        assert_eq!(entry("over")["status"], "no routes");
+        assert_eq!(entry("over")["routes_of"], "forest");
+        assert!(entry("over").get("twin").is_none());
+        // Only twins' ids find another park's routes (index.json).
+        let index: Value = serde_json::from_slice(&std::fs::read(dir.join("index.json")).unwrap()).unwrap();
+        assert!(index["parks"].get("within").is_some());
+        assert!(index["parks"].get("over").is_none());
     }
 
     // Same-named campsites elsewhere aren't the same trip.
