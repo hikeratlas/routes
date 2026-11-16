@@ -237,6 +237,12 @@ pub struct Eval {
     /// Mentions (Dest::mentions) of the named trail it walks most of, if
     /// that's TRAIL_MENTION_SHARE of it or more.
     pub trail_mentions: u32,
+    /// The same trail's mentions where the route walks TRAIL_MENTION_SHARE
+    /// of its length on it but less than TRAIL_MENTION_COVER of the trail:
+    /// they count for a route to a waterfall or viewpoint on it (score).
+    pub trail_mentions_to_sight: u32,
+    /// The trail those mentions are of ("" if none).
+    pub mentions_trail: String,
     pub via: Vec<String>,
     /// Hardest SAC grade along the route (1-4; 0 if none is graded): 4 is
     /// a scramble (#45).
@@ -729,17 +735,23 @@ impl<'a> Ctx<'a> {
                 / one_way.max(1.0)
         };
         // The named trail it walks most of, and how many sites write about it.
-        let trail_mentions = if self.area.trail_mentions.is_empty() {
-            0
+        let mentions_trail = main_trail_share(g, path, ways)
+            .filter(|(_, m)| *m >= TRAIL_MENTION_SHARE * one_way)
+            .map(|(n, _)| n.to_lowercase())
+            .unwrap_or_default();
+        let (trail_mentions, trail_mentions_to_sight) = if self.area.trail_mentions.is_empty() {
+            (0, 0)
         } else {
             // The trail's pages are about all of it: a 20 km walk on Killarney's
-            // 80 km La Cloche Silhouette Trail isn't what they're about.
+            // 80 km La Cloche Silhouette Trail isn't what they're about. But a
+            // walk to the falls a trail is famous for is: Johnston Canyon
+            // Trail's 48 sites are about its Upper Falls, 2 km along a trail
+            // that goes on past the Ink Pots (see score).
             main_trail_share(g, path, ways)
                 .filter(|(_, m)| *m >= TRAIL_MENTION_SHARE * one_way)
                 .and_then(|(n, m)| self.area.trail_mentions.get(&n.to_lowercase()).map(|v| (m, *v)))
-                .filter(|(m, (_, len))| *m >= TRAIL_MENTION_COVER * len)
-                .map(|(_, (sites, _))| sites)
-                .unwrap_or(0)
+                .map(|(m, (sites, len))| if m >= TRAIL_MENTION_COVER * len { (sites, sites) } else { (0, sites) })
+                .unwrap_or((0, 0))
         };
         let mut via: Vec<String> = vec![];
         for &w in ways {
@@ -766,6 +778,8 @@ impl<'a> Ctx<'a> {
             bike,
             known,
             trail_mentions,
+            trail_mentions_to_sight,
+            mentions_trail,
             via,
             max_sac,
             line: full,
@@ -869,7 +883,11 @@ pub fn score(ev: &Eval, d: &Dest, is_loop: bool) -> (f64, Vec<(&'static str, f64
     let mut parts = parts;
     // How many sites write about where it goes, or the trail it mostly
     // walks (basemap#281): QRank misses most trails, passes and small lakes.
-    let mentions = d.mentions.max(ev.trail_mentions);
+    // A trail's mentions count for a walk to a waterfall or viewpoint on
+    // it, however little of the trail that walks: the sights are what make
+    // a trail famous (Johnston Canyon's Upper Falls).
+    let sight = matches!(d.kind, Kind::Waterfall | Kind::Viewpoint);
+    let mentions = d.mentions.max(ev.trail_mentions).max(if sight { ev.trail_mentions_to_sight } else { 0 });
     if mentions > 0 {
         let m = ((1.0 + mentions as f64).ln() / (1.0 + MENTIONS_FULL).ln()).min(1.0);
         parts.push(("mentions", W_MENTIONS * m));
@@ -2645,6 +2663,41 @@ fn merge_lots(mut lots: Vec<Lot>) -> Vec<Start> {
     kept.into_iter().map(|l| l.start).collect()
 }
 
+/// A famous trail is famous for its sights: the walk to its best one (the
+/// best-scoring walk to a waterfall or viewpoint on it that takes the
+/// trail's mentions, see score) keeps them, and the trail's other walks
+/// don't. Johnston Canyon Trail's 48 sites are about its falls: the walk to
+/// the Upper Falls keeps them, not the walk the length of the trail past the
+/// Ink Pots (15.2 km), nor those to the Lower, Tunnel, Stella and Marguerite
+/// Falls on the way. Returns the sights that keep POPULAR_SITES or more, as
+/// popular destinations (popular_dests).
+fn sights_take_mentions(cands: &mut [Cand]) -> HashSet<String> {
+    let sight = |k: Kind| matches!(k, Kind::Waterfall | Kind::Viewpoint);
+    let takes = |c: &Cand| sight(c.dest_kind) && c.ev.trail_mentions_to_sight > 0 && c.ev.trail_mentions == 0;
+    // Each famous trail's best sight.
+    let mut best: HashMap<String, (f64, String, u32)> = HashMap::default();
+    for c in cands.iter().filter(|c| takes(c)) {
+        let e = best.entry(c.ev.mentions_trail.clone()).or_insert((f64::MIN, String::new(), 0));
+        if c.score > e.0 {
+            *e = (c.score, c.dest.clone(), c.ev.trail_mentions_to_sight);
+        }
+    }
+    if best.is_empty() {
+        return HashSet::default();
+    }
+    for c in cands.iter_mut() {
+        let Some((_, keep, _)) = best.get(&c.ev.mentions_trail) else { continue };
+        if takes(c) && c.dest == *keep {
+            continue;
+        }
+        if let Some(i) = c.parts.iter().position(|p| p.0 == "mentions") {
+            c.score -= c.parts[i].1;
+            c.parts.remove(i);
+        }
+    }
+    best.into_values().filter(|b| b.2 >= POPULAR_SITES).map(|b| b.1).collect()
+}
+
 /// Coverage first (each start's best), then greedily by score x novelty.
 /// Whether a hike is its start's own named trail: walked for itself (dest
 /// kind Trail) from a start named for it ("Granite Ridge Trail trailhead",
@@ -3236,6 +3289,7 @@ pub fn curate(
     // park, or at its edge (named_pieces), and it's the park's (Killarney's
     // Lake of The Woods Trail, routes#104, mostly in the park next door).
     cands.retain(|c| c.dest_kind == Kind::Trail || in_park_share(area, &c.ev.line) >= DAY_IN_PARK);
+    let famous_sights = sights_take_mentions(&mut cands);
     shortest_approaches(&mut cands);
     let mut day = select(&cands, n_day, true);
     // Destinations many sites write about, each with its own hike even past
@@ -3247,6 +3301,7 @@ pub fn curate(
         .iter()
         .filter(|d| d.mentions >= POPULAR_SITES)
         .map(|d| d.name.as_str())
+        .chain(famous_sights.iter().map(|s| s.as_str()))
         .collect();
     popular_dests(&mut day, &cands, &popular, n_day);
     real_trails(&mut day, &cands, &trails);
@@ -3795,7 +3850,7 @@ mod tests {
         let ev = Eval {
             one_way: 0.0, total: 0.0, gain: 0.0, loss: 0.0, max_ele: 0.0, min_ele: 0.0,
             lc_shares: vec![], lc_variety: 0.0, open_high: 0.0, passed: vec![], along: vec![], camps: vec![],
-            road: 0.0, bike: 0.0, known: 0.0, trail_mentions: 0, via: vec![], max_sac: 0, line: vec![],
+            road: 0.0, bike: 0.0, known: 0.0, trail_mentions: 0, trail_mentions_to_sight: 0, mentions_trail: String::new(), via: vec![], max_sac: 0, line: vec![],
         };
         let c = |from: &str, dest: &str, k: Kind| Cand {
             from: from.into(), start: (0.0, 0.0), dest: dest.into(), dest_kind: k,
@@ -3819,7 +3874,7 @@ mod tests {
             one_way: 6000.0, total: 12000.0, gain: 100.0, loss: 100.0,
             max_ele: 100.0, min_ele: 0.0, lc_shares: vec![], lc_variety: 1.0,
             open_high: 0.0, passed, along: vec![], camps: vec![], road: 0.0, bike: 0.0, known: 0.0,
-            trail_mentions: 0, via: vec![], max_sac: 0, line: vec![],
+            trail_mentions: 0, trail_mentions_to_sight: 0, mentions_trail: String::new(), via: vec![], max_sac: 0, line: vec![],
         };
         let trail = Dest {
             name: "Minas Basin Trail".into(), kind: Kind::Trail, pt: (0.0, 0.0), area: 0.0,
