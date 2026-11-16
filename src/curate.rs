@@ -140,7 +140,8 @@ pub struct Search {
     sc: Option<Scratch>,
     touched: Vec<u32>, // nodes given a distance, in that order
     pub src: u32,
-    order: Vec<u32>, // nodes in the order they were settled
+    /// The search's limit: nodes within it (by metres) were expanded.
+    limit: f64,
     // Costs under this are exact: the cost of the first node the search
     // left unexpanded (past its limit), as every cheaper node was reached
     // through expanded ones. Infinite if none (or a search to a target).
@@ -189,6 +190,28 @@ impl Search {
         let sc = self.sc();
         assert!(sc.has(n) && n != self.src);
         sc.prev[n as usize]
+    }
+    /// The nodes the search expanded (within its limit), each after the
+    /// node before it on its way from the source: the search tree, parents
+    /// first. Not by cost: nodes in the middle of a way aren't queued
+    /// (search_until).
+    pub fn tree(&self) -> Vec<u32> {
+        let sc = self.sc();
+        let mut kids: HashMap<u32, Vec<u32>> = HashMap::default();
+        for &n in &self.touched {
+            if n != self.src && sc.metres[n as usize] <= self.limit {
+                kids.entry(sc.prev[n as usize].0).or_default().push(n);
+            }
+        }
+        let mut out = vec![];
+        let mut stack = vec![self.src];
+        while let Some(u) = stack.pop() {
+            out.push(u);
+            if let Some(ks) = kids.get(&u) {
+                stack.extend(ks.iter().rev());
+            }
+        }
+        out
     }
     /// Nodes and ways from the source to n.
     pub fn path(&self, n: u32) -> (Vec<u32>, Vec<u32>) {
@@ -524,7 +547,7 @@ impl<'a> Ctx<'a> {
         let g = &self.area.graph;
         let mut sc = Scratch::take(g.pts.len());
         let mut touched = vec![src];
-        let mut order = vec![];
+        let mut settled: u64 = 0;
         sc.stamp[src as usize] = sc.epoch;
         sc.dist[src as usize] = 0.0;
         sc.metres[src as usize] = 0.0;
@@ -569,32 +592,56 @@ impl<'a> Ctx<'a> {
                 }
                 continue;
             }
-            order.push(u);
+            settled += 1;
             let es = &self.adj_e[self.adj_off[u as usize] as usize..self.adj_off[u as usize + 1] as usize];
-            for e in es {
-                // Against a one-way trail (routes#163).
-                if !e.cost.is_finite() {
-                    continue;
-                }
-                let mut c = e.cost as f64;
-                if penal.is_some_and(|p| p.contains(&ekey(u, e.to))) {
-                    c *= 8.0;
-                }
-                if road_x != 1.0 && g.ways[e.way as usize].class == Class::Road {
-                    c *= road_x;
-                }
-                let nd = d + c;
-                let v = e.to as usize;
-                let seen = sc.stamp[v] == sc.epoch;
-                if !seen || nd < sc.dist[v] {
+            for e0 in es {
+                // Along the edge, and on through any nodes in the middle of a
+                // way (two edges, nothing branching off) to the next junction,
+                // dead end or node past the limit: only that node is queued.
+                // Those in between get their cost, metres and way back as
+                // Dijkstra would give them, without a queue entry each: most
+                // of a city's nodes are in the middle of a street, and
+                // queueing them was most of curating's time (routes#229).
+                let (mut from, mut e, mut d0, mut m0) = (u, *e0, d, mu);
+                loop {
+                    // Against a one-way trail (routes#163).
+                    if !e.cost.is_finite() {
+                        break;
+                    }
+                    let mut c = e.cost as f64;
+                    if penal.is_some_and(|p| p.contains(&ekey(from, e.to))) {
+                        c *= 8.0;
+                    }
+                    if road_x != 1.0 && g.ways[e.way as usize].class == Class::Road {
+                        c *= road_x;
+                    }
+                    let nd = d0 + c;
+                    let v = e.to as usize;
+                    let seen = sc.stamp[v] == sc.epoch;
+                    if seen && nd >= sc.dist[v] {
+                        break;
+                    }
                     if !seen {
                         sc.stamp[v] = sc.epoch;
                         touched.push(e.to);
                     }
+                    let nm = m0 + e.m as f64;
                     sc.dist[v] = nd;
-                    sc.metres[v] = mu + e.m as f64;
-                    sc.prev[v] = (u, e.way);
-                    pq.push(Q::new(nd + h(e.to), e.to));
+                    sc.metres[v] = nm;
+                    sc.prev[v] = (from, e.way);
+                    let (lo, hi) = (self.adj_off[v] as usize, self.adj_off[v + 1] as usize);
+                    if hi - lo != 2 || target == Some(e.to) || nm > limit {
+                        pq.push(Q::new(nd + h(e.to), e.to));
+                        break;
+                    }
+                    // The way on: the other of its two edges.
+                    let (a, b) = (self.adj_e[lo], self.adj_e[lo + 1]);
+                    let next = if a.to == from && a.way == e.way { b } else { a };
+                    if next.to == e.to {
+                        break;
+                    }
+                    settled += 1;
+                    (from, e, d0, m0) = (e.to, next, nd, nm);
                 }
             }
         }
@@ -602,10 +649,10 @@ impl<'a> Ctx<'a> {
             sc: Some(sc),
             touched,
             src,
-            order,
+            limit,
             exact_below,
         };
-        N_SETTLED.fetch_add(s.order.len() as u64, Relaxed);
+        N_SETTLED.fetch_add(settled, Relaxed);
         s
     }
 
@@ -3754,7 +3801,7 @@ pub fn curate(
             // campsite's surroundings) and metres in the park.
             let mut camps: HashMap<u32, (u32, u32, f64)> = HashMap::default(); // node -> (count, last camp, metres in park)
             camps.insert(a.node, (0, u32::MAX, 0.0));
-            for &v in &s.order[1..] {
+            for &v in &s.tree()[1..] {
                 let (u, _) = s.prev(v);
                 let (mut n, mut last, mut inp) = camps[&u];
                 if let Some(cs) = ctx.camp_near.get(&v) {
