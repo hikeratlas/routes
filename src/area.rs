@@ -833,8 +833,9 @@ pub fn trail_stems<'a>(names: impl Iterator<Item = &'a str>) -> Vec<(String, Vec
 }
 
 /// How near a stem's trails come where they meet (through a road or
-/// another trail between them): North and South Gibson Trail, 115 m and 49 m.
-pub const STEM_JOIN_M: f64 = 150.0;
+/// another trail between them): North and South Gibson Trail touch at one
+/// end and are 31 m apart at the other, across Strawberry Flats Loop.
+pub const STEM_JOIN_M: f64 = 50.0;
 /// Two places a stem's trails meet are this far apart.
 const STEM_PLACES_M: f64 = 1000.0;
 

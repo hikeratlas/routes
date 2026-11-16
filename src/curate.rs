@@ -1744,8 +1744,8 @@ impl<'a> Ctx<'a> {
                     || (way.class == Class::Trail && way.name.is_empty()))
         };
         // A stem's trails are joined by other ways where they meet: North
-        // and South Gibson Trail by 115 m of Strawberry Flats Loop, by the
-        // lot, and 49 m of Campground Loop.
+        // and South Gibson Trail by 31 m of Strawberry Flats Loop, by the
+        // lot.
         let stem = self.area.trail_stems.iter().any(|(s, _)| s == name);
         let mut gap_at: HashMap<u32, f64> = HashMap::default();
         let mut stack = vec![(entry, 0.0)];
