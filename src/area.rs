@@ -448,14 +448,18 @@ fn read_tile(
                             && area >= 20000.0
                         {
                             let key = (name.to_string(), area as i64);
-                            let (id, new) = {
+                            // Ids in the order threads reach lakes; Area::load
+                            // renumbers them by name, and keeps the first
+                            // tile's destination (in tile order) of each, so
+                            // curating doesn't depend on which thread read
+                            // which tile first (routes#228).
+                            let id = {
                                 let mut m = lake_ids.lock().unwrap();
                                 let n = m.len() as u32;
-                                let id = *m.entry(key).or_insert(n);
-                                (id, id == n)
+                                *m.entry(key).or_insert(n)
                             };
                             let poly = Poly::new(rings.clone(), tx, ty);
-                            if new {
+                            {
                                 let c = (
                                     (poly.min.0 + poly.max.0) / 2.0,
                                     (poly.min.1 + poly.max.1) / 2.0,
@@ -913,10 +917,31 @@ impl Area {
             trail_mentions: HashMap::new(),
             trail_stems: vec![],
         };
+        // Lake ids by (name, area), not by which thread reached each first.
+        let mut keys: Vec<((String, i64), u32)> = lake_ids.into_inner().unwrap().into_iter().collect();
+        keys.sort();
+        let mut renumber: HashMap<u32, u32> = HashMap::new();
+        for (new, (_, old)) in keys.into_iter().enumerate() {
+            renumber.insert(old, new as u32);
+        }
+        let mut raws = raws;
+        for r in &mut raws {
+            for (id, _) in &mut r.data.lakes {
+                *id = renumber[id];
+            }
+            for d in &mut r.dests {
+                if let Some(id) = &mut d.lake {
+                    *id = renumber[id];
+                }
+            }
+        }
+        // Each lake's destination once: the first tile's, in tile order.
+        let mut lake_seen: std::collections::HashSet<u32> = Default::default();
         let mut known: HashMap<String, crate::recall::Known> = HashMap::new();
         let mut lake_pts: HashMap<u32, (f64, f64, f64)> = HashMap::new();
         let mut lift_pieces = vec![];
-        for r in raws {
+        for mut r in raws {
+            r.dests.retain(|d| d.lake.is_none_or(|id| lake_seen.insert(id)));
             for (id, p) in &r.data.lakes {
                 for ring in &p.rings {
                     for q in ring {
