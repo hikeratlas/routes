@@ -318,8 +318,23 @@ fn trail_walked<'t>(trails: &[(&'t str, Vec<P>, Vec<(P, P)>, [f64; 4])], line: &
 /// (#104). Relations name first; this only fills in.
 pub fn name_trails(area: &Area, doc: &mut Value) {
     let by_name = named_trails(area);
+    let stems = &area.trail_stems;
+    // Trails that differ only by a direction (North and South Gibson Trail)
+    // are also one trail, by their shared name, for a loop that walks them
+    // both (E.C. Manning's Gibson loop was "Lightning Lake from Strawberry
+    // Flats Parking").
+    let mut joined: Vec<(String, Vec<(P, P)>)> = vec![];
+    for (stem, names) in stems {
+        let segs: Vec<(P, P)> =
+            names.iter().filter_map(|n| by_name.get(n.as_str())).flat_map(|t| t.0.iter().copied()).collect();
+        joined.push((stem.clone(), segs));
+    }
     let trails: Vec<(&str, Vec<P>, Vec<(P, P)>, [f64; 4])> = by_name
         .into_iter()
+        .chain(joined.iter().map(|(n, segs)| {
+            let m = segs.iter().map(|&(a, b)| metres(a, b)).sum();
+            (n.as_str(), (segs.clone(), m, m))
+        }))
         .filter(|(_, (_, m, _))| *m >= TRAIL_MIN_M)
         .map(|(n, (segs, _, _))| {
             let pts: Vec<P> = segs.iter().flat_map(|&(a, b)| sample(&[a, b])).collect();
@@ -1017,6 +1032,19 @@ mod tests {
         .map(|(a, b, c, d)| (a.to_string(), b.to_string(), c.to_string(), d));
         assert_eq!(got, want);
         assert_eq!(offered(&doc)[2].0["name"], "Loop Trail");
+    }
+
+    #[test]
+    fn trails_by_direction_share_a_name() {
+        let stems = crate::area::trail_stems(
+            ["North Gibson Trail", "South Gibson Trail", "Upper Falls Trail", "Lone Duck Trail",
+             "East Ridge", "West Ridge", "Ridge", "North Trail", "South Trail", "North Gibson Trail"]
+                .into_iter(),
+        );
+        // Not Upper Falls Trail (no Lower), not East/West Ridge (a trail is
+        // already Ridge), not North/South Trail (no name left).
+        let gibson = vec!["North Gibson Trail".to_string(), "South Gibson Trail".to_string()];
+        assert_eq!(stems, vec![("Gibson Trail".to_string(), gibson)]);
     }
 }
 

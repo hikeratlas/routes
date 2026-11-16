@@ -76,6 +76,11 @@ def load(d=DIR):
             if t is not None and e.get('kind', 'dest') != 'trail':
                 errors.append(f"{where}: trace is for trail entries")
                 continue
+            # The most metres of the hike off the trace (expect.py's stays).
+            off = e.get('trace_off_m')
+            if off is not None and (t is None or isinstance(off, bool) or not isinstance(off, (int, float)) or off < 0):
+                errors.append(f"{where}: trace_off_m is metres (a number, 0 or more), with a trace")
+                continue
             # The hike's shape, as routes' kind for it: checked against the
             # hike that matches, where given (routes#205). Stated, not
             # inferred: a proposer may suggest one, a person signs it off.

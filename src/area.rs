@@ -198,6 +198,9 @@ pub struct Area {
     /// park's ways (metres), by lowercased name: those near the park, from
     /// --mentions.
     pub trail_mentions: HashMap<String, (u32, f64)>,
+    /// Trails told apart only by a direction, as one trail by their shared
+    /// name (trail_stems): "Gibson Trail" for North and South Gibson Trail.
+    pub trail_stems: Vec<(String, Vec<String>)>,
 }
 
 /// A gondola or cable car, by its two stations.
@@ -802,6 +805,33 @@ impl Graph {
 /// How close (world units, ~1 m) a node must be to a lot's outline to be on it.
 const ON_OUTLINE: f64 = 2.0;
 
+/// Directions that tell trails of one name apart ("North Gibson Trail").
+const STEM_PREFIXES: [&str; 6] = ["North ", "South ", "East ", "West ", "Upper ", "Lower "];
+
+/// Names that differ only by a leading direction, by that shared name: two
+/// or more of them, and not where a trail already has the shared name
+/// (whose own trail it is). "North Gibson Trail" and "South Gibson Trail"
+/// are "Gibson Trail". Sorted, each name once.
+pub fn trail_stems<'a>(names: impl Iterator<Item = &'a str>) -> Vec<(String, Vec<String>)> {
+    let names: std::collections::BTreeSet<&str> = names.collect();
+    let lower: std::collections::HashSet<String> = names.iter().map(|n| n.to_lowercase()).collect();
+    let mut by_stem: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+    for &n in &names {
+        for p in STEM_PREFIXES {
+            if let Some(rest) = n.strip_prefix(p) {
+                // A stem of more than a bare "Trail".
+                if rest.split_whitespace().any(|w| !w.eq_ignore_ascii_case("trail")) {
+                    by_stem.entry(rest.to_string()).or_default().push(n.to_string());
+                }
+            }
+        }
+    }
+    by_stem
+        .into_iter()
+        .filter(|(s, ns)| ns.len() >= 2 && !lower.contains(&s.to_lowercase()))
+        .collect()
+}
+
 impl Area {
     /// park_ids: the park's OSM ids, any of whose polygons is the park (one
     /// park mapped as several same-named pieces is curated as one).
@@ -823,6 +853,7 @@ impl Area {
             lifts: vec![],
             worldcover: None,
             trail_mentions: HashMap::new(),
+            trail_stems: vec![],
         };
         let mut known: HashMap<String, crate::recall::Known> = HashMap::new();
         let mut lake_pts: HashMap<u32, (f64, f64, f64)> = HashMap::new();
@@ -854,6 +885,13 @@ impl Area {
             area.tiles.insert((r.tx, r.ty), r.data);
         }
         area.lifts = lifts(lift_pieces);
+        area.trail_stems = trail_stems(
+            area.graph
+                .ways
+                .iter()
+                .filter(|w| matches!(w.class, Class::Trail | Class::Track) && !w.name.is_empty())
+                .map(|w| w.name.as_str()),
+        );
         area.known = known.into_values().collect();
         area.known.sort_by(|a, b| a.id.cmp(&b.id));
         for d in &mut area.dests {
