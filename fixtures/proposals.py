@@ -13,10 +13,12 @@
 # box of its ways, for the website to read them from the tiles), osm_km, suggest_km and
 # suggest_why (a length to consider instead, and why), note, near and
 # near_bbox (with no osm_bbox: the place its name goes to, as OSM names it,
-# and a box a few km around it, for the website to frame; locate-proposals.py).
+# and a box a few km around it, for the website to frame; locate-proposals.py),
+# and shape (the hike's shape the park gives: "loop", "out-and-back" or
+# "one-way", for the entry's `shape` once a person accepts it).
 import glob, json, os
 
-from expectations import slug
+from expectations import SHAPES, slug
 
 DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'proposals')
 STATUSES = ('open', 'accepted', 'rejected')
@@ -51,6 +53,8 @@ def load(d=DIR):
                 errors.append(f"{where}: status {e['status']!r} isn't one of {', '.join(STATUSES)}")
             if e.get('km_basis') and e['km_basis'] not in BASES:
                 errors.append(f"{where}: km_basis {e['km_basis']!r} isn't one of {', '.join(BASES)}")
+            if e.get('shape') is not None and e['shape'] not in SHAPES:
+                errors.append(f"{where}: shape {e['shape']!r} isn't one of {', '.join(SHAPES)}")
             if not isinstance(e['km'], (int, float)) or e['km'] <= 0:
                 errors.append(f"{where}: km must be a positive number")
             e['park_id'] = str(e['park_id'])
