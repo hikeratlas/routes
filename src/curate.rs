@@ -2097,6 +2097,17 @@ impl<'a> Ctx<'a> {
             if let Some((tour, tour_w, is_loop_tour, covered)) = tour {
                 // More of the trail, or as much as a loop where the piece is a
                 // line (Cranberry Bog Trail, closed by 261 m of another trail).
+                // Against the piece less the sticks the tour leaves to other
+                // starts: E.C. Manning's Lightning Lake Trail, its loop
+                // without the leg to another lot, was 7.2 km of an 8 km line
+                // that ran down that leg, and fell back to the line walked
+                // out and back (16.4 km).
+                let stick_m: f64 = path
+                    .windows(2)
+                    .filter(|w| sticks.contains(&ekey(w[0], w[1])))
+                    .map(|w| metres(g.pts[w[0] as usize], g.pts[w[1] as usize]))
+                    .sum();
+                let piece_m = piece_m - stick_m;
                 if covered > piece_m * TOUR_GAIN
                     || (is_loop_tour && !*is_loop && covered >= piece_m * TOUR_KEEP)
                 {
