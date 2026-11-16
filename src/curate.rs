@@ -1096,11 +1096,17 @@ fn named_throughs(ctx: &Ctx, starts: &[Start]) -> Vec<Through> {
     // km), split where it leaves the trail network for a few metres.
     const JOIN_M: f64 = 1000.0;
     let mut by_name: HashMap<&str, Vec<Line>> = HashMap::default();
-    for (name, path, ways, is_loop) in ctx.named_pieces(NAMED_MIN_M, 100000.0, false) {
+    let pieces = ctx.named_pieces(NAMED_MIN_M, 100000.0, false);
+    for (name, path, ways, is_loop) in &pieces {
         if !is_loop {
-            by_name.entry(name).or_default().push((path, ways));
+            by_name.entry(name).or_default().push((path.clone(), ways.clone()));
         }
     }
+    // A trail's whole tour (named_tours), and how much of the trail it
+    // walks: it beats the trail's end-to-end trips below that walk less.
+    let tours = named_tours(ctx, starts, &pieces, &nearest_start);
+    let toured: HashMap<String, f64> = tours.iter().map(|(t, c)| (t.name.clone().unwrap_or_default(), *c)).collect();
+    out.extend(tours.into_iter().map(|(t, _)| t));
     let mut lines: Vec<(&str, Line)> = vec![];
     // Each piece end's nearest trailhead (its node), for chain_pieces.
     let mut start_at: HashMap<u32, Option<u32>> = HashMap::default();
@@ -1171,6 +1177,12 @@ fn named_throughs(ctx: &Ctx, starts: &[Start]) -> Vec<Through> {
             .map(|w| metres(g.pts[w[0] as usize], g.pts[w[1] as usize]))
             .sum();
         if !(18000.0..=100000.0).contains(&len) {
+            continue;
+        }
+        // Part of a trail whose whole tour is offered: Algonquin's Western
+        // Uplands loop (88 km) over its longest line from one trailhead to
+        // another (46 km), which scored a little higher.
+        if toured.get(trail).is_some_and(|&c| c > len) {
             continue;
         }
         let mut passed: HashSet<u32> = HashSet::default();
@@ -1244,6 +1256,146 @@ fn named_throughs(ctx: &Ctx, starts: &[Start]) -> Vec<Through> {
     out
 }
 
+/// A named trail too long for a day, walked whole as one trip from the
+/// trailhead nearest it: a loop, or a trail that forks, whose end-to-end
+/// line is no trip (named_throughs' lines). Algonquin's Highland
+/// Backpacking Trail is a stem from Mew Lake and two loops, 30 km of
+/// trail; its longest line, 13.4 km, was under a multi-day trip's 18 km
+/// and its tour over a day's, so it was offered as nothing.
+fn named_tours<'s>(
+    ctx: &Ctx,
+    starts: &'s [Start],
+    pieces: &[(&str, Vec<u32>, Vec<u32>, bool)],
+    nearest_start: &dyn Fn(u32) -> Option<(&'s Start, Vec<u32>, Vec<u32>)>,
+) -> Vec<(Through, f64)> {
+    let g = &ctx.area.graph;
+    let mut out = vec![];
+    // Each name's nodes already toured from, by piece: a trail can have
+    // pieces apart (Western Uplands' 4.4 km, besides its 97 km network).
+    let mut seen: HashMap<&str, HashSet<u32>> = HashMap::default();
+    for (name, path, _, is_loop) in pieces {
+        if seen.get(name).is_some_and(|s| s.contains(&path[0])) {
+            continue;
+        }
+        // All of the trail joined to the piece by its own ways.
+        let nodes = ctx.trail_nodes(name, path[0]);
+        seen.entry(*name).or_default().extend(nodes.iter().copied());
+        let forked = nodes.len() > path.len();
+        if !(*is_loop || forked) {
+            continue;
+        }
+        // A trailhead named for it ("Highland Backpacking Trail parking"),
+        // else its nearest, by its ends and every so often along it.
+        // To this piece, by its other pieces if need be: Highland's lot is
+        // at the end of its 2.1 km stem, mapped apart from the loops' piece.
+        let piece: HashSet<u32> = nodes.iter().copied().collect();
+        let own = starts.iter().filter(|s| named_for(&s.name, name)).find_map(|s| {
+            let sr = ctx.search(s.node, OWN_TOUR_ACCESS_M, None);
+            let (_, n) = sr
+                .all_reached()
+                .filter(|(n, _)| piece.contains(n))
+                .map(|(n, m)| (m, n))
+                .min_by(|a, b| a.0.total_cmp(&b.0))?;
+            let (mut p, mut w) = sr.path(n);
+            p.reverse();
+            w.reverse();
+            Some((s, p, w))
+        });
+        let Some((s, sp, sw)) = own.or_else(|| nodes
+            .iter()
+            .step_by(TOUR_START_STEP)
+            .chain(path.first())
+            .chain(path.last())
+            .filter_map(|&n| nearest_start(n).map(|(s, p, w)| (metres_of(g, &p), s, p, w)))
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, s, p, w)| (s, p, w)))
+        else {
+            continue;
+        };
+        // sp runs from the trail to the trailhead.
+        let entry = sp[0];
+        let Some((tour, tour_w, tour_loop, covered)) =
+            ctx.trail_tour_within(name, entry, &HashSet::default(), 100000.0, None)
+        else {
+                continue;
+        };
+        if !tour_loop || covered < 18000.0 {
+            continue;
+        }
+        let full: Vec<u32> = sp
+            .iter()
+            .rev()
+            .chain(tour.iter().skip(1))
+            .chain(sp.iter().skip(1))
+            .copied()
+            .collect();
+        let fw: Vec<u32> = sw.iter().rev().chain(tour_w.iter()).chain(sw.iter()).copied().collect();
+        let (mut m, mut inp) = (0.0, 0.0);
+        for w in full.windows(2) {
+            let d = metres(g.pts[w[0] as usize], g.pts[w[1] as usize]);
+            m += d;
+            if ctx.in_park[w[1] as usize] {
+                inp += d;
+            }
+        }
+        if !(18000.0..=100000.0).contains(&m) || inp / m < 0.6 {
+            continue;
+        }
+        // Places to sleep on it: any of OSM's campsites within TOUR_CAMP_M,
+        // named or not (curate's camps keep one unnamed site a park, as
+        // base camps; Algonquin's Highland passes dozens, all unnamed).
+        let line: Vec<P> = tour.iter().map(|&n| g.pts[n as usize]).collect();
+        let near = crate::geo::sample(&line, TOUR_CAMP_M);
+        let passed = ctx
+            .area
+            .camps
+            .iter()
+            .filter(|c| near.iter().any(|&p| metres(p, c.pt) <= TOUR_CAMP_M))
+            .take(2)
+            .count();
+        if passed < 2 {
+            continue;
+        }
+        let ev = ctx.evaluate(&full, &fw, false);
+        if ev.bike > MAX_BIKE {
+            continue;
+        }
+        let kinds: HashSet<Kind> = ev.passed.iter().map(|(k, _)| *k).collect();
+        // As named_throughs scores a trail walked end to end.
+        let on_trail = (covered / m).min(1.0);
+        let sc = 1.0 * kinds.len() as f64 + 2.5 * ev.open_high + 0.7 * ev.lc_variety.min(4.0)
+            - 2.5 * ev.road
+            - 2.0 * ev.bike
+            + W_KNOWN * on_trail;
+        out.push((
+            Through {
+                from: s.name.clone(),
+                to: s.name.clone(),
+                kind: "loop",
+                score: sc,
+                ev,
+                edges: edge_set(&full),
+                name: Some(name.to_string()),
+            },
+            covered,
+        ));
+    }
+    out
+}
+
+/// named_tours looks for a trail's trailhead from every this many of its
+/// nodes (each a search of NAMED_ACCESS_M).
+const TOUR_START_STEP: usize = 25;
+/// How far a trailhead named for a trail may be from the piece toured
+/// (named_tours), along the trail's other pieces.
+const OWN_TOUR_ACCESS_M: f64 = 6000.0;
+/// How near a trail a campsite is on it, for named_tours.
+const TOUR_CAMP_M: f64 = 150.0;
+
+fn metres_of(g: &crate::area::Graph, p: &[u32]) -> f64 {
+    p.windows(2).map(|w| metres(g.pts[w[0] as usize], g.pts[w[1] as usize])).sum()
+}
+
 /// How near a route must pass a known trailhead to pass it, and how far
 /// before a made-up end it must be to count as running past it (#63).
 const PASS_KNOWN_M: f64 = 300.0;
@@ -1294,6 +1446,10 @@ const TOUR_LIMIT_M: f64 = 15000.0;
 /// Up to this much unnamed trail joins a trail's pieces for its tour (a
 /// footbridge without the trail's name).
 const TOUR_GAP_M: f64 = 30.0;
+/// A named trail's hike reached along this much way in comes home another
+/// way where the trail can, no longer (named_trails): Brent Crater Trail's
+/// 670 m along Brent Road.
+const WAY_IN_MIN_M: f64 = 200.0;
 /// A destination this far from a named loop is a detour off it.
 const DETOUR_M: f64 = 150.0;
 /// The most a stem's tour may walk on other ways between its trails
@@ -1360,11 +1516,16 @@ impl<'a> Ctx<'a> {
         // name is part of it: Grouse Mountain's BCMC Route is a track for
         // 180 m, which cut it into pieces under NAMED_MIN_M (routes#165).
         let mut by_name: HashMap<&'a str, Vec<(u32, u32, u32)>> = HashMap::default();
+        // Not a ski trail, unless a hiking route of its name says it's
+        // walked too: Algonquin's Leaf Lake Ski Trail, a cross-country ski
+        // network mapped as paths, was offered as a 30 km backpacking loop.
+        let hiked: HashSet<String> = self.area.known.iter().map(|k| k.name.to_lowercase()).collect();
         let named = |w: &crate::area::Way| {
             (w.class == Class::Trail
                 || (w.class == Class::Track && trail_names.contains(w.name.as_str())))
                 && !w.bike
                 && !w.name.is_empty()
+                && !(ski_trail(&w.name) && !hiked.contains(&w.name.to_lowercase()))
         };
         for (u, adj) in g.adj.iter().enumerate() {
             let u = u as u32;
@@ -1674,6 +1835,21 @@ impl<'a> Ctx<'a> {
         entry: u32,
         skip: &HashSet<u64>,
     ) -> Option<(Vec<u32>, Vec<u32>, bool, f64)> {
+        self.trail_tour_within(name, entry, skip, TOUR_LIMIT_M, None)
+    }
+
+    /// trail_tour, its searches bounded by `max_m` (a multi-day trail's
+    /// tour, named_throughs, runs past a day's TOUR_LIMIT_M). With `home`,
+    /// (a node, edges), the way back goes there instead of to `entry`,
+    /// those edges costing TOUR_BACK_X more, as the way out's do.
+    fn trail_tour_within(
+        &self,
+        name: &str,
+        entry: u32,
+        skip: &HashSet<u64>,
+        max_m: f64,
+        home: Option<(u32, &HashSet<u64>)>,
+    ) -> Option<(Vec<u32>, Vec<u32>, bool, f64)> {
         let g = &self.area.graph;
         let is_trail_edge = |w: u32, k: u64| self.of_trail(&g.ways[w as usize].name, name) && !skip.contains(&k);
         let cost = |w: u32, m: f64, back: Option<&HashSet<u64>>, k: u64| -> f64 {
@@ -1781,7 +1957,7 @@ impl<'a> Ctx<'a> {
             .sum();
         // Searches bounded by the trail's own length, as a city park has
         // hundreds of named trails.
-        let limit = (own_m * 1.5 + 500.0).min(TOUR_LIMIT_M);
+        let limit = (own_m * 1.5 + 500.0).min(max_m);
         let (dist, prev) = dijkstra(entry, None, limit, None);
         // The farthest of them, within reach.
         let far = dist
@@ -1794,9 +1970,13 @@ impl<'a> Ctx<'a> {
         }
         let (out_p, out_w) = path_to(&prev, entry, far);
         let out_edges = edge_set(&out_p);
-        let (dist2, prev2) = dijkstra(far, Some(&out_edges), limit * TOUR_BACK_X, Some(entry));
-        dist2.get(&entry)?;
-        let (back_p, back_w) = path_to(&prev2, far, entry);
+        let (target, avoid) = match home {
+            Some((h, a)) => (h, out_edges.union(a).copied().collect()),
+            None => (entry, out_edges.clone()),
+        };
+        let (dist2, prev2) = dijkstra(far, Some(&avoid), limit * TOUR_BACK_X, Some(target));
+        dist2.get(&target)?;
+        let (back_p, back_w) = path_to(&prev2, far, target);
         let back_edges = edge_set(&back_p);
         let shared =
             back_edges.intersection(&out_edges).count() as f64 / back_edges.len().max(1) as f64;
@@ -2176,11 +2356,42 @@ impl<'a> Ctx<'a> {
                     || (is_loop_tour && !*is_loop && covered >= piece_m * TOUR_KEEP)
                 {
                     let (mut full, mut fw) = sr.path(entry_at);
-                    full.extend(tour.iter().skip(1));
-                    fw.extend(tour_w.iter());
-                    let (back, bw) = sr.path(entry_at);
-                    full.extend(back.iter().rev().skip(1));
-                    fw.extend(bw.iter().rev());
+                    // A long way in isn't walked back as well where the trail
+                    // can lead home another way, no longer: Algonquin's Brent
+                    // Crater Trail is named from a junction 670 m from its
+                    // trailhead, along Brent Road and a footway beside it, and
+                    // its hike walked there and back, while an unnamed leg of
+                    // the trail comes back to the trailhead.
+                    let way_in: HashSet<u64> = full.windows(2).map(|k| ekey(k[0], k[1])).collect();
+                    let way_in_m = metres_of(g, &full);
+                    // What the hike walks the usual way: in, the tour, and out
+                    // the way it came in.
+                    let usual_m = 2.0 * metres_of(g, &full) + metres_of(g, &tour);
+                    let home = (way_in_m >= WAY_IN_MIN_M)
+                        .then(|| {
+                            self.trail_tour_within(
+                                name,
+                                entry_at,
+                                &sticks,
+                                TOUR_LIMIT_M,
+                                Some((s.node, &way_in)),
+                            )
+                        })
+                        .flatten()
+                        .filter(|t| t.3 >= covered * TOUR_KEEP && t.2)
+                        // And no longer: the point is not walking the road twice.
+                        .filter(|t| metres_of(g, &full) + metres_of(g, &t.0) <= usual_m);
+                    if let Some((ht, hw, _, _)) = &home {
+                        full.extend(ht.iter().skip(1));
+                        fw.extend(hw.iter());
+                    } else {
+                        full.extend(tour.iter().skip(1));
+                        fw.extend(tour_w.iter());
+                        let (back, bw) = sr.path(entry_at);
+                        full.extend(back.iter().rev().skip(1));
+                        fw.extend(bw.iter().rev());
+                    }
+                    let tour = home.as_ref().map_or(&tour, |h| &h.0);
                     // trail_tour keeps to one-way trails' direction, and its
                     // way back retraces only two-way edges: a lollipop's
                     // stick, not its one-way loop.
@@ -2751,6 +2962,13 @@ pub fn own_trail(c: &Cand) -> bool {
 
 /// Whether a start's name is a trail's, or the trail's and more ("Granite
 /// Ridge Trail trailhead" for the Granite Ridge Trail), ignoring case.
+/// Whether a trail's name says it's for skiing: "Leaf Lake Ski Trail",
+/// "Ski Loop", "Nordic Ski Trails".
+fn ski_trail(name: &str) -> bool {
+    name.split(|c: char| !c.is_alphanumeric())
+        .any(|w| w.eq_ignore_ascii_case("ski") || w.eq_ignore_ascii_case("skiing"))
+}
+
 fn named_for(start: &str, trail: &str) -> bool {
     let (f, d) = (start.to_lowercase(), trail.to_lowercase());
     !d.is_empty() && (f == d || f.strip_prefix(&d).is_some_and(|rest| rest.starts_with(' ')))
@@ -3240,7 +3458,9 @@ pub fn curate(
     );
     let mut camps: Vec<Place> = vec![];
     for c in &area.camps {
-        // A hut and the campground beside it are one stopover.
+        // A hut and the campground beside it are one stopover. (Unnamed
+        // sites are one by their empty name: a park keeps one of them as
+        // a base camp. named_tours counts them all, area.camps.)
         if camps
             .iter()
             .all(|u| u.name != c.name && metres(u.pt, c.pt) >= 800.0)
@@ -3905,6 +4125,15 @@ impl Curated {
 mod tests {
     // A hike is its start's own trail when it walks a named trail (dest kind
     // Trail) from a start named for it (#102, #103).
+    #[test]
+    fn ski_trails_by_name() {
+        assert!(ski_trail("Leaf Lake Ski Trail"));
+        assert!(ski_trail("Ski Loop"));
+        assert!(ski_trail("Cross-country skiing trail"));
+        assert!(!ski_trail("Skiff Lake Trail"));
+        assert!(!ski_trail("Brent Crater Trail"));
+    }
+
     #[test]
     fn a_start_named_for_a_trail_owns_it() {
         use super::*;
