@@ -1050,6 +1050,23 @@ type Line = (Vec<u32>, Vec<u32>);
 /// that's partly in the park (see Ctx::targets).
 const TRAIL_DEST_M: f64 = 3000.0;
 
+/// How near a path a destination must be to be one (Ctx::targets).
+const DEST_REACH_M: f64 = 150.0;
+/// The most a waterfall's height adds to its reach (see reach).
+const FALL_REACH_MAX_M: f64 = 500.0;
+
+/// How near a path a destination must be: DEST_REACH_M, and for a waterfall
+/// with a height on Wikidata, that from its foot, which can be its height
+/// from where OSM maps it (its lip, or the middle of the drop). Takakkaw
+/// Falls is 302 m: the path to its foot ends 337 m from its point.
+fn reach(d: &Dest) -> f64 {
+    let fall = (d.kind == Kind::Waterfall)
+        .then(|| crate::area::waterfall_height(&d.wikidata))
+        .flatten()
+        .unwrap_or(0.0);
+    DEST_REACH_M + fall.min(FALL_REACH_MAX_M)
+}
+
 /// How far apart a trail's pieces may be (by search cost: roads count
 /// extra) to be chained end to end by chain_pieces. A long trail's name can
 /// lapse for a few km where it shares another trail's ways: Killarney's La
@@ -2684,7 +2701,7 @@ impl<'a> Ctx<'a> {
                 }
                 continue;
             }
-            if let Some(n) = self.nearest(d.pt, 150.0) {
+            if let Some(n) = self.nearest(d.pt, reach(d)) {
                 out.push((i, vec![n]));
             }
         }

@@ -960,6 +960,7 @@ fn main() {
             }
             let ids: Vec<String> = std::iter::once(p.id.clone()).chain(p.also.iter().cloned()).collect();
             let mut area = Area::load(&archives, &ids, &tiles);
+            area.name_lookouts(&dem);
             area.worldcover = worldcover.clone().map(landcover::Lookup::new);
             if let Some(q) = &qrank {
                 let q = q.lock().unwrap();
