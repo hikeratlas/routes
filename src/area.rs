@@ -887,6 +887,25 @@ fn stem_meets(g: &Graph, names: &[String]) -> bool {
     })
 }
 
+/// A waterfall's height in metres, from Wikidata (data/waterfall-heights.tsv,
+/// by data/waterfall-heights.py), by its Wikidata id: None if it has none.
+pub fn waterfall_height(wikidata: &str) -> Option<f64> {
+    static HEIGHTS: std::sync::OnceLock<HashMap<&'static str, f64>> = std::sync::OnceLock::new();
+    HEIGHTS
+        .get_or_init(|| {
+            include_str!("../data/waterfall-heights.tsv")
+                .lines()
+                .skip(1)
+                .filter_map(|l| {
+                    let (id, h) = l.split_once('\t')?;
+                    Some((id, h.parse().ok()?))
+                })
+                .collect()
+        })
+        .get(wikidata)
+        .copied()
+}
+
 /// Whether a way named `way` is part of the trail `name`: of that name, or
 /// one of its trail_stems'.
 pub fn of_trail(stems: &[(String, Vec<String>)], way: &str, name: &str) -> bool {
