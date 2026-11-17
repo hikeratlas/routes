@@ -931,7 +931,7 @@ fn lookout_name(trail: &str) -> Option<&str> {
 
 /// "Mt. Hunter Lower Lookout" for "Mt. Hunter Lookout" and "Lower": the word
 /// before the last one.
-fn with_word(base: &str, word: &str) -> String {
+pub fn with_word(base: &str, word: &str) -> String {
     match base.rsplit_once(' ') {
         Some((a, b)) => format!("{a} {word} {b}"),
         None => format!("{word} {base}"),

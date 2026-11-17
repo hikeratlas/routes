@@ -3252,7 +3252,12 @@ fn named_dests(ctx: &Ctx, day: &mut Vec<Cand>, cands: &[Cand], n: usize) {
                 continue;
             };
             let x = x.to_lowercase();
-            if dests.contains(&x) {
+            // And a lookout trail's lower and upper lookouts, named so by
+            // Area::name_lookouts: Mt. Hunter Lookout Trail leads to Mt.
+            // Hunter Lower Lookout as well as the Upper.
+            let named = std::iter::once(x.clone())
+                .chain(["lower", "upper"].map(|w| crate::area::with_word(&x, w)));
+            for x in named.filter(|x| dests.contains(x)) {
                 trails.entry(x).or_default().insert(ekey(u as u32, e.to));
             }
         }
