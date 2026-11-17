@@ -3214,6 +3214,68 @@ const POPULAR_SITES: u32 = 15;
 /// it.
 const POPULAR_EXTRA: f64 = 0.5;
 
+/// How much of a hike's ground must be on a trail named for where it goes,
+/// for named_dests: or it walks this much of the trail.
+const NAMED_DEST_ALONG: f64 = 0.5;
+/// Room for hikes to where a trail is named for, beyond the day-hike
+/// budget, as a share of it (named_dests; as POPULAR_EXTRA).
+const NAMED_DEST_EXTRA: f64 = 0.5;
+
+/// A trail named for a destination leads to it: Yoho's "Hamilton Lake
+/// trail" to Hamilton Lake, "Ross Lake Trail" to Ross Lake. The park named
+/// the trail for where it goes, so that hike is offered, beyond the day-hike
+/// budget, as popular destinations are (up to NAMED_DEST_EXTRA x the
+/// budget, best scoring first): the best scoring hike to the
+/// destination that's mostly on the trail, or walks most of it
+/// (NAMED_DEST_ALONG), unless a chosen hike already goes there. Hamilton
+/// Lake lost to Mount Carnarvon (7.99 to 7.70), the same walk on past the
+/// lake, at the trailhead both start from, and then to the budget.
+fn named_dests(ctx: &Ctx, day: &mut Vec<Cand>, cands: &[Cand], n: usize) {
+    let g = &ctx.area.graph;
+    let dests: HashSet<String> = ctx.dests.iter().map(|d| d.name.to_lowercase()).collect();
+    // Each such trail's edges in the park, by the destination it names.
+    let mut trails: HashMap<String, HashSet<u64>> = HashMap::default();
+    for (u, adj) in g.adj.iter().enumerate() {
+        for e in adj {
+            let w = &g.ways[e.way as usize];
+            if w.class != Class::Trail || !ctx.in_park[u] || !ctx.in_park[e.to as usize] {
+                continue;
+            }
+            let Some(x) = w.name.strip_suffix(" Trail").or_else(|| w.name.strip_suffix(" trail")) else {
+                continue;
+            };
+            let x = x.to_lowercase();
+            if dests.contains(&x) {
+                trails.entry(x).or_default().insert(ekey(u as u32, e.to));
+            }
+        }
+    }
+    let mut todo: Vec<(String, HashSet<u64>)> = trails.into_iter().collect();
+    todo.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut picks: Vec<&Cand> = vec![];
+    for (x, edges) in todo {
+        if day.iter().any(|c| c.dest.to_lowercase() == x) {
+            continue;
+        }
+        let pick = cands
+            .iter()
+            .filter(|c| c.dest.to_lowercase() == x)
+            .filter(|c| {
+                let shared = c.edges.intersection(&edges).count() as f64;
+                shared / c.edges.len().max(1) as f64 >= NAMED_DEST_ALONG
+                    || shared / edges.len().max(1) as f64 >= NAMED_DEST_ALONG
+            })
+            .max_by(|a, b| a.score.total_cmp(&b.score).then(b.from.cmp(&a.from)));
+        picks.extend(pick);
+    }
+    // The best scoring, up to NAMED_DEST_EXTRA x n: a big park with dense
+    // trails names hundreds for where they go (the Adirondacks' ponds and
+    // peaks), and all of them added 174 hikes to its 15.
+    picks.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.dest.cmp(&b.dest)));
+    let room = (n as f64 * NAMED_DEST_EXTRA).round() as usize;
+    day.extend(picks.into_iter().take(room).cloned());
+}
+
 /// Each popular destination (see POPULAR_SITES) that no chosen hike goes to
 /// gets its best hike, best scoring first, up to
 /// POPULAR_EXTRA x n of them. Not checked for new ground: Lake Agnes is on
@@ -3725,6 +3787,7 @@ pub fn curate(
         .chain(famous_sights.iter().map(|s| s.as_str()))
         .collect();
     popular_dests(&mut day, &cands, &popular, n_day);
+    named_dests(&ctx, &mut day, &cands, n_day);
     real_trails(&mut day, &cands, &trails);
     let candidates: Vec<Value> = if CANDIDATES.load(Relaxed) {
         cands
