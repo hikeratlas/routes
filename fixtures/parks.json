@@ -515,5 +515,17 @@
       -81.28,
       45.34
     ]
+  },
+  {
+    "key": "writing-on-stone",
+    "id": "6367819",
+    "park": "Writing-on-Stone Provincial Park",
+    "why": "quality: park-listed trails as named regressions (routes#95)",
+    "bbox": [
+      -111.918,
+      49.016,
+      -111.589,
+      49.136
+    ]
   }
 ]
