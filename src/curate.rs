@@ -3268,8 +3268,9 @@ pub fn select(cands: &[Cand], n: usize, by_start: bool) -> Vec<Cand> {
 }
 
 /// Sites writing about a destination for it to be offered beyond the
-/// day-hike budget (see popular_dests).
-const POPULAR_SITES: u32 = 15;
+/// day-hike budget (see popular_dests). 15 left out Yoho's Sherbrooke Lake
+/// (8 sites): its start's one hike is Paget Peak, and Yoho's budget is full.
+const POPULAR_SITES: u32 = 8;
 /// Room for popular destinations beyond the day-hike budget, as a share of
 /// it.
 const POPULAR_EXTRA: f64 = 0.5;
