@@ -1821,6 +1821,13 @@ impl<'a> Ctx<'a> {
                 // A forked trail is long enough by all of it: its longest line
                 // stands for it, and named_trails walks it whole (trail_tour).
                 let long_enough = if branched { total >= min_m } else { m >= min_m };
+                // A short named loop, or a lollipop (a loop and its stick:
+                // branched, with fewer than two ends), is a walk in itself:
+                // nobody takes a loop to get somewhere. Pinery's nature
+                // trails: Riverside Trail, a 0.9 km loop; Pine Trail and
+                // Hickory Trail, lollipops of 0.7 and 1.0 km (routes#95).
+                let long_enough = long_enough
+                    || (total >= SIGNED_MIN_M && (is_loop || (branched && ends.len() < 2)));
                 // A short trail with its own trailhead sign: the park put it
                 // there for visitors (Cape Breton's Bog Trail, a 0.5 km
                 // boardwalk, routes#155). Its piece by the sign is enough:

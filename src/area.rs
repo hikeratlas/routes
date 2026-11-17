@@ -1460,7 +1460,31 @@ pub fn not_a_note(name: &str) -> String {
     if note {
         String::new()
     } else {
-        name.to_string()
+        without_length(name).to_string()
+    }
+}
+
+/// A name less a length in brackets at its end: Pinery's "Wilderness Trail
+/// (2.6 km)" is Wilderness Trail, as its signs and the park's guide name it.
+/// The length is a note for the map, and hikes named for the trail took it
+/// on ("Wilderness Trail (2.6 km) from Wilderness Trail (2.6 km) trailhead").
+fn without_length(name: &str) -> &str {
+    let t = name.trim_end();
+    let Some(open) = t.rfind('(') else { return name };
+    let Some(inner) = t[open + 1..].strip_suffix(')') else { return name };
+    let inner = inner.trim().to_lowercase();
+    let Some((num, unit)) = inner.split_once(|c: char| c.is_whitespace()).or_else(|| {
+        let i = inner.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == ','))?;
+        Some((&inner[..i], &inner[i..]))
+    }) else {
+        return name;
+    };
+    let num_ok = !num.is_empty() && num.chars().all(|c| c.is_ascii_digit() || c == '.' || c == ',');
+    let unit_ok = matches!(unit.trim(), "km" | "m" | "mi" | "mile" | "miles" | "kilometres" | "kilometers");
+    if num_ok && unit_ok && open > 0 {
+        t[..open].trim_end()
+    } else {
+        name
     }
 }
 
@@ -1476,6 +1500,17 @@ mod note_tests {
         assert_eq!(not_a_note("Lake O'Hara Fire Road"), "Lake O'Hara Fire Road");
         // "only" as part of a word is fine.
         assert_eq!(not_a_note("Onlyhill Trail"), "Onlyhill Trail");
+    }
+
+    #[test]
+    fn lengths_in_brackets_are_not_names() {
+        assert_eq!(not_a_note("Wilderness Trail (2.6 km)"), "Wilderness Trail");
+        assert_eq!(not_a_note("Sassafras (1.0 km)"), "Sassafras");
+        assert_eq!(not_a_note("Loop (3mi)"), "Loop");
+        // Other notes in brackets stay: they tell trails apart.
+        assert_eq!(not_a_note("Private beach path (Huron woods)"), "Private beach path (Huron woods)");
+        assert_eq!(not_a_note("Beach lookout (Wilderness trail)"), "Beach lookout (Wilderness trail)");
+        assert_eq!(not_a_note("(2 km)"), "(2 km)");
     }
 }
 
