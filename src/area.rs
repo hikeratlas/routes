@@ -256,6 +256,8 @@ struct Raw {
     /// Viewpoints mapped without a name (see Area::name_lookouts).
     views: Vec<P>,
     parkings: Vec<Place>,
+    /// Named bus stops in the park (see Area::bus_starts).
+    bus_stops: Vec<Place>,
     aisles: Vec<P>,
     /// Parking lots' outlines (the basemap's building layer, amenity=parking:
     /// in parks, city parks and campgrounds).
@@ -281,6 +283,7 @@ fn read_tile(
         spots: vec![],
         views: vec![],
         parkings: vec![],
+        bus_stops: vec![],
         aisles: vec![],
         lots: vec![],
         known: vec![],
@@ -534,6 +537,14 @@ fn read_tile(
                         let pt = s(x, y, l.extent);
                         let tourism = l.str(f, "tourism");
                         let amenity = l.str(f, "amenity");
+                        if l.str(f, "highway") == "bus_stop" && !name.is_empty() {
+                            raw.bus_stops.push(Place {
+                                name: without_direction(name).to_string(),
+                                pt,
+                                trailhead: true,
+                                osm_id: l.str(f, "osm_id").to_string(),
+                            });
+                        }
                         if amenity == "parking" || l.str(f, "highway") == "trailhead" {
                             raw.parkings.push(Place {
                                 name: not_a_note(name),
@@ -929,6 +940,26 @@ fn lookout_name(trail: &str) -> Option<&str> {
         .then_some(t)
 }
 
+/// How near a bus stop a road open to cars makes it a stop like any other,
+/// not a start (Area::bus_starts), in metres.
+const BUS_CAR_M: f64 = 100.0;
+
+/// A bus stop's name less the way the bus is going: "Le Relais Lake Bound",
+/// the stop at Le Relais for buses to the lake, is Le Relais.
+fn without_direction(name: &str) -> &str {
+    let Some(t) = name.strip_suffix(" Bound").or_else(|| name.strip_suffix(" bound")) else {
+        return name;
+    };
+    for dir in ["Parking Lot", "Parking", "Lake", "North", "South", "East", "West", "Up", "Down"] {
+        if let Some(rest) = t.strip_suffix(dir).and_then(|r| r.strip_suffix(' ')) {
+            if !rest.is_empty() {
+                return rest;
+            }
+        }
+    }
+    name
+}
+
 /// "Mt. Hunter Lower Lookout" for "Mt. Hunter Lookout" and "Lower": the word
 /// before the last one.
 pub fn with_word(base: &str, word: &str) -> String {
@@ -1095,6 +1126,7 @@ impl Area {
         let mut known: HashMap<String, crate::recall::Known> = HashMap::new();
         let mut lake_pts: HashMap<u32, (f64, f64, f64)> = HashMap::new();
         let mut lift_pieces = vec![];
+        let mut bus_stops: Vec<Place> = vec![];
         for mut r in raws {
             r.dests.retain(|d| d.lake.is_none_or(|id| lake_seen.insert(id)));
             for (id, p) in &r.data.lakes {
@@ -1112,6 +1144,7 @@ impl Area {
             area.spots.extend(r.spots);
             area.views.extend(r.views);
             area.parkings.extend(r.parkings);
+            bus_stops.extend(r.bus_stops);
             area.aisles.extend(r.aisles);
             lift_pieces.extend(r.lifts);
             for k in r.known {
@@ -1141,7 +1174,38 @@ impl Area {
             }
         }
         area.drop_glacier_trails();
+        area.bus_starts(bus_stops);
         area
+    }
+
+    /// A bus stop beyond the roads cars can drive is where hikes start: no
+    /// road open to cars within BUS_CAR_M of it (roads closed to private
+    /// cars are tracks here). Yoho's Le Relais, at the end of the bus-only
+    /// Lake O'Hara Fire Road, starts Lake McArthur, Lake Oesa and the
+    /// Opabin Plateau, 11 km from the lot where cars stop. A stop on a road
+    /// cars drive has a lot or a trail meeting the road nearby already.
+    fn bus_starts(&mut self, stops: Vec<Place>) {
+        if stops.is_empty() {
+            return;
+        }
+        let g = &self.graph;
+        let mut roads: HashMap<(u32, u32), Vec<P>> = HashMap::new();
+        for (u, adj) in g.adj.iter().enumerate() {
+            if adj.iter().any(|e| g.ways[e.way as usize].class == Class::Road) {
+                roads.entry(geo::tile_of(g.pts[u])).or_default().push(g.pts[u]);
+            }
+        }
+        for stop in stops {
+            let (tx, ty) = geo::tile_of(stop.pt);
+            let by_car = (tx.saturating_sub(1)..=tx + 1).any(|x| {
+                (ty.saturating_sub(1)..=ty + 1).any(|y| {
+                    roads.get(&(x, y)).is_some_and(|v| v.iter().any(|&q| metres(q, stop.pt) <= BUS_CAR_M))
+                })
+            });
+            if !by_car {
+                self.parkings.push(stop);
+            }
+        }
     }
 
     /// The lookouts a trail named for one leads to ("Mt. Hunter Lookout
@@ -1517,6 +1581,15 @@ mod note_tests {
         assert_eq!(not_a_note("Private beach path (Huron woods)"), "Private beach path (Huron woods)");
         assert_eq!(not_a_note("Beach lookout (Wilderness trail)"), "Beach lookout (Wilderness trail)");
         assert_eq!(not_a_note("(2 km)"), "(2 km)");
+    }
+
+    #[test]
+    fn bus_stops_lose_their_direction() {
+        use super::without_direction;
+        assert_eq!(without_direction("Le Relais Lake Bound"), "Le Relais");
+        assert_eq!(without_direction("Warden Cabin Parking Lot Bound"), "Warden Cabin");
+        assert_eq!(without_direction("Lake O'Hara"), "Lake O'Hara");
+        assert_eq!(without_direction("Lake Bound"), "Lake Bound");
     }
 }
 
