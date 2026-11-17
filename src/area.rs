@@ -587,6 +587,12 @@ fn read_tile(
                             Some(Kind::Hut)
                         } else if matches!(l.str(f, "natural"), "arch" | "beach" | "cave_entrance")
                             || (tourism == "attraction" && !l.str(f, "natural").is_empty())
+                            // A historic site mapped as an attraction: Writing-
+                            // on-Stone's Battle Scene Petroglyph, an
+                            // archaeological site (routes#95). Not one without
+                            // tourism=attraction: many such sites aren't for
+                            // visiting.
+                            || (tourism == "attraction" && !l.str(f, "historic").is_empty())
                         {
                             Some(Kind::Sight)
                         } else {
