@@ -187,6 +187,8 @@ pub struct Area {
     /// picnic sites, waterfalls, beaches (OSM nodes). For a short trail's
     /// dead end (curate's named_pieces).
     pub spots: Vec<P>,
+    /// Viewpoints mapped without a name (see Area::name_lookouts).
+    pub views: Vec<P>,
     pub parkings: Vec<Place>,
     /// Lots mapped only by their aisles: the middle of each piece of
     /// service=parking_aisle road (the basemap's parking_aisle flag).
@@ -921,6 +923,19 @@ fn lookout_name(trail: &str) -> Option<&str> {
         .then_some(t)
 }
 
+/// "Mt. Hunter Lower Lookout" for "Mt. Hunter Lookout" and "Lower": the word
+/// before the last one.
+fn with_word(base: &str, word: &str) -> String {
+    match base.rsplit_once(' ') {
+        Some((a, b)) => format!("{a} {word} {b}"),
+        None => format!("{word} {base}"),
+    }
+}
+
+/// Two lookouts of one trail nearer than this are one (Area::name_lookouts),
+/// in metres.
+const LOOKOUT_APART_M: f64 = 300.0;
+
 /// How near a trail named for a lookout an unnamed viewpoint is that lookout
 /// (Area::name_lookouts), in metres: Mt. Hunter's tower is 204 m from its
 /// trail as mapped.
@@ -1042,6 +1057,7 @@ impl Area {
             dests: vec![],
             camps: vec![],
             spots: vec![],
+            views: vec![],
             parkings: vec![],
             aisles: vec![],
             known: vec![],
@@ -1073,7 +1089,6 @@ impl Area {
         let mut known: HashMap<String, crate::recall::Known> = HashMap::new();
         let mut lake_pts: HashMap<u32, (f64, f64, f64)> = HashMap::new();
         let mut lift_pieces = vec![];
-        let mut views: Vec<P> = vec![];
         for mut r in raws {
             r.dests.retain(|d| d.lake.is_none_or(|id| lake_seen.insert(id)));
             for (id, p) in &r.data.lakes {
@@ -1089,7 +1104,7 @@ impl Area {
             area.dests.extend(r.dests);
             area.camps.extend(r.camps);
             area.spots.extend(r.spots);
-            views.extend(r.views);
+            area.views.extend(r.views);
             area.parkings.extend(r.parkings);
             area.aisles.extend(r.aisles);
             lift_pieces.extend(r.lifts);
@@ -1120,36 +1135,45 @@ impl Area {
             }
         }
         area.drop_glacier_trails();
-        area.name_lookouts(&views);
         area
     }
 
-    /// A viewpoint mapped without a name, on a trail named for a lookout,
-    /// is that lookout: a destination named for the trail, less its
-    /// "Trail" ("Mt. Hunter Lookout"), where the trail comes nearest it.
-    /// Yoho's Mt. Hunter Lookout Trail climbs past its lower lookout, an
-    /// observation tower mapped as a viewpoint with no name, 204 m off the
-    /// trail as mapped, so no hike went there. The trail within LOOKOUT_ON_M
-    /// of the viewpoint; once a trail, for the viewpoint nearest it; not
-    /// where a destination already has the name.
-    fn name_lookouts(&mut self, views: &[P]) {
+    /// The lookouts a trail named for one leads to ("Mt. Hunter Lookout
+    /// Trail", see lookout_name), as destinations named for it: a viewpoint
+    /// mapped without a name within LOOKOUT_ON_M of the trail, where the trail
+    /// comes nearest it, and the trail's dead end away from any lot or
+    /// trailhead (where it leads). Two of them more than LOOKOUT_APART_M
+    /// apart are the lower and upper lookout, by the DEM ("Mt. Hunter Lower
+    /// Lookout", "Mt. Hunter Upper Lookout"); one is the trail's ("Mt. Hunter
+    /// Lookout"). Yoho's Mt. Hunter Lookout Trail climbs past its lower
+    /// lookout, an observation tower mapped as a viewpoint with no name
+    /// 204 m off the trail as mapped, to its upper one at the trail's end,
+    /// mapped as nothing: no hike went to either. Not where a destination
+    /// already has the name. Called once the area is loaded (main).
+    pub fn name_lookouts(&mut self, dem: &crate::dem::Dem) {
         let g = &self.graph;
-        let lookout = |w: &Way| matches!(w.class, Class::Trail | Class::Track) && lookout_name(&w.name).is_some();
-        // The nodes of such trails, by z14 tile.
+        // Each such trail's nodes, and by z14 tile.
+        let mut trails: HashMap<&str, Vec<u32>> = HashMap::new();
         let mut near: HashMap<(u32, u32), Vec<(u32, u32)>> = HashMap::new();
         for (u, adj) in g.adj.iter().enumerate() {
             for e in adj {
-                if lookout(&g.ways[e.way as usize]) {
+                let w = &g.ways[e.way as usize];
+                if matches!(w.class, Class::Trail | Class::Track) && lookout_name(&w.name).is_some() {
                     near.entry(geo::tile_of(g.pts[u])).or_default().push((u as u32, e.way));
+                    let ns = trails.entry(w.name.as_str()).or_default();
+                    if ns.last() != Some(&(u as u32)) {
+                        ns.push(u as u32);
+                    }
                 }
             }
         }
-        if near.is_empty() {
+        if trails.is_empty() {
             return;
         }
-        // Each trail's nearest viewpoint.
-        let mut best: HashMap<&str, (f64, P)> = HashMap::new();
-        for &v in views {
+        // Each trail's nearest unnamed viewpoint, at the trail.
+        let mut found: HashMap<&str, Vec<P>> = HashMap::new();
+        let mut best: HashMap<&str, (f64, u32)> = HashMap::new();
+        for &v in &self.views {
             let (tx, ty) = geo::tile_of(v);
             let mut hit: Option<(f64, u32, u32)> = None;
             for x in tx.saturating_sub(1)..=tx + 1 {
@@ -1165,17 +1189,44 @@ impl Area {
             if let Some((m, w, n)) = hit {
                 let name = g.ways[w as usize].name.as_str();
                 if best.get(name).is_none_or(|b| m < b.0) {
-                    best.insert(name, (m, g.pts[n as usize]));
+                    best.insert(name, (m, n));
                 }
             }
         }
-        let mut found: Vec<(String, P)> = best
-            .into_iter()
-            .filter_map(|(name, (_, v))| Some((lookout_name(name)?.to_string(), v)))
-            .filter(|(n, _)| !self.dests.iter().any(|d| d.name.eq_ignore_ascii_case(n)))
-            .collect();
-        found.sort_by(|a, b| a.0.cmp(&b.0));
-        for (name, pt) in found {
+        for (name, (_, n)) in best {
+            found.entry(name).or_default().push(g.pts[n as usize]);
+        }
+        // Each trail's dead ends away from lots and trailheads.
+        for (&name, ns) in &trails {
+            for &n in ns {
+                let p = g.pts[n as usize];
+                if g.adj[n as usize].len() == 1
+                    && !self.parkings.iter().any(|l| metres(l.pt, p) <= GAP_LOT_M)
+                {
+                    found.entry(name).or_default().push(p);
+                }
+            }
+        }
+        let mut add: Vec<(String, P)> = vec![];
+        for (trail, mut pts) in found {
+            let Some(base) = lookout_name(trail) else { continue };
+            pts.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            pts.dedup_by(|a, b| metres(*a, *b) <= LOOKOUT_APART_M);
+            match pts.len() {
+                1 => add.push((base.to_string(), pts[0])),
+                2 => {
+                    let ele = dem.profile(&pts);
+                    let (lo, hi) = if ele[0] <= ele[1] { (pts[0], pts[1]) } else { (pts[1], pts[0]) };
+                    add.push((with_word(base, "Lower"), lo));
+                    add.push((with_word(base, "Upper"), hi));
+                }
+                // More than two: which is which isn't clear.
+                _ => {}
+            }
+        }
+        add.retain(|(n, _)| !self.dests.iter().any(|d| d.name.eq_ignore_ascii_case(n)));
+        add.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.partial_cmp(&b.1).unwrap()));
+        for (name, pt) in add {
             self.dests.push(Dest {
                 name,
                 kind: Kind::Viewpoint,
