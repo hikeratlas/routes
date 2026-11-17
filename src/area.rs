@@ -251,6 +251,8 @@ struct Raw {
     dests: Vec<Dest>,
     camps: Vec<Place>,
     spots: Vec<P>,
+    /// Viewpoints mapped without a name (see Area::name_lookouts).
+    views: Vec<P>,
     parkings: Vec<Place>,
     aisles: Vec<P>,
     /// Parking lots' outlines (the basemap's building layer, amenity=parking:
@@ -275,6 +277,7 @@ fn read_tile(
         dests: vec![],
         camps: vec![],
         spots: vec![],
+        views: vec![],
         parkings: vec![],
         aisles: vec![],
         lots: vec![],
@@ -553,6 +556,9 @@ fn read_tile(
                         {
                             raw.spots.push(pt);
                         }
+                        if tourism == "viewpoint" && name.is_empty() {
+                            raw.views.push(pt);
+                        }
                         if sleep {
                             raw.camps.push(Place {
                                 name: name.to_string(),
@@ -743,6 +749,7 @@ impl Graph {
             }
         }
         g.join_lots(raws.iter().flat_map(|r| &r.lots));
+        g.join_gaps(raws.iter().flat_map(|r| r.parkings.iter().map(|p| p.pt)));
         g
     }
 
@@ -817,7 +824,114 @@ impl Graph {
             self.adj[o as usize].push(Edge { to: t, m, cost: m * 1.3, way: join });
         }
     }
+    /// A trail that dead-ends by a parking lot or trailhead, just short of
+    /// another way's dead end, goes on to it, across what is a gap in the
+    /// mapping: Yoho's Mt. Hunter Lookout Trail ends 11 m from the end of
+    /// Wapta Falls Road, 38 m from the lookout's lot, joined to nothing, so
+    /// no trailhead reached it. Each such trail dead end (within GAP_LOT_M
+    /// of a lot or trailhead) gets a way (a track's cost) to the nearest dead
+    /// end of another way within GAP_M. Only end to end, and only by a lot:
+    /// elsewhere a trail ending near another may be across a fence, a
+    /// stream or a cliff (joining every such pair changed 96 of the
+    /// fixtures' hikes).
+    fn join_gaps(&mut self, lots: impl Iterator<Item = P>) {
+        let mut by_lot: HashMap<(u32, u32), Vec<P>> = HashMap::new();
+        for p in lots {
+            by_lot.entry(geo::tile_of(p)).or_default().push(p);
+        }
+        let near_lot = |p: P| {
+            let (tx, ty) = geo::tile_of(p);
+            (tx.saturating_sub(1)..=tx + 1).any(|x| {
+                (ty.saturating_sub(1)..=ty + 1).any(|y| {
+                    by_lot.get(&(x, y)).is_some_and(|v| v.iter().any(|&q| metres(p, q) <= GAP_LOT_M))
+                })
+            })
+        };
+        let dead: Vec<u32> = (0..self.pts.len() as u32).filter(|&n| self.adj[n as usize].len() == 1).collect();
+        if dead.is_empty() {
+            return;
+        }
+        // World units are smaller than metres toward the poles: cells of
+        // 4 * GAP_M units hold GAP_M up to 75 degrees.
+        let cell = |p: P| ((p.0 / (4.0 * GAP_M)).floor() as i64, (p.1 / (4.0 * GAP_M)).floor() as i64);
+        let mut grid: HashMap<(i64, i64), Vec<u32>> = HashMap::new();
+        for &n in &dead {
+            grid.entry(cell(self.pts[n as usize])).or_default().push(n);
+        }
+        let join = self.ways.len() as u32;
+        self.ways.push(Way {
+            name: String::new(),
+            class: Class::Track,
+            bike: false,
+            walk: false,
+            sac: 0,
+            lot: false,
+            oneway: false,
+        });
+        let mut add: Vec<(u32, u32, f64)> = vec![];
+        for &t in &dead {
+            let tw = self.adj[t as usize][0].way;
+            if self.ways[tw as usize].class != Class::Trail {
+                continue;
+            }
+            let p = self.pts[t as usize];
+            if !near_lot(p) {
+                continue;
+            }
+            let (cx, cy) = cell(p);
+            let mut best: Option<(f64, u32)> = None;
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    for &o in grid.get(&(cx + dx, cy + dy)).map(|v| &v[..]).unwrap_or(&[]) {
+                        if o == t || self.adj[o as usize][0].way == tw {
+                            continue;
+                        }
+                        let m = metres(p, self.pts[o as usize]);
+                        if m <= GAP_M && best.is_none_or(|b| (m, o) < b) {
+                            best = Some((m, o));
+                        }
+                    }
+                }
+            }
+            if let Some((m, o)) = best {
+                // Once a pair, when both ends are trails' and nearest each other.
+                if !add.iter().any(|&(a, b, _)| (a, b) == (o, t)) {
+                    add.push((t, o, m));
+                }
+            }
+        }
+        for (t, o, m) in add {
+            let m = m as f32;
+            self.adj[t as usize].push(Edge { to: o, m, cost: m * 1.3, way: join });
+            self.adj[o as usize].push(Edge { to: t, m, cost: m * 1.3, way: join });
+        }
+    }
 }
+
+/// The lookout a trail is named for: "Mt. Hunter Lookout" for "Mt. Hunter
+/// Lookout Trail". Only "<name> Lookout|Overlook|Viewpoint Trail", where
+/// <name> says which: "Lookout Trail" alone, "Viewpoint Loop" or "Little
+/// River Viewpoint Nature Trail" don't name one.
+fn lookout_name(trail: &str) -> Option<&str> {
+    let t = trail.strip_suffix(" Trail").or_else(|| trail.strip_suffix(" trail"))?;
+    let lower = t.to_lowercase();
+    ["lookout", "look out", "overlook", "viewpoint"]
+        .iter()
+        .any(|k| lower.ends_with(&format!(" {k}")))
+        .then_some(t)
+}
+
+/// How near a trail named for a lookout an unnamed viewpoint is that lookout
+/// (Area::name_lookouts), in metres: Mt. Hunter's tower is 204 m from its
+/// trail as mapped.
+const LOOKOUT_ON_M: f64 = 250.0;
+
+/// How near another way's dead end a trail's dead end is joined to it
+/// (Graph::join_gaps), in metres.
+const GAP_M: f64 = 20.0;
+/// How near a parking lot or trailhead a trail's dead end must be for
+/// Graph::join_gaps to join it (as SIGNED_END_M, curate's for a spur's).
+const GAP_LOT_M: f64 = 150.0;
 
 /// How close (world units, ~1 m) a node must be to a lot's outline to be on it.
 const ON_OUTLINE: f64 = 2.0;
@@ -959,6 +1073,7 @@ impl Area {
         let mut known: HashMap<String, crate::recall::Known> = HashMap::new();
         let mut lake_pts: HashMap<u32, (f64, f64, f64)> = HashMap::new();
         let mut lift_pieces = vec![];
+        let mut views: Vec<P> = vec![];
         for mut r in raws {
             r.dests.retain(|d| d.lake.is_none_or(|id| lake_seen.insert(id)));
             for (id, p) in &r.data.lakes {
@@ -974,6 +1089,7 @@ impl Area {
             area.dests.extend(r.dests);
             area.camps.extend(r.camps);
             area.spots.extend(r.spots);
+            views.extend(r.views);
             area.parkings.extend(r.parkings);
             area.aisles.extend(r.aisles);
             lift_pieces.extend(r.lifts);
@@ -1004,7 +1120,75 @@ impl Area {
             }
         }
         area.drop_glacier_trails();
+        area.name_lookouts(&views);
         area
+    }
+
+    /// A viewpoint mapped without a name, on a trail named for a lookout,
+    /// is that lookout: a destination named for the trail, less its
+    /// "Trail" ("Mt. Hunter Lookout"), where the trail comes nearest it.
+    /// Yoho's Mt. Hunter Lookout Trail climbs past its lower lookout, an
+    /// observation tower mapped as a viewpoint with no name, 204 m off the
+    /// trail as mapped, so no hike went there. The trail within LOOKOUT_ON_M
+    /// of the viewpoint; once a trail, for the viewpoint nearest it; not
+    /// where a destination already has the name.
+    fn name_lookouts(&mut self, views: &[P]) {
+        let g = &self.graph;
+        let lookout = |w: &Way| matches!(w.class, Class::Trail | Class::Track) && lookout_name(&w.name).is_some();
+        // The nodes of such trails, by z14 tile.
+        let mut near: HashMap<(u32, u32), Vec<(u32, u32)>> = HashMap::new();
+        for (u, adj) in g.adj.iter().enumerate() {
+            for e in adj {
+                if lookout(&g.ways[e.way as usize]) {
+                    near.entry(geo::tile_of(g.pts[u])).or_default().push((u as u32, e.way));
+                }
+            }
+        }
+        if near.is_empty() {
+            return;
+        }
+        // Each trail's nearest viewpoint.
+        let mut best: HashMap<&str, (f64, P)> = HashMap::new();
+        for &v in views {
+            let (tx, ty) = geo::tile_of(v);
+            let mut hit: Option<(f64, u32, u32)> = None;
+            for x in tx.saturating_sub(1)..=tx + 1 {
+                for y in ty.saturating_sub(1)..=ty + 1 {
+                    for &(n, w) in near.get(&(x, y)).map(|v| &v[..]).unwrap_or(&[]) {
+                        let m = metres(g.pts[n as usize], v);
+                        if m <= LOOKOUT_ON_M && hit.is_none_or(|h| (m, w, n) < h) {
+                            hit = Some((m, w, n));
+                        }
+                    }
+                }
+            }
+            if let Some((m, w, n)) = hit {
+                let name = g.ways[w as usize].name.as_str();
+                if best.get(name).is_none_or(|b| m < b.0) {
+                    best.insert(name, (m, g.pts[n as usize]));
+                }
+            }
+        }
+        let mut found: Vec<(String, P)> = best
+            .into_iter()
+            .filter_map(|(name, (_, v))| Some((lookout_name(name)?.to_string(), v)))
+            .filter(|(n, _)| !self.dests.iter().any(|d| d.name.eq_ignore_ascii_case(n)))
+            .collect();
+        found.sort_by(|a, b| a.0.cmp(&b.0));
+        for (name, pt) in found {
+            self.dests.push(Dest {
+                name,
+                kind: Kind::Viewpoint,
+                pt,
+                area: 0.0,
+                wikidata: String::new(),
+                osm_ids: vec![],
+                qrank: 1.0,
+                mentions: 0,
+                lake: None,
+                minor: false,
+            });
+        }
     }
 
     /// Whether a point is on a glacier (land cover).
