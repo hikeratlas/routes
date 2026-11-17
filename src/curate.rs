@@ -2737,6 +2737,11 @@ impl<'a> Ctx<'a> {
             else {
                 continue;
             };
+            let (node, m) = if access.len() > 1 {
+                self.along_shore(&s, access, node, m, max_m)
+            } else {
+                (node, m)
+            };
             let name = self.dests[*di].name.as_str();
             if best.get(name).is_some_and(|b| b.1 <= m) {
                 continue;
@@ -2790,6 +2795,54 @@ impl<'a> Ctx<'a> {
             }
         }
         out
+    }
+
+    /// Where a hike to a lake ends: a trail that goes on along the shore
+    /// from where it first meets the lake is walked to the shore's end
+    /// (Yoho's Sherbrooke Lake: the trail meets the south end and follows
+    /// the east shore 1.4 km to the head of the lake), up to SHORE_MAX_M
+    /// further. Not where the shore trail rings the lake, or branches
+    /// (a circuit, or a lakeside campground's paths): no one end.
+    fn along_shore(&self, s: &Search, access: &[u32], node: u32, m: f64, max_m: f64) -> (u32, f64) {
+        let g = &self.area.graph;
+        let shore: HashSet<u32> = access.iter().copied().collect();
+        // The shore trail from `node`: the nodes reached keeping to the
+        // shore, and the edges between them.
+        let mut seen: HashSet<u32> = HashSet::default();
+        seen.insert(node);
+        let mut todo = vec![node];
+        let mut edges = 0usize;
+        while let Some(u) = todo.pop() {
+            let mut next = 0;
+            for e in &g.adj[u as usize] {
+                if e.to == u || !shore.contains(&e.to) {
+                    continue;
+                }
+                next += 1;
+                edges += 1;
+                if seen.insert(e.to) {
+                    todo.push(e.to);
+                }
+            }
+            if next > 2 {
+                return (node, m);
+            }
+        }
+        // Each edge was counted from both ends: a path has one fewer edge
+        // than nodes; a ring has as many.
+        if edges / 2 >= seen.len() {
+            return (node, m);
+        }
+        let far = seen
+            .iter()
+            .filter_map(|&n| s.reached(n).map(|fm| (n, fm)))
+            .filter(|&(_, fm)| fm <= max_m && fm - m <= SHORE_MAX_M)
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap().then(b.0.cmp(&a.0)));
+        match far {
+            // Only if the way there is by the shore from `node`.
+            Some((f, fm)) if f != node && s.path(f).0.contains(&node) => (f, fm),
+            _ => (node, m),
+        }
     }
 
     /// The first named trail (else road) reached walking out from a node.
@@ -3364,6 +3417,10 @@ fn shortest_approaches(cands: &mut Vec<Cand>) {
 /// See shortest_approaches: how much more a longer way to the same hike may
 /// score and still give way, and how much of the shorter it must walk.
 const APPROACH_SLACK: f64 = 0.25;
+
+/// See Ctx::along_shore: how much further a hike to a lake may follow its
+/// shore trail.
+const SHORE_MAX_M: f64 = 2000.0;
 const APPROACH_SHARED: f64 = 0.9;
 
 /// A named trail that's a trail people walk, not a scramble or climbing
