@@ -527,5 +527,17 @@
       -111.589,
       49.136
     ]
+  },
+  {
+    "key": "pinery",
+    "id": "13757327",
+    "park": "Pinery Provincial Park",
+    "why": "quality: park-listed trails as named regressions (routes#95)",
+    "bbox": [
+      -81.914,
+      43.205,
+      -81.757,
+      43.314
+    ]
   }
 ]
