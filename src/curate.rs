@@ -3426,20 +3426,29 @@ fn reach_m(c: &Cand) -> f64 {
 /// Stave Spring (all rated bizarre or meh for it, fixtures/gut-check.jsonl).
 /// Not named trails' own hikes: a trail is walked, not gone to.
 fn nearest_starts(cands: &mut Vec<Cand>) {
-    let mut nearest: HashMap<&str, f64> = HashMap::default();
+    // Each place's nearest start: how far its hike walks there, and its
+    // score.
+    let mut nearest: HashMap<&str, (f64, f64)> = HashMap::default();
     for c in cands.iter().filter(|c| c.dest_kind != Kind::Trail) {
         let r = reach_m(c);
-        let e = nearest.entry(c.dest.as_str()).or_insert(r);
-        *e = e.min(r);
+        let e = nearest.entry(c.dest.as_str()).or_insert((r, c.score));
+        if r < e.0 {
+            *e = (r, c.score);
+        }
     }
     let far: Vec<bool> = cands
         .iter()
         .map(|c| {
             c.dest_kind != Kind::Trail
-                && nearest.get(c.dest.as_str()).is_some_and(|&n| {
+                && nearest.get(c.dest.as_str()).is_some_and(|&(n, n_score)| {
                     let r = reach_m(c);
-                    let factor = if c.kind == "loop" { NEAREST_FACTOR_LOOP } else { NEAREST_FACTOR };
-                    r > n * factor && r > n + NEAREST_SLACK_M
+                    if c.kind == "loop" {
+                        r > n * NEAREST_FACTOR_LOOP
+                            && r > n + NEAREST_SLACK_M
+                            && c.score < n_score + NEAREST_LOOP_BETTER
+                    } else {
+                        r > n * NEAREST_FACTOR && r > n + NEAREST_SLACK_M
+                    }
                 })
         })
         .collect();
@@ -3451,13 +3460,17 @@ fn nearest_starts(cands: &mut Vec<Cand>) {
 }
 
 const NEAREST_FACTOR: f64 = 2.0;
-/// A loop is a walk of its own, past the place it's named for, more than a
-/// way there: it gives way only to a start that reaches its place in a
-/// quarter of its walk there. Rocky Mountain's Dream Lake loop, 7.9 km to
-/// the lake, 1.5 from Bear Lake (5.3 times), and Garibaldi's Brandvold Falls
-/// (4.5) go; Bryce Canyon's loop past Bryce Point (2.7) and Mont-Tremblant's
-/// past Chute du Diable (1.5), rated sensible, stay.
-const NEAREST_FACTOR_LOOP: f64 = 4.0;
+/// A loop is a walk of its own past the place it's named for, more than a
+/// way there: it gives way to the nearest start only from three times as
+/// far, and only if it doesn't score NEAREST_LOOP_BETTER more than the
+/// nearest start's hike there. Garibaldi's Brandvold Falls was a loop
+/// reaching the falls 11.2 km from Squamish Canyon, then 9.2 from Rhum And
+/// Eigg Drive, 2.5 from Diamond Head, whose hike there scores as well;
+/// Rocky Mountain's Dream Lake loop, 7.9 km to the lake, 1.5 from Bear Lake.
+/// Yoho's Mount Field loop (2.2 times) and Bryce Canyon's past Bryce Point
+/// (2.7), rated sensible, stay (fixtures/gut-check.jsonl).
+const NEAREST_FACTOR_LOOP: f64 = 3.0;
+const NEAREST_LOOP_BETTER: f64 = 1.0;
 const NEAREST_SLACK_M: f64 = 2000.0;
 
 fn shortest_approaches(cands: &mut Vec<Cand>) {
