@@ -3436,10 +3436,10 @@ fn nearest_starts(cands: &mut Vec<Cand>) {
         .iter()
         .map(|c| {
             c.dest_kind != Kind::Trail
-                && c.kind != "loop"
                 && nearest.get(c.dest.as_str()).is_some_and(|&n| {
                     let r = reach_m(c);
-                    r > n * NEAREST_FACTOR && r > n + NEAREST_SLACK_M
+                    let factor = if c.kind == "loop" { NEAREST_FACTOR_LOOP } else { NEAREST_FACTOR };
+                    r > n * factor && r > n + NEAREST_SLACK_M
                 })
         })
         .collect();
@@ -3451,6 +3451,13 @@ fn nearest_starts(cands: &mut Vec<Cand>) {
 }
 
 const NEAREST_FACTOR: f64 = 2.0;
+/// A loop is a walk of its own, past the place it's named for, more than a
+/// way there: it gives way only to a start that reaches its place in a
+/// quarter of its walk there. Rocky Mountain's Dream Lake loop, 7.9 km to
+/// the lake, 1.5 from Bear Lake (5.3 times), and Garibaldi's Brandvold Falls
+/// (4.5) go; Bryce Canyon's loop past Bryce Point (2.7) and Mont-Tremblant's
+/// past Chute du Diable (1.5), rated sensible, stay.
+const NEAREST_FACTOR_LOOP: f64 = 4.0;
 const NEAREST_SLACK_M: f64 = 2000.0;
 
 fn shortest_approaches(cands: &mut Vec<Cand>) {
