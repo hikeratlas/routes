@@ -3436,6 +3436,7 @@ fn nearest_starts(cands: &mut Vec<Cand>) {
         .iter()
         .map(|c| {
             c.dest_kind != Kind::Trail
+                && c.kind != "loop"
                 && nearest.get(c.dest.as_str()).is_some_and(|&n| {
                     let r = reach_m(c);
                     r > n * NEAREST_FACTOR && r > n + NEAREST_SLACK_M
