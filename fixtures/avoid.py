@@ -101,6 +101,21 @@ def match(d, r, types):
     return None
 
 
+def still_there(d, r):
+    """Another offered day hike to the rated hike's destination: its title
+    and length, or None."""
+    p = os.path.join(d, r['fixture'], 'routes.geojsonl')
+    if not os.path.exists(p) or r.get('dest_kind') == 'trail':
+        return None
+    dest = r['dest'].lower()
+    for l in open(p):
+        q = json.loads(l)['properties']
+        t = (q.get('title') or '')
+        if q.get('type') == 'day' and (t.lower() == dest or t.lower().startswith(dest + ' from ')):
+            return f"{t} ({q.get('km')} km)"
+    return None
+
+
 GROUPS = [
     ('Bizarre, still offered', lambda r: r['verdict'] == 'bad', None, 'fewer is better'),
     ('Better overnight, still a day hike', lambda r: r.get('category') == 'multi', {'day'}, 'fewer is better'),
@@ -126,8 +141,19 @@ for name, sel, types, better in GROUPS:
     back = [r for r in run if n[r['id']] and not b[r['id']]]
     for what, rs2 in (('no longer offered', gone), ('offered again', back)):
         if rs2:
-            items = '\n'.join(f"- {r['title']} ({r['park']}, {r['route']['km']} km)"
-                              + (f": {r['note'].splitlines()[0][:140]}" if r.get('note') else '') for r in rs2)
+            def line(r):
+                out = f"- {r['title']} ({r['park']}, {r['route']['km']} km)"
+                if r.get('note'):
+                    out += f": {r['note'].splitlines()[0][:140]}"
+                # A hike that no longer goes may give way to another to the
+                # same place, as bad (routes#250: Brandvold Falls from one far
+                # start, then another): say which.
+                if what == 'no longer offered':
+                    other = still_there(new_dir, r)
+                    if other:
+                        out += f"\n  - ⚠️ its place is still offered: {other}"
+                return out
+            items = '\n'.join(line(r) for r in rs2)
             details.append(f"<details><summary>{name}: {len(rs2)} {what}</summary>\n\n{items}\n\n</details>\n")
 print()
 for d in details:
