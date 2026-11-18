@@ -176,3 +176,31 @@ looks up the place its name goes to (Lake Annette Loop: Annette Lake) on
 OSM's Nominatim, inside the park's outline, and gives it `near` and
 `near_bbox` to show instead. Run it after adding drafts; it leaves alone
 those it has done.
+
+## The anti-oracle
+
+The oracle (`oracle.py`) and the entries above reward offering hikes; nothing
+pushes back on offering bizarre ones. `gut-check.jsonl` holds gut ratings of
+hikes routes offered (routes#95): would a person pick this? Each line is one
+rated hike, `verdict` `good`, `meh` or `bad`, `category` `multi` where it's
+better as an overnight trip than a day hike, the `reasons` and `note` given,
+and the hike as routes proposed it then: its line, start and destination,
+score parts and route (the candidate record), with the routes commit and
+tiles it came from in the first line. They're the raw data for new rules
+whatever routes does later.
+
+`fixtures/avoid.py BASE NEW` compares two runs on them: bizarre hikes still
+offered, overnight trips still offered as day hikes (fewer is better), and
+sensible hikes still offered (as many is better, so a change that drops
+bizarre hikes by dropping everything shows). A rated hike counts as offered
+when an offered hike in its park is the same walk, each within 50 m of 80%
+of the other: a name, start or score may change, the walk is what was rated.
+CI reports it beside the oracle, and it never fails the job.
+
+The first 73 ratings came from a page that showed 150 offered hikes from the
+fixture parks, each on a map with a link to its hike sheet:
+`gut-check-sample.py` samples them from a `run.sh` run with
+`ROUTES_ARGS=--candidates` (oversampling ones with suspicious features: much
+road, a loop that retraces itself, many named ways, very long or short), and
+`gut-check-links.py` finds each one's hike sheet in the live build. To add
+ratings, sample again, rate, and append lines in the same shape.

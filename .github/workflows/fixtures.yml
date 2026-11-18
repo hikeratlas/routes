@@ -351,6 +351,14 @@ jobs:
           echo "#### With this change" >> "$GITHUB_STEP_SUMMARY"
           python3 new/fixtures/expect.py out/new/new | tee -a "$GITHUB_STEP_SUMMARY"
 
+      # Hikes a person wouldn't pick (fixtures/gut-check.jsonl, gut ratings
+      # of offered hikes): how many bizarre ones are still offered, and how
+      # many sensible ones. Information: it never fails the job.
+      - name: Anti-oracle
+        if: github.event_name == 'pull_request'
+        run: |
+          python3 new/fixtures/avoid.py prev/base out/new/new | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Compare on the oracle sample
         if: github.event_name == 'pull_request'
         run: |

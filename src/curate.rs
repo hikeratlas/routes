@@ -3386,6 +3386,25 @@ fn in_park_share(area: &Area, line: &[P]) -> f64 {
 /// How much of a day hike must be in the park (see curate).
 const DAY_IN_PARK: f64 = 0.25;
 
+/// A day hike is at most DAY_EFFORT_KM "effort kilometres": its length in
+/// km plus 1 km for each 100 m it climbs (the Swiss Leistungskilometer,
+/// as hiking signs and clubs reckon a day). Past that it's an overnight
+/// trip, not a day hike: Mount Rainier's 54 km Owyhigh Lakes Trail,
+/// Algonquin's 44 km Western Uplands Backpacking Trail, Garibaldi's Russet
+/// Lake (30 km, 1,400 m up), all rated better overnight; a long day for a
+/// keen hiker stays (Yoho's Mount Carnarvon, 17 km and 2,100 m up, 38;
+/// Shenandoah's Jeremys Run, 25 km, 33). From gut ratings of the hikes
+/// routes offered (fixtures/gut-check.jsonl, routes#95).
+const DAY_EFFORT_KM: f64 = 40.0;
+
+fn day_effort_km(ev: &Eval) -> f64 {
+    ev.total / 1000.0 + ev.gain / 100.0
+}
+
+fn within_a_day(c: &Cand) -> bool {
+    day_effort_km(&c.ev) <= DAY_EFFORT_KM
+}
+
 fn shortest_approaches(cands: &mut Vec<Cand>) {
     let mut by_dest: HashMap<(&str, &str), Vec<usize>> = HashMap::default();
     for (i, c) in cands.iter().enumerate() {
@@ -3842,6 +3861,7 @@ pub fn curate(
     // park, or at its edge (named_pieces), and it's the park's (Killarney's
     // Lake of The Woods Trail, routes#104, mostly in the park next door).
     cands.retain(|c| c.dest_kind == Kind::Trail || in_park_share(area, &c.ev.line) >= DAY_IN_PARK);
+    cands.retain(within_a_day);
     let famous_sights = sights_take_mentions(&mut cands);
     shortest_approaches(&mut cands);
     let mut day = select(&cands, n_day, true);
@@ -3858,7 +3878,8 @@ pub fn curate(
         .collect();
     popular_dests(&mut day, &cands, &popular, n_day);
     named_dests(&ctx, &mut day, &cands, n_day);
-    real_trails(&mut day, &cands, &trails);
+    let day_trails: Vec<Cand> = trails.iter().filter(|t| within_a_day(t)).cloned().collect();
+    real_trails(&mut day, &cands, &day_trails);
     let candidates: Vec<Value> = if CANDIDATES.load(Relaxed) {
         cands
             .iter()
@@ -4405,6 +4426,23 @@ mod tests {
         assert!(ski_trail("Cross-country skiing trail"));
         assert!(!ski_trail("Skiff Lake Trail"));
         assert!(!ski_trail("Brent Crater Trail"));
+    }
+
+    #[test]
+    fn a_day_is_forty_effort_km() {
+        use super::*;
+        let ev = |km: f64, gain: f64| Eval {
+            one_way: 0.0, total: km * 1000.0, gain, loss: gain, max_ele: 0.0, min_ele: 0.0,
+            lc_shares: vec![], lc_variety: 0.0, open_high: 0.0, passed: vec![], along: vec![], camps: vec![],
+            road: 0.0, bike: 0.0, known: 0.0, trail_mentions: 0, trail_mentions_to_sight: 0, mentions_trail: String::new(), via: vec![], max_sac: 0, line: vec![],
+        };
+        // Mount Carnarvon (17.2 km, 2,109 m up) and Jeremys Run (24.9 km,
+        // 805 m) are long days; Russet Lake (30 km, 1,406 m) and Western
+        // Uplands (43.9 km, 392 m) are overnight trips.
+        assert!(day_effort_km(&ev(17.2, 2109.0)) <= DAY_EFFORT_KM);
+        assert!(day_effort_km(&ev(24.9, 805.0)) <= DAY_EFFORT_KM);
+        assert!(day_effort_km(&ev(30.0, 1406.0)) > DAY_EFFORT_KM);
+        assert!(day_effort_km(&ev(43.9, 392.0)) > DAY_EFFORT_KM);
     }
 
     #[test]
