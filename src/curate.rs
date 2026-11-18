@@ -3405,6 +3405,54 @@ fn within_a_day(c: &Cand) -> bool {
     day_effort_km(&c.ev) <= DAY_EFFORT_KM
 }
 
+/// How far a hike walks to its destination: an out-and-back's one way; a
+/// loop's nearer side, to where it passes the destination.
+fn reach_m(c: &Cand) -> f64 {
+    if c.kind != "loop" {
+        return c.ev.one_way;
+    }
+    match c.ev.along.iter().find(|a| a.1 == c.dest) {
+        Some(a) => a.2.min(c.ev.total - a.2),
+        None => c.ev.total / 2.0,
+    }
+}
+
+/// People go to a destination from its nearest trailhead: a hike to a place
+/// from a start more than NEAREST_FACTOR times as far as the nearest start
+/// that reaches it, and NEAREST_SLACK_M further, isn't offered. Rocky
+/// Mountain's Dream Lake was a 19.8 km loop from Glacier Creek, 1.5 km from
+/// Bear Lake; Lynn Headwaters' Goat Mountain 11.4 km from Varley Trail, 3.5
+/// from Peak Trail; Zion's Cable Mountain 27.5 km from East Mesa, 6.3 from
+/// Stave Spring (all rated bizarre or meh for it, fixtures/gut-check.jsonl).
+/// Not named trails' own hikes: a trail is walked, not gone to.
+fn nearest_starts(cands: &mut Vec<Cand>) {
+    let mut nearest: HashMap<&str, f64> = HashMap::default();
+    for c in cands.iter().filter(|c| c.dest_kind != Kind::Trail) {
+        let r = reach_m(c);
+        let e = nearest.entry(c.dest.as_str()).or_insert(r);
+        *e = e.min(r);
+    }
+    let far: Vec<bool> = cands
+        .iter()
+        .map(|c| {
+            c.dest_kind != Kind::Trail
+                && c.kind != "loop"
+                && nearest.get(c.dest.as_str()).is_some_and(|&n| {
+                    let r = reach_m(c);
+                    r > n * NEAREST_FACTOR && r > n + NEAREST_SLACK_M
+                })
+        })
+        .collect();
+    let mut i = 0;
+    cands.retain(|_| {
+        i += 1;
+        !far[i - 1]
+    });
+}
+
+const NEAREST_FACTOR: f64 = 2.0;
+const NEAREST_SLACK_M: f64 = 2000.0;
+
 fn shortest_approaches(cands: &mut Vec<Cand>) {
     let mut by_dest: HashMap<(&str, &str), Vec<usize>> = HashMap::default();
     for (i, c) in cands.iter().enumerate() {
@@ -3862,6 +3910,7 @@ pub fn curate(
     // Lake of The Woods Trail, routes#104, mostly in the park next door).
     cands.retain(|c| c.dest_kind == Kind::Trail || in_park_share(area, &c.ev.line) >= DAY_IN_PARK);
     cands.retain(within_a_day);
+    nearest_starts(&mut cands);
     let famous_sights = sights_take_mentions(&mut cands);
     shortest_approaches(&mut cands);
     let mut day = select(&cands, n_day, true);
