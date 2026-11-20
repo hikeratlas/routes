@@ -1,0 +1,50 @@
+# The named regressions kept in the website's curation database (routes#252),
+# edited on its /dev/regressions page, as a pull request into fixtures/
+# (fixtures/curation-export.py): nightly, and on request (Actions tab, or
+# `gh workflow run curation-export.yml`). One pull request, from the
+# curation-export branch, updated in place while it's open.
+#
+# A pull request made with the workflow's own token doesn't start other
+# workflows, so the fixtures CI wouldn't check it: CURATION_PR_TOKEN, a
+# fine-grained token for this repo with Contents and Pull requests write,
+# is used instead where it's set. Without it, Settings > Actions must allow
+# GitHub Actions to create pull requests, and CI runs once someone pushes
+# to the branch or re-opens the pull request.
+name: Curation export
+on:
+  schedule:
+    - cron: "17 9 * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+concurrency:
+  group: curation-export
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.CURATION_PR_TOKEN || github.token }}
+      - run: python3 fixtures/curation-export.py
+      - name: Open or update the pull request
+        env:
+          GH_TOKEN: ${{ secrets.CURATION_PR_TOKEN || github.token }}
+        run: |
+          if [ -z "$(git status --porcelain fixtures)" ]; then
+            echo "Nothing changed since main."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898333+github-actions[bot]@users.noreply.github.com"
+          git switch -C curation-export
+          git add fixtures
+          git commit -q -m "Named regressions from the curation database" \
+            -m "Exported by fixtures/curation-export.py from the website's /dev/regressions page (routes#252)."
+          git push -f origin curation-export
+          if ! gh pr view curation-export --json state --jq .state 2>/dev/null | grep -q OPEN; then
+            gh pr create --head curation-export --base main \
+              --title "Named regressions from the curation database" \
+              --body "Proposals accepted or rejected, entries edited, and hikes blessed on the website's /dev/regressions page, exported from its curation database by fixtures/curation-export.py (routes#252). Updated in place by each export while open."
+          fi
