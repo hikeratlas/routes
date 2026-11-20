@@ -1055,11 +1055,6 @@ const DEST_REACH_M: f64 = 150.0;
 /// The most a waterfall's height adds to its reach (see reach).
 const FALL_REACH_MAX_M: f64 = 500.0;
 
-/// How near a waterfall a node below it may be to see it from its foot,
-/// and how much lower (see Ctx::fall_foot).
-const FALL_FOOT_M: f64 = 400.0;
-const FALL_FOOT_DROP_M: f64 = 40.0;
-
 /// How near a path a destination must be: DEST_REACH_M, and for a waterfall
 /// with a height on Wikidata, that from its foot, which can be its height
 /// from where OSM maps it (its lip, or the middle of the drop). Takakkaw
@@ -2713,39 +2708,11 @@ impl<'a> Ctx<'a> {
                 }
                 continue;
             }
-            let mut access: Vec<u32> = self.nearest(d.pt, reach(d)).into_iter().collect();
-            if let Some(f) = self.fall_foot(d) {
-                if !access.contains(&f) {
-                    access.push(f);
-                }
-            }
-            if !access.is_empty() {
-                out.push((i, access));
+            if let Some(n) = self.nearest(d.pt, reach(d)) {
+                out.push((i, vec![n]));
             }
         }
         out
-    }
-
-    /// Where a waterfall is seen from below: the nearest node within
-    /// FALL_FOOT_M of its point and FALL_FOOT_DROP_M or more lower. OSM often
-    /// maps a fall at its lip, where a route over the top passes, while the
-    /// usual hike is up the valley to its foot: Yoho's Twin Falls is mapped
-    /// beside the Whaleback route, 19 km there and back; the Twin Falls
-    /// Trail ends 360 m from it at the chalet below, 15 km (routes#95). A
-    /// hike to the fall walks to whichever is nearer.
-    fn fall_foot(&self, d: &Dest) -> Option<u32> {
-        if d.kind != Kind::Waterfall {
-            return None;
-        }
-        let g = &self.area.graph;
-        let mut ns = self.nodes_near(d.pt, FALL_FOOT_M);
-        if ns.is_empty() {
-            return None;
-        }
-        ns.sort_by(|&a, &b| metres(g.pts[a as usize], d.pt).partial_cmp(&metres(g.pts[b as usize], d.pt)).unwrap());
-        let pts: Vec<P> = std::iter::once(d.pt).chain(ns.iter().map(|&n| g.pts[n as usize])).collect();
-        let ele = self.dem.profile(&pts);
-        ns.iter().zip(&ele[1..]).find(|&(_, &e)| e <= ele[0] - FALL_FOOT_DROP_M).map(|(&n, _)| n)
     }
 
     /// Day hikes from src to the targets it reaches between min_m and max_m:
@@ -2770,7 +2737,7 @@ impl<'a> Ctx<'a> {
             else {
                 continue;
             };
-            let (node, m) = if self.dests[*di].lake.is_some() {
+            let (node, m) = if access.len() > 1 {
                 self.along_shore(&s, access, node, m, max_m)
             } else {
                 (node, m)
