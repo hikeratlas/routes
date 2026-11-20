@@ -2,50 +2,81 @@
 # curation-export.py [SITE]
 #
 # Writes the named regressions kept in the website's curation database
-# (routes#252) into fixtures/: proposals/*.jsonl, expect/*.jsonl and
-# parks.json, as the website's /dev/regressions page saved them. SITE
-# defaults to https://www.hikeratlas.com (its /api/curation/files).
+# (routes#252), a row per trail, into fixtures/: each park's official list
+# as proposals/<stem>.jsonl and its official trails as expect/<stem>.jsonl,
+# in their order, each row as the website's /dev/regressions page saved it.
+# A park with official trails that isn't a fixture yet is added to
+# parks.json, so CI runs it (fixtures/README.md). SITE defaults to
+# https://www.hikeratlas.com (its /api/curation).
 #
-# Those files are edited on that page, not here: an export overwrites them.
-# A file the database emptied is removed. A file here that the database
-# doesn't have (added in a routes PR) is left, and named, so it can be
-# added there too (the website's curation/import.mjs).
-import json, os, re, sys, urllib.request
+# Those files are edited on that page, not here: an export overwrites them,
+# and removes the file of a park the database has no rows of that kind for.
+# A file here for a park the database doesn't have (added in a routes PR) is
+# left, and named, so it can be added there too (the website's
+# curation/import.mjs).
+import json, os, re, sys, unicodedata, urllib.request
 
 site = (sys.argv[1] if len(sys.argv) > 1 else 'https://www.hikeratlas.com').rstrip('/')
 here = os.path.dirname(os.path.abspath(__file__))
-root = os.path.dirname(here)
-PATH = re.compile(r'^fixtures/(proposals/[a-z0-9-]+\.jsonl|expect/[a-z0-9-]+\.jsonl|parks\.json)$')
+STEM = re.compile(r'^[a-z0-9-]+$')
 
-req = urllib.request.Request(f'{site}/api/curation/files', headers={'User-Agent': 'hikeratlas-routes/1.0'})
+req = urllib.request.Request(f'{site}/api/curation', headers={'User-Agent': 'hikeratlas-routes/1.0'})
 with urllib.request.urlopen(req, timeout=60) as r:
-    files = json.load(r)['files']
-if not files:
-    sys.exit('the curation database has no files: nothing exported')
+    db = json.load(r)
+if not db['parks']:
+    sys.exit('the curation database has no parks: nothing exported')
 
-wrote = removed = 0
-have = set()
-for f in files:
-    p = f['path']
-    if not PATH.match(p):
-        print(f'skipped {p}: not a curated file', file=sys.stderr)
-        continue
-    have.add(p)
-    dest = os.path.join(root, p)
-    if f['content'] == '':
-        if os.path.exists(dest):
-            os.remove(dest)
-            removed += 1
-        continue
-    old = open(dest, encoding='utf-8').read() if os.path.exists(dest) else None
-    if old != f['content']:
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-        with open(dest, 'w', encoding='utf-8', newline='') as o:
-            o.write(f['content'])
-        wrote += 1
 
-local = [f'fixtures/{d}/{n}' for d in ('proposals', 'expect') for n in sorted(os.listdir(os.path.join(here, d))) if n.endswith('.jsonl')]
-missing = [p for p in local if p not in have]
-for p in missing:
-    print(f'not in the curation database (left as it is): {p}', file=sys.stderr)
-print(f'{wrote} written, {removed} removed, {len(missing)} not in the database')
+def slug(s):
+    s = unicodedata.normalize('NFKD', s)
+    return re.sub(r'[^a-z0-9]+', '-', ''.join(c for c in s if not unicodedata.combining(c)).lower()).strip('-')
+
+
+def write(path, rows):
+    """rows: the park's live rows, in order (the API gives them so)."""
+    text = ''.join(r['data'] + '\n' for r in rows) if rows else None
+    old = open(path, encoding='utf-8').read() if os.path.exists(path) else None
+    if text == old:
+        return 0
+    if text is None:
+        os.remove(path)
+    else:
+        with open(path, 'w', encoding='utf-8', newline='') as o:
+            o.write(text)
+    return 1
+
+
+changed, stems = 0, set()
+for p in db['parks']:
+    stem = p['stem']
+    if not STEM.match(stem):
+        print(f"skipped {p['name']}: odd stem {stem!r}", file=sys.stderr)
+        continue
+    stems.add(stem)
+    pid = p['park_id']
+    changed += write(os.path.join(here, 'proposals', f'{stem}.jsonl'), [r for r in db['listed'] if r['park_id'] == pid])
+    changed += write(os.path.join(here, 'expect', f'{stem}.jsonl'), [r for r in db['trails'] if r['park_id'] == pid])
+
+# A park with official trails is a fixture too, keyed by its short name.
+fx_path = os.path.join(here, 'parks.json')
+fixtures = json.load(open(fx_path, encoding='utf-8'))
+added = 0
+for p in db['parks']:
+    if not any(r['park_id'] == p['park_id'] for r in db['trails']) or not p.get('bbox'):
+        continue
+    if any(str(f.get('id', '')) == p['park_id'] or (not f.get('id') and f['park'] == p['name']) for f in fixtures):
+        continue
+    key = slug(re.sub(r' (National|Provincial|Interprovincial|State) Park.*$| Park$', '', p['name']))
+    if any(f['key'] == key for f in fixtures):
+        key = f"{key}-{p['park_id']}"
+    fixtures.append({'key': key, 'id': p['park_id'], 'park': p['name'], 'why': 'quality: park-listed trails as named regressions (routes#95)', 'bbox': p['bbox']})
+    added += 1
+if added:
+    with open(fx_path, 'w', encoding='utf-8') as o:
+        o.write(json.dumps(fixtures, indent=2, ensure_ascii=False) + '\n')
+
+missing = [f'fixtures/{d}/{n}' for d in ('proposals', 'expect') for n in sorted(os.listdir(os.path.join(here, d)))
+           if n.endswith('.jsonl') and n[:-len('.jsonl')] not in stems]
+for m in missing:
+    print(f'not in the curation database (left as it is): {m}', file=sys.stderr)
+print(f'{changed} files written or removed, {added} fixtures added, {len(missing)} files not in the database')
